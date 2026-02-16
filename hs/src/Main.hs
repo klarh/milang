@@ -104,7 +104,7 @@ cmdRun file = do
           extraFlags = nub (linkFlags li)
           extraSrcs  = nub (linkSources li)
           gccArgs = ["-O2", "-o", binFile, cFile, "-I" ++ cwd]
-                    ++ extraSrcs ++ extraFlags
+                    ++ extraSrcs ++ extraFlags ++ ["-lm"]
       withFile cFile WriteMode (\h -> codegen h ast)
       (ec, _, cerr) <- readProcessWithExitCode "gcc" gccArgs ""
       case ec of

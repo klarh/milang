@@ -8,11 +8,11 @@ import Data.List (nub, intercalate)
 import Milang.Syntax
 import System.IO (Handle, hPutStr, hPutStrLn)
 
--- | Codegen state: counter for unique closure IDs + accumulated top-level defs + includes
+-- | Codegen state
 data CGState = CGState
   { cgNextId   :: IORef Int
-  , cgTopDefs  :: IORef [String]  -- closure function defs (reversed)
-  , cgIncludes :: IORef [String]  -- extra #include lines
+  , cgTopDefs  :: IORef [String]
+  , cgIncludes :: IORef [String]
   }
 
 newCGState :: IO CGState
@@ -24,17 +24,15 @@ freshId st = do
   writeIORef (cgNextId st) (n + 1)
   pure n
 
--- Append a top-level C definition (closure function + optional env struct)
 addTopDef :: CGState -> String -> IO ()
 addTopDef st s = modifyIORef (cgTopDefs st) (s :)
 
--- | Generate C code from a (partially reduced) Expr and write to handle
+-- | Generate C code from a (partially reduced) Expr
 codegen :: Handle -> Expr -> IO ()
 codegen h expr = do
   st <- newCGState
-  mainCode <- captureIO st h expr
+  mainCode <- captureIO st expr
   emitPreamble h
-  -- Emit extra #includes for C headers
   incs <- readIORef (cgIncludes st)
   mapM_ (hPutStrLn h) (nub incs)
   hPutStrLn h ""
@@ -43,172 +41,183 @@ codegen h expr = do
   hPutStrLn h ""
   hPutStr h mainCode
 
--- | Capture the main() code as a string while accumulating closure defs
-captureIO :: CGState -> Handle -> Expr -> IO String
-captureIO st _h expr = do
+-- | Build main()
+captureIO :: CGState -> Expr -> IO String
+captureIO st expr = do
   ref <- newIORef ""
   let emit s = modifyIORef ref (++ s)
+  let emitBuiltins = do
+        emit "  mi_env_set(_env, \"print\", mi_native(mi_builtin_print));\n"
+        emit "  mi_env_set(_env, \"println\", mi_native(mi_builtin_println));\n"
+        emit "  mi_env_set(_env, \"if\", mi_native(mi_builtin_if));\n"
+        emit "  mi_env_set(_env, \"len\", mi_native(mi_builtin_len));\n"
+        emit "  mi_env_set(_env, \"get\", mi_native(mi_builtin_get));\n"
+        emit "  mi_env_set(_env, \"push\", mi_native(mi_builtin_push));\n"
+        emit "  mi_env_set(_env, \"concat\", mi_native(mi_builtin_concat));\n"
+        emit "  mi_env_set(_env, \"map\", mi_native(mi_builtin_map));\n"
+        emit "  mi_env_set(_env, \"fold\", mi_native(mi_builtin_fold));\n"
+        emit "  mi_env_set(_env, \"filter\", mi_native(mi_builtin_filter));\n"
+        emit "\n"
   case expr of
     Namespace bs -> do
       emit "int main(void) {\n"
-      emit "  MiVal mi_print = mi_closure(mi_builtin_print, NULL);\n"
-      emit "  MiVal mi_println = mi_closure(mi_builtin_println, NULL);\n"
-      emit "  MiVal mi_if = mi_closure(mi_builtin_if1, NULL);\n"
-      emit "  MiVal mi_len = mi_closure(mi_builtin_len, NULL);\n"
-      emit "  MiVal mi_get = mi_closure(mi_builtin_get1, NULL);\n"
-      emit "  MiVal mi_push = mi_closure(mi_builtin_push1, NULL);\n"
-      emit "  MiVal mi_concat = mi_closure(mi_builtin_concat1, NULL);\n"
-      emit "  MiVal mi_map = mi_closure(mi_builtin_map1, NULL);\n"
-      emit "  MiVal mi_fold = mi_closure(mi_builtin_fold1, NULL);\n"
-      emit "  MiVal mi_filter = mi_closure(mi_builtin_filter1, NULL);\n\n"
+      emit "  MiEnv *_env = mi_env_new(NULL);\n"
+      emitBuiltins
+      -- Evaluate each binding in order
       mapM_ (\b -> do
-        let cname = sanitize (bindName b)
-        code <- exprToC st (bindBody b)
-        emit $ "  MiVal " ++ cname ++ " = " ++ code ++ ";\n"
+        code <- bindingEvalCode st b
+        emit code
         ) bs
       emit "\n"
+      -- Print all bindings
       mapM_ (\b -> do
-        let cname = sanitize (bindName b)
-            name  = T.unpack (bindName b)
-        emit $ "  printf(\"" ++ name ++ " = \"); mi_print_val(" ++ cname ++ "); printf(\"\\n\");\n"
+        let name = T.unpack (bindName b)
+        emit $ "  printf(\"" ++ name ++ " = \"); mi_print_val(mi_env_get(_env, \"" ++ name ++ "\")); printf(\"\\n\");\n"
         ) bs
       emit "  return 0;\n}\n"
     _ -> do
       emit "int main(void) {\n"
-      emit "  MiVal mi_print = mi_closure(mi_builtin_print, NULL);\n"
-      emit "  MiVal mi_println = mi_closure(mi_builtin_println, NULL);\n"
-      emit "  MiVal mi_if = mi_closure(mi_builtin_if1, NULL);\n"
-      emit "  MiVal mi_len = mi_closure(mi_builtin_len, NULL);\n"
-      emit "  MiVal mi_get = mi_closure(mi_builtin_get1, NULL);\n"
-      emit "  MiVal mi_push = mi_closure(mi_builtin_push1, NULL);\n"
-      emit "  MiVal mi_concat = mi_closure(mi_builtin_concat1, NULL);\n"
-      emit "  MiVal mi_map = mi_closure(mi_builtin_map1, NULL);\n"
-      emit "  MiVal mi_fold = mi_closure(mi_builtin_fold1, NULL);\n"
-      emit "  MiVal mi_filter = mi_closure(mi_builtin_filter1, NULL);\n\n"
+      emit "  MiEnv *_env = mi_env_new(NULL);\n"
+      emitBuiltins
       code <- exprToC st expr
-      emit $ "  mi_print_val(" ++ code ++ "); printf(\"\\n\");\n"
+      emit $ "  mi_print_val(mi_eval(" ++ code ++ ", _env)); printf(\"\\n\");\n"
       emit "  return 0;\n}\n"
   readIORef ref
 
--- | Convert an Expr to a C expression string, accumulating closure defs in state
+-- | Generate code to evaluate a binding and add it to _env
+bindingEvalCode :: CGState -> Binding -> IO String
+bindingEvalCode st b = do
+  let name = T.unpack (bindName b)
+  -- Wrap multi-param bindings into lambdas
+  bodyExpr <- if null (bindParams b)
+    then pure (bindBody b)
+    else pure $ foldr Lam (bindBody b) (bindParams b)
+  code <- exprToC st bodyExpr
+  if bindLazy b
+    then pure $ "  { MiExpr *_thunk_body = " ++ code ++ ";\n" ++
+                "    MiVal _thunk; _thunk.type = MI_CLOSURE;\n" ++
+                "    _thunk.as.closure.body = _thunk_body;\n" ++
+                "    _thunk.as.closure.param = \"_thunk_\";\n" ++
+                "    _thunk.as.closure.env = _env;\n" ++
+                "    mi_env_set(_env, \"" ++ name ++ "\", _thunk); }\n"
+    else pure $ "  mi_env_set(_env, \"" ++ name ++ "\", mi_eval(" ++ code ++ ", _env));\n"
+
+-- ── Expression → MiExpr* construction ─────────────────────────────
+
 exprToC :: CGState -> Expr -> IO String
-exprToC _ (IntLit n) = pure $ "mi_int(" ++ show n ++ ")"
-exprToC _ (FloatLit d) = pure $ "mi_float(" ++ show d ++ ")"
-exprToC _ (StringLit s) = pure $ "mi_string(" ++ show (T.unpack s) ++ ")"
-exprToC _ (Name n) = pure $ sanitize n
+exprToC _ (IntLit n) = pure $ "mi_expr_int(" ++ show n ++ ")"
+exprToC _ (FloatLit d) = pure $ "mi_expr_float(" ++ show d ++ ")"
+exprToC _ (StringLit s) = pure $ "mi_expr_string(" ++ cStringLit (T.unpack s) ++ ")"
+exprToC _ (Name n) = pure $ "mi_expr_name(\"" ++ T.unpack n ++ "\")"
 
 exprToC st (BinOp op l r) = do
   lc <- exprToC st l
   rc <- exprToC st r
-  pure $ opFunc op ++ "(" ++ lc ++ ", " ++ rc ++ ")"
+  pure $ "mi_expr_binop(\"" ++ T.unpack op ++ "\", " ++ lc ++ ", " ++ rc ++ ")"
 
 exprToC st (App f x) = do
   fc <- exprToC st f
   xc <- exprToC st x
-  pure $ "mi_apply(" ++ fc ++ ", " ++ xc ++ ")"
+  pure $ "mi_expr_app(" ++ fc ++ ", " ++ xc ++ ")"
 
 exprToC st (Lam param body) = do
-  cid <- freshId st
-  let fnName = "mi_fn_" ++ show cid
-      fvs = nub $ freeVars body [param]
-  -- Recursively generate body expression (may create nested closures)
-  bodyCode <- exprToC st body
-  -- Generate env struct + function
-  let envStructName = fnName ++ "_env"
-  let envDecl = if null fvs then ""
-        else "struct " ++ envStructName ++ " {\n" ++
-             concatMap (\v -> "  MiVal " ++ sanitize v ++ ";\n") fvs ++
-             "};\n\n"
-  let envCast = if null fvs then ""
-        else "  struct " ++ envStructName ++ " *_env = (struct " ++ envStructName ++ " *)__env;\n"
-  let envUnpack = if null fvs then ""
-        else concatMap (\v -> "  MiVal " ++ sanitize v ++ " = _env->" ++ sanitize v ++ ";\n") fvs
-  let fnDef = envDecl ++
-        "static MiVal " ++ fnName ++ "(MiVal " ++ sanitize param ++ ", void *__env) {\n" ++
-        envCast ++ envUnpack ++
-        "  return " ++ bodyCode ++ ";\n" ++
-        "}\n\n"
-  addTopDef st fnDef
-  -- Emit closure construction
-  if null fvs
-    then pure $ "mi_closure(" ++ fnName ++ ", NULL)"
-    else do
-      let allocEnv = "({ struct " ++ envStructName ++ " *_e = malloc(sizeof(struct " ++ envStructName ++ "));\n" ++
-            concatMap (\v -> "    _e->" ++ sanitize v ++ " = " ++ sanitize v ++ ";\n") fvs ++
-            "    mi_closure(" ++ fnName ++ ", _e); })"
-      pure allocEnv
+  bc <- exprToC st body
+  pure $ "mi_expr_lam(\"" ++ T.unpack param ++ "\", " ++ bc ++ ")"
 
-exprToC st (With body bs) = do
-  bindCode <- mapM (\b -> do
-    code <- exprToC st (bindBody b)
-    pure $ "    MiVal " ++ sanitize (bindName b) ++ " = " ++ code ++ ";\n"
-    ) bs
-  bodyCode <- exprToC st body
-  pure $ "({\n" ++ concat bindCode ++ "    " ++ bodyCode ++ ";\n  })"
+exprToC st (With body bindings) = do
+  bc <- exprToC st body
+  bindCodes <- mapM (bindingStructToC st) bindings
+  pure $ "mi_expr_with(" ++ bc ++ ", " ++ show (length bindings) ++ ", " ++
+    intercalate ", " bindCodes ++ ")"
 
-exprToC st (Record tag bs) = do
-  let n = length bs
-      names = map (T.unpack . bindName) bs
-  fieldCodes <- mapM (\(i, b) -> do
-    code <- exprToC st (bindBody b)
-    pure $ "    _fields[" ++ show i ++ "] = " ++ code ++ ";\n"
-    ) (zip [0::Int ..] bs)
-  pure $ "({\n    MiVal *_fields = malloc(" ++ show n ++ " * sizeof(MiVal));\n" ++
-    "    static const char *_names[] = {" ++
-    concatMap (\nm -> "\"" ++ nm ++ "\", ") names ++ "};\n" ++
-    concat fieldCodes ++
-    "    MiVal _r; _r.type = MI_RECORD; _r.as.rec.tag = \"" ++ T.unpack tag ++
-    "\"; _r.as.rec.names = _names; _r.as.rec.fields = _fields; _r.as.rec.nfields = " ++
-    show n ++ "; _r;\n  })"
+exprToC st (Record tag bindings) = do
+  bindCodes <- mapM (bindingStructToC st) bindings
+  pure $ "mi_expr_record(\"" ++ T.unpack tag ++ "\", " ++ show (length bindings) ++ ", " ++
+    intercalate ", " bindCodes ++ ")"
 
 exprToC st (FieldAccess e field) = do
   ec <- exprToC st e
-  pure $ "mi_field(" ++ ec ++ ", \"" ++ T.unpack field ++ "\")"
+  pure $ "mi_expr_field(" ++ ec ++ ", \"" ++ T.unpack field ++ "\")"
 
-exprToC st (Namespace bs) = do
-  bindCode <- mapM (\b -> do
-    code <- exprToC st (bindBody b)
-    pure $ "    MiVal " ++ sanitize (bindName b) ++ " = " ++ code ++ ";\n"
-    ) bs
-  let lastRef = case bs of
-        [] -> "    mi_int(0);\n"
-        _  -> "    " ++ sanitize (bindName (last bs)) ++ ";\n"
-  pure $ "({\n" ++ concat bindCode ++ lastRef ++ "  })"
+exprToC st (Namespace bindings) = do
+  bindCodes <- mapM (bindingStructToC st) bindings
+  pure $ "mi_expr_namespace(" ++ show (length bindings) ++ ", " ++
+    intercalate ", " bindCodes ++ ")"
 
 exprToC st (Case scrut alts) = do
-  scrutCode <- exprToC st scrut
-  altCode <- altsToC st alts
-  pure $ "({\n    MiVal _scrut = " ++ scrutCode ++ ";\n" ++
-    "    MiVal _result;\n" ++ altCode ++ "    _result;\n  })"
+  sc <- exprToC st scrut
+  altCodes <- mapM (altToC st) alts
+  pure $ "mi_expr_case(" ++ sc ++ ", " ++ show (length alts) ++ ", " ++
+    intercalate ", " altCodes ++ ")"
+
+exprToC st (Thunk body) = do
+  bc <- exprToC st body
+  pure $ "mi_expr_thunk(" ++ bc ++ ")"
+
+exprToC st (ListLit es) = do
+  elemCodes <- mapM (exprToC st) es
+  pure $ "mi_expr_list(" ++ show (length es) ++
+    (if null es then "" else ", " ++ intercalate ", " elemCodes) ++ ")"
 
 exprToC st (CFunction hdr cname retTy paramTys) = do
-  -- Register the #include
   modifyIORef (cgIncludes st) (("#include " ++ show (T.unpack hdr)) :)
-  -- Generate curried wrapper closures
-  cfunctionToC st (T.unpack cname) retTy paramTys
+  nativeCode <- cfunctionToC st (T.unpack cname) retTy paramTys
+  pure $ "mi_expr_val(" ++ nativeCode ++ ")"
 
--- Thunk: deferred expression, compiled as a zero-arg closure
-exprToC st (Thunk body) = exprToC st (Lam "_thunk_" body)
+-- | Escape a string for C
+cStringLit :: String -> String
+cStringLit s = "\"" ++ concatMap esc s ++ "\""
+  where
+    esc '"'  = "\\\""
+    esc '\\' = "\\\\"
+    esc '\n' = "\\n"
+    esc '\t' = "\\t"
+    esc c    = [c]
 
--- List literal: [a, b, c]
-exprToC st (ListLit es) = do
-  let n = length es
-  elemCodes <- mapM (\(i, e) -> do
-    code <- exprToC st e
-    pure $ "    _items[" ++ show i ++ "] = " ++ code ++ ";\n"
-    ) (zip [0::Int ..] es)
-  pure $ "({\n    MiVal *_items = malloc(" ++ show n ++ " * sizeof(MiVal));\n" ++
-    concat elemCodes ++
-    "    mi_list(_items, " ++ show n ++ ");\n  })"
+-- | Convert a Binding to C MiBinding struct
+bindingStructToC :: CGState -> Binding -> IO String
+bindingStructToC st b = do
+  bc <- exprToC st (bindBody b)
+  let lazyFlag = if bindLazy b then "1" else "0"
+  pure $ "mi_binding(\"" ++ T.unpack (bindName b) ++ "\", " ++ lazyFlag ++ ", " ++
+    show (length (bindParams b)) ++
+    concatMap (\p -> ", \"" ++ T.unpack p ++ "\"") (bindParams b) ++
+    ", " ++ bc ++ ")"
 
--- | Generate curried closure wrappers for a C function.
--- Input params (CInt, CFloat, CString, CPtr) become curried closure args.
--- Output params (COutInt, COutFloat) are auto-allocated in the innermost wrapper
--- and returned as part of a result record.
+-- | Convert an Alt to C MiAlt struct
+altToC :: CGState -> Alt -> IO String
+altToC st (Alt pat body) = do
+  pc <- patToC pat
+  bc <- exprToC st body
+  pure $ "mi_alt(" ++ pc ++ ", " ++ bc ++ ")"
+
+-- | Convert a Pat to C MiPat
+patToC :: Pat -> IO String
+patToC (PVar v) = pure $ "mi_pat_var(\"" ++ T.unpack v ++ "\")"
+patToC PWild = pure "mi_pat_wild()"
+patToC (PLit (IntLit n)) = pure $ "mi_pat_int(" ++ show n ++ ")"
+patToC (PLit (StringLit s)) = pure $ "mi_pat_string(" ++ cStringLit (T.unpack s) ++ ")"
+patToC (PLit _) = pure "mi_pat_wild()"
+patToC (PRec tag fields) = do
+  fieldCodes <- mapM (\(f, p) -> do
+    pc <- patToC p
+    pure $ "\"" ++ T.unpack f ++ "\", " ++ pc
+    ) fields
+  pure $ "mi_pat_rec(\"" ++ T.unpack tag ++ "\", " ++ show (length fields) ++
+    (if null fields then "" else ", " ++ intercalate ", " fieldCodes) ++ ")"
+patToC (PList pats mrest) = do
+  patCodes <- mapM patToC pats
+  let restCode = case mrest of
+        Nothing -> "NULL"
+        Just name -> "\"" ++ T.unpack name ++ "\""
+  pure $ "mi_pat_list(" ++ show (length pats) ++ ", " ++ restCode ++
+    (if null pats then "" else ", " ++ intercalate ", " patCodes) ++ ")"
+
+-- ── C FFI codegen (native closures) ──────────────────────────────
+
 cfunctionToC :: CGState -> String -> CType -> [CType] -> IO String
 cfunctionToC st cname retTy allParamTys = do
-  let -- Split into input indices and output indices
-      indexed = zip [0::Int ..] allParamTys
+  let indexed = zip [0::Int ..] allParamTys
       inputParams  = [(i, t) | (i, t) <- indexed, not (isOutputParam t)]
       outputParams = [(i, t) | (i, t) <- indexed, isOutputParam t]
       nInputs = length inputParams
@@ -216,20 +225,13 @@ cfunctionToC st cname retTy allParamTys = do
     0 -> cffiLeaf st cname retTy allParamTys inputParams outputParams
     _ -> cffiCurried st cname retTy allParamTys inputParams outputParams
 
--- | Generate the leaf (innermost) function that actually calls the C function
 cffiLeaf :: CGState -> String -> CType -> [CType]
-         -> [(Int, CType)]   -- input params with original indices
-         -> [(Int, CType)]   -- output params with original indices
-         -> IO String
+         -> [(Int, CType)] -> [(Int, CType)] -> IO String
 cffiLeaf st cname retTy allParamTys inputParams outputParams = do
   cid <- freshId st
   let fnName = "mi_cffi_" ++ show cid
       nInputs = length inputParams
-      nAll = length allParamTys
       hasOuts = not (null outputParams)
-
-      -- Env: for 0 inputs, no env. For 1 input, no env (arg is direct).
-      -- For N>1 inputs, env has inputs 0..N-2, last input is direct _arg.
       envFields
         | nInputs <= 1 = ""
         | otherwise = concatMap (\k ->
@@ -244,67 +246,50 @@ cffiLeaf st cname retTy allParamTys inputParams outputParams = do
         | nInputs <= 1 = ""
         | otherwise = concatMap (\k ->
             "  MiVal _a" ++ show k ++ " = _e->_a" ++ show k ++ ";\n") [0..nInputs-2]
-
-      -- Map from original C param index → the MiVal expression for that arg
       inputArgExpr k
         | nInputs == 0 = error "no inputs"
-        | nInputs == 1 = "_arg"  -- single input, received directly
-        | k == nInputs - 1 = "_arg"  -- last input
+        | nInputs == 1 = "_arg"
+        | k == nInputs - 1 = "_arg"
         | otherwise = "_a" ++ show k
-
-      -- Build the argument list for the C call in original order
       outDecls = concatMap (\(i, t) ->
         let cty = case t of COutInt -> "int"; COutFloat -> "double"; _ -> "int"
         in "  " ++ cty ++ " _out_" ++ show i ++ " = 0;\n") outputParams
       cArgList = intercalate ", " $ map (\(origIdx, t) ->
         if isOutputParam t
           then "&_out_" ++ show origIdx
-          else
-            -- Find which input index this original index corresponds to
-            let inputIdx = length [() | (j, _) <- inputParams, j < origIdx]
-            in miToCArg t (inputArgExpr inputIdx)
+          else let inputIdx = length [() | (j, _) <- inputParams, j < origIdx]
+               in miToCArg t (inputArgExpr inputIdx)
         ) (zip [0..] allParamTys)
-
       callExpr = cname ++ "(" ++ cArgList ++ ")"
-
-      -- Build return value
       returnExpr
         | not hasOuts = cRetToMi retTy callExpr
         | retTy == CVoid =
-            -- void return with output params: return record of outputs
             "(" ++ callExpr ++ ",\n" ++ buildOutRecord outputParams ++ ")"
         | otherwise =
-            -- non-void return with output params: return record with value + outputs
             "({ " ++ cRetTypeName retTy ++ " _ret = " ++ callExpr ++ ";\n" ++
             buildOutRecordWithRet retTy outputParams ++ " })"
-
       fnDef = envStruct ++
               "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
               (if nInputs == 0 then "  (void)_arg; " else "") ++
               (if nInputs <= 1 then "  (void)_env;\n" else "") ++
               envCast ++ envUnpack ++ outDecls ++
               "  return " ++ returnExpr ++ ";\n}\n\n"
-
   addTopDef st fnDef
-  pure $ "mi_closure(" ++ fnName ++ ", NULL)"
+  pure $ "mi_native(" ++ fnName ++ ")"
 
--- | Build a record from output params only (for void-returning functions)
 buildOutRecord :: [(Int, CType)] -> String
 buildOutRecord outs =
   let n = length outs
       fields = concatMap (\(idx, (i, t)) ->
         let val = outToMi t ("_out_" ++ show i)
         in "    _fields[" ++ show idx ++ "] = " ++ val ++ ";\n") (zip [0..] outs)
-      names = concatMap (\(i, _) ->
-        "\"out" ++ show i ++ "\", ") outs
+      names = concatMap (\(i, _) -> "\"out" ++ show i ++ "\", ") outs
   in "({\n    MiVal *_fields = malloc(" ++ show n ++ " * sizeof(MiVal));\n" ++
-     "    static const char *_names[] = {" ++ names ++ "};\n" ++
-     fields ++
+     "    static const char *_names[] = {" ++ names ++ "};\n" ++ fields ++
      "    MiVal _r; _r.type = MI_RECORD; _r.as.rec.tag = \"Result\";" ++
      " _r.as.rec.names = _names; _r.as.rec.fields = _fields;" ++
      " _r.as.rec.nfields = " ++ show n ++ "; _r;\n  })"
 
--- | Build a record from return value + output params
 buildOutRecordWithRet :: CType -> [(Int, CType)] -> String
 buildOutRecordWithRet retTy outs =
   let n = 1 + length outs
@@ -313,8 +298,7 @@ buildOutRecordWithRet retTy outs =
         let val = outToMi t ("_out_" ++ show (i :: Int))
         in "    _fields[" ++ show ((idx :: Int) + 1) ++ "] = " ++ val ++ ";\n")
         (zip [0..] outs)
-      names = "\"value\", " ++ concatMap (\(i, _) ->
-        "\"out" ++ show i ++ "\", ") outs
+      names = "\"value\", " ++ concatMap (\(i, _) -> "\"out" ++ show i ++ "\", ") outs
   in "MiVal *_fields = malloc(" ++ show n ++ " * sizeof(MiVal));\n" ++
      "  static const char *_names[] = {" ++ names ++ "};\n" ++
      retField ++ outFields ++
@@ -322,13 +306,11 @@ buildOutRecordWithRet retTy outs =
      " _r.as.rec.names = _names; _r.as.rec.fields = _fields;" ++
      " _r.as.rec.nfields = " ++ show n ++ "; _r;"
 
--- | Convert an output param value to MiVal
 outToMi :: CType -> String -> String
 outToMi COutInt name   = "mi_int((int64_t)" ++ name ++ ")"
 outToMi COutFloat name = "mi_float((double)" ++ name ++ ")"
 outToMi t name         = cRetToMi t name
 
--- | C type name for declaring a temporary
 cRetTypeName :: CType -> String
 cRetTypeName CInt    = "int64_t"
 cRetTypeName CFloat  = "double"
@@ -338,475 +320,698 @@ cRetTypeName CVoid   = "void"
 cRetTypeName COutInt = "int"
 cRetTypeName COutFloat = "double"
 
--- | Generate the curried closure chain for N-input functions
 cffiCurried :: CGState -> String -> CType -> [CType]
             -> [(Int, CType)] -> [(Int, CType)] -> IO String
 cffiCurried st cname retTy allParamTys inputParams outputParams = do
   let nInputs = length inputParams
-  -- Generate the leaf first
   leafCode <- cffiLeaf st cname retTy allParamTys inputParams outputParams
   if nInputs == 1
-    then pure leafCode  -- cffiLeaf already made a single closure
+    then pure leafCode
     else do
-      -- Need currying wrappers for inputs 0..nInputs-2
-      -- The leaf already handles the last input + all outputs
-      -- We need to wrap it: level 0 captures arg 0, returns closure for level 1, etc.
-      -- Level nInputs-2 captures arg nInputs-2, returns the leaf closure with full env
       leafFnName <- do
-        -- The leaf's ID was the last freshId call; read current counter to get it
         n <- readIORef (cgNextId st)
         pure $ "mi_cffi_" ++ show (n - 1)
-
-      -- Generate currying levels from nInputs-2 down to 0
       ids <- mapM (\_ -> freshId st) [0..nInputs-2]
       let wrapperNames = map (\i -> "mi_cffi_" ++ show i) ids
-
-      -- Generate wrappers innermost-first (so forward decls work when reversed)
       mapM_ (\k -> do
         let fnName = wrapperNames !! k
             envName = fnName ++ "_env"
-            nextName = if k == nInputs - 2
-                       then leafFnName
-                       else wrapperNames !! (k + 1)
+            nextName = if k == nInputs - 2 then leafFnName else wrapperNames !! (k + 1)
             nextEnvName = nextName ++ "_env"
         if k == 0
           then do
-            -- Outermost: no env, capture first arg
             let fnDef = "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
                         "  (void)_env;\n" ++
                         "  struct " ++ nextEnvName ++ " *_ne = malloc(sizeof(struct " ++ nextEnvName ++ "));\n" ++
                         "  _ne->_a0 = _arg;\n" ++
-                        "  return mi_closure(" ++ nextName ++ ", _ne);\n}\n\n"
+                        "  return mi_native_env(" ++ nextName ++ ", _ne);\n}\n\n"
             addTopDef st fnDef
           else do
-            -- Middle: has args 0..k-1 in env, receives arg k, builds next env
-            let envFields = concatMap (\i ->
-                  "  MiVal _a" ++ show i ++ ";\n") [0..k-1]
+            let envFields = concatMap (\i -> "  MiVal _a" ++ show i ++ ";\n") [0..k-1]
                 envStruct = "struct " ++ envName ++ " {\n" ++ envFields ++ "};\n\n"
                 envCast = "  struct " ++ envName ++ " *_e = (struct " ++ envName ++ " *)_env;\n"
                 allocNext = "  struct " ++ nextEnvName ++ " *_ne = malloc(sizeof(struct " ++ nextEnvName ++ "));\n" ++
-                            concatMap (\i ->
-                              "  _ne->_a" ++ show i ++ " = _e->_a" ++ show i ++ ";\n") [0..k-1] ++
+                            concatMap (\i -> "  _ne->_a" ++ show i ++ " = _e->_a" ++ show i ++ ";\n") [0..k-1] ++
                             "  _ne->_a" ++ show k ++ " = _arg;\n"
                 fnDef = envStruct ++
                         "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
                         envCast ++ allocNext ++
-                        "  return mi_closure(" ++ nextName ++ ", _ne);\n}\n\n"
+                        "  return mi_native_env(" ++ nextName ++ ", _ne);\n}\n\n"
             addTopDef st fnDef
         ) (reverse [0..nInputs-2])
+      pure $ "mi_native(" ++ wrapperNames !! 0 ++ ")"
 
-      pure $ "mi_closure(" ++ wrapperNames !! 0 ++ ", NULL)"
-
--- | Convert a C return value to MiVal
 cRetToMi :: CType -> String -> String
 cRetToMi CInt expr     = "mi_int((int64_t)(" ++ expr ++ "))"
 cRetToMi CFloat expr   = "mi_float((double)(" ++ expr ++ "))"
 cRetToMi CString expr  = "mi_string(" ++ expr ++ ")"
 cRetToMi CVoid expr    = "(" ++ expr ++ ", mi_int(0))"
 cRetToMi CPtr expr     = "mi_pointer((void*)(" ++ expr ++ "))"
-cRetToMi COutInt _     = "mi_int(0) /* unexpected output param as return */"
-cRetToMi COutFloat _   = "mi_float(0) /* unexpected output param as return */"
+cRetToMi COutInt _     = "mi_int(0)"
+cRetToMi COutFloat _   = "mi_float(0)"
 
--- | Convert a MiVal argument to C type for calling
 miToCArg :: CType -> String -> String
 miToCArg CInt name     = "(int)(" ++ name ++ ".as.i)"
 miToCArg CFloat name   = "mi_to_float(" ++ name ++ ")"
 miToCArg CString name  = name ++ ".as.s"
 miToCArg CVoid _       = "/* void */"
 miToCArg CPtr name     = name ++ ".as.ptr"
-miToCArg COutInt name  = "&_out_" ++ name  -- placeholder, handled specially
-miToCArg COutFloat name = "&_out_" ++ name  -- placeholder, handled specially
+miToCArg COutInt name  = "&_out_" ++ name
+miToCArg COutFloat name = "&_out_" ++ name
 
--- | Check if any parameter is an output param
-hasOutputParams :: [CType] -> Bool
-hasOutputParams = any (\t -> t == COutInt || t == COutFloat)
-
--- | Is this type an output parameter?
 isOutputParam :: CType -> Bool
 isOutputParam COutInt   = True
 isOutputParam COutFloat = True
 isOutputParam _         = False
 
-altsToC :: CGState -> [Alt] -> IO String
-altsToC _ [] = pure "    { fprintf(stderr, \"match: no matching pattern\\n\"); exit(1); }\n"
-altsToC st (Alt pat body : rest) = do
-  bodyCode <- exprToC st body
-  let check = patCheck "_scrut" pat
-      binds = patBinds "_scrut" pat
-  restCode <- case rest of
-    [] -> pure ""
-    _  -> do
-      rc <- altsToC st rest
-      pure $ " else " ++ rc
-  pure $ "    " ++ check ++ " {\n" ++ binds ++
-    "      _result = " ++ bodyCode ++ ";\n    }" ++ restCode
-
-patCheck :: String -> Pat -> String
-patCheck _ (PVar _) = "if (1)"
-patCheck _ PWild    = "if (1)"
-patCheck s (PLit (IntLit n)) = "if (" ++ s ++ ".as.i == " ++ show n ++ ")"
-patCheck s (PLit (StringLit t)) = "if (" ++ s ++ ".type == MI_STRING && strcmp(" ++ s ++ ".as.s, " ++ show (T.unpack t) ++ ") == 0)"
-patCheck s (PLit _) = "if (0) /* unsupported literal pattern */"
-patCheck s (PRec tag _) = "if (" ++ s ++ ".type == MI_RECORD && strcmp(" ++ s ++ ".as.rec.tag, \"" ++ T.unpack tag ++ "\") == 0)"
-patCheck s (PList pats Nothing) = "if (" ++ s ++ ".type == MI_LIST && " ++ s ++ ".as.list.len == " ++ show (length pats) ++ ")"
-patCheck s (PList pats (Just _)) = "if (" ++ s ++ ".type == MI_LIST && " ++ s ++ ".as.list.len >= " ++ show (length pats) ++ ")"
-
-patBinds :: String -> Pat -> String
-patBinds s (PVar v) = "      MiVal " ++ sanitize v ++ " = " ++ s ++ ";\n"
-patBinds _ PWild = ""
-patBinds _ (PLit _) = ""
-patBinds s (PRec _ fields) = concatMap (fieldBind s) fields
-patBinds s (PList pats mrest) =
-  concatMap (\(i, p) -> listElemBind s i p) (zip [0::Int ..] pats) ++
-  case mrest of
-    Nothing -> ""
-    Just name ->
-      let n = length pats
-      in "      MiVal *_rest_items = malloc((" ++ s ++ ".as.list.len - " ++ show n ++ ") * sizeof(MiVal));\n" ++
-         "      for (int _ri = " ++ show n ++ "; _ri < " ++ s ++ ".as.list.len; _ri++)\n" ++
-         "        _rest_items[_ri - " ++ show n ++ "] = " ++ s ++ ".as.list.items[_ri];\n" ++
-         "      MiVal " ++ sanitize name ++ " = mi_list(_rest_items, " ++ s ++ ".as.list.len - " ++ show n ++ ");\n"
-
--- Bind a single list element by index in a pattern match
-listElemBind :: String -> Int -> Pat -> String
-listElemBind s i (PVar v) = "      MiVal " ++ sanitize v ++ " = " ++ s ++ ".as.list.items[" ++ show i ++ "];\n"
-listElemBind _ _ PWild = ""
-listElemBind s i _ = "      MiVal _elem_" ++ show i ++ " = " ++ s ++ ".as.list.items[" ++ show i ++ "];\n"
-
-fieldBind :: String -> (Text, Pat) -> String
-fieldBind s (field, PVar v) =
-  "      MiVal " ++ sanitize v ++ " = mi_field(" ++ s ++ ", \"" ++ T.unpack field ++ "\");\n"
-fieldBind _ (_, PWild) = ""
-fieldBind s (field, _) =
-  "      MiVal _f_" ++ T.unpack field ++ " = mi_field(" ++ s ++ ", \"" ++ T.unpack field ++ "\");\n"
-
--- | Find free variables in an expression, excluding the given bound names
-freeVars :: Expr -> [Text] -> [Text]
-freeVars (IntLit _)       _     = []
-freeVars (FloatLit _)     _     = []
-freeVars (StringLit _)    _     = []
-freeVars (Name n)         bound = [n | n `notElem` bound]
-freeVars (BinOp _ l r)    bound = freeVars l bound ++ freeVars r bound
-freeVars (App f x)        bound = freeVars f bound ++ freeVars x bound
-freeVars (Lam p b)        bound = freeVars b (p : bound)
-freeVars (With body bs)   bound =
-  let bnames = map bindName bs
-      bound' = bnames ++ bound
-  in concatMap (\b -> freeVars (bindBody b) bound') bs ++ freeVars body bound'
-freeVars (Record _ bs)    bound = concatMap (\b -> freeVars (bindBody b) bound) bs
-freeVars (FieldAccess e _) bound = freeVars e bound
-freeVars (Namespace bs)   bound =
-  let bnames = map bindName bs
-      bound' = bnames ++ bound
-  in concatMap (\b -> freeVars (bindBody b) bound') bs
-freeVars (Case s alts)    bound =
-  freeVars s bound ++ concatMap (\a -> freeVars (altBody a) bound) alts
-freeVars (CFunction {})   _     = []
-freeVars (Thunk body)     bound = freeVars body bound
-freeVars (ListLit es)     bound = concatMap (\e -> freeVars e bound) es
-
 -- ── C runtime preamble ────────────────────────────────────────────
 
 emitPreamble :: Handle -> IO ()
-emitPreamble h = do
-  hPutStr h $ unlines
-    [ "#define _GNU_SOURCE"
-    , "#include <stdio.h>"
-    , "#include <stdlib.h>"
-    , "#include <string.h>"
-    , "#include <stdint.h>"
-    , "#include <math.h>"
-    , ""
-    , "typedef enum { MI_INT, MI_FLOAT, MI_STRING, MI_RECORD, MI_CLOSURE, MI_POINTER, MI_LIST } MiType;"
-    , ""
-    , "typedef struct MiVal {"
-    , "  MiType type;"
-    , "  union {"
-    , "    int64_t i;"
-    , "    double f;"
-    , "    char *s;"
-    , "    struct { const char *tag; const char **names; struct MiVal *fields; int nfields; } rec;"
-    , "    struct { struct MiVal (*fn)(struct MiVal, void*); void *env; } closure;"
-    , "    void *ptr;"
-    , "    struct { struct MiVal *items; int len; int cap; } list;"
-    , "  } as;"
-    , "} MiVal;"
-    , ""
-    , "static MiVal mi_int(int64_t v) { MiVal r; r.type = MI_INT; r.as.i = v; return r; }"
-    , "static MiVal mi_float(double v) { MiVal r; r.type = MI_FLOAT; r.as.f = v; return r; }"
-    , "static MiVal mi_string(const char *s) { MiVal r; r.type = MI_STRING; r.as.s = strdup(s); return r; }"
-    , "static MiVal mi_pointer(void *p) { MiVal r; r.type = MI_POINTER; r.as.ptr = p; return r; }"
-    , ""
-    , "static MiVal mi_list(MiVal *items, int len) {"
-    , "  MiVal r; r.type = MI_LIST; r.as.list.items = items; r.as.list.len = len; r.as.list.cap = len; return r;"
-    , "}"
-    , ""
-    , "static MiVal mi_closure(MiVal (*fn)(MiVal, void*), void *env) {"
-    , "  MiVal r; r.type = MI_CLOSURE; r.as.closure.fn = fn; r.as.closure.env = env; return r;"
-    , "}"
-    , ""
-    , "static MiVal mi_apply(MiVal f, MiVal arg) {"
-    , "  if (f.type != MI_CLOSURE) { fprintf(stderr, \"apply on non-closure\\n\"); exit(1); }"
-    , "  return f.as.closure.fn(arg, f.as.closure.env);"
-    , "}"
-    , ""
-    , "static double mi_to_float(MiVal v) {"
-    , "  return v.type == MI_FLOAT ? v.as.f : (double)v.as.i;"
-    , "}"
-    , ""
-    , "static MiVal mi_add(MiVal a, MiVal b) {"
-    , "  if (a.type == MI_STRING && b.type == MI_STRING) {"
-    , "    size_t la = strlen(a.as.s), lb = strlen(b.as.s);"
-    , "    char *r = malloc(la + lb + 1);"
-    , "    memcpy(r, a.as.s, la); memcpy(r+la, b.as.s, lb+1);"
-    , "    MiVal v; v.type = MI_STRING; v.as.s = r; return v;"
-    , "  }"
-    , "  if (a.type == MI_FLOAT || b.type == MI_FLOAT)"
-    , "    return mi_float(mi_to_float(a) + mi_to_float(b));"
-    , "  return mi_int(a.as.i + b.as.i);"
-    , "}"
-    , "static MiVal mi_sub(MiVal a, MiVal b) {"
-    , "  if (a.type == MI_FLOAT || b.type == MI_FLOAT)"
-    , "    return mi_float(mi_to_float(a) - mi_to_float(b));"
-    , "  return mi_int(a.as.i - b.as.i);"
-    , "}"
-    , "static MiVal mi_mul(MiVal a, MiVal b) {"
-    , "  if (a.type == MI_FLOAT || b.type == MI_FLOAT)"
-    , "    return mi_float(mi_to_float(a) * mi_to_float(b));"
-    , "  return mi_int(a.as.i * b.as.i);"
-    , "}"
-    , "static MiVal mi_div(MiVal a, MiVal b) {"
-    , "  if (a.type == MI_FLOAT || b.type == MI_FLOAT)"
-    , "    return mi_float(mi_to_float(a) / mi_to_float(b));"
-    , "  if (b.as.i == 0) { fprintf(stderr, \"division by zero\\n\"); exit(1); }"
-    , "  return mi_int(a.as.i / b.as.i);"
-    , "}"
-    , "static MiVal mi_pow(MiVal a, MiVal b) {"
-    , "  if (a.type == MI_FLOAT || b.type == MI_FLOAT)"
-    , "    return mi_float(pow(mi_to_float(a), mi_to_float(b)));"
-    , "  int64_t result = 1, base = a.as.i, exp = b.as.i;"
-    , "  for (; exp > 0; exp--) result *= base;"
-    , "  return mi_int(result);"
-    , "}"
-    , ""
-    , "static MiVal mi_eq(MiVal a, MiVal b) { return mi_int(a.as.i == b.as.i); }"
-    , "static MiVal mi_neq(MiVal a, MiVal b) { return mi_int(a.as.i != b.as.i); }"
-    , "static MiVal mi_lt(MiVal a, MiVal b) { return mi_int(a.as.i < b.as.i); }"
-    , "static MiVal mi_gt(MiVal a, MiVal b) { return mi_int(a.as.i > b.as.i); }"
-    , "static MiVal mi_le(MiVal a, MiVal b) { return mi_int(a.as.i <= b.as.i); }"
-    , "static MiVal mi_ge(MiVal a, MiVal b) { return mi_int(a.as.i >= b.as.i); }"
-    , ""
-    , "static void mi_print_val(MiVal v) {"
-    , "  switch (v.type) {"
-    , "    case MI_INT:    printf(\"%ld\", v.as.i); break;"
-    , "    case MI_FLOAT:  printf(\"%g\", v.as.f); break;"
-    , "    case MI_STRING: printf(\"%s\", v.as.s); break;"
-    , "    case MI_RECORD:"
-    , "      printf(\"%s {\", v.as.rec.tag);"
-    , "      for (int i = 0; i < v.as.rec.nfields; i++) {"
-    , "        if (i > 0) printf(\", \");"
-    , "        if (v.as.rec.names) printf(\"%s = \", v.as.rec.names[i]);"
-    , "        mi_print_val(v.as.rec.fields[i]);"
-    , "      }"
-    , "      printf(\"}\");"
-    , "      break;"
-    , "    case MI_CLOSURE: printf(\"<closure>\"); break;"
-    , "    case MI_POINTER: printf(\"<ptr:%p>\", v.as.ptr); break;"
-    , "    case MI_LIST:"
-    , "      printf(\"[\");"
-    , "      for (int i = 0; i < v.as.list.len; i++) {"
-    , "        if (i > 0) printf(\", \");"
-    , "        mi_print_val(v.as.list.items[i]);"
-    , "      }"
-    , "      printf(\"]\");"
-    , "      break;"
-    , "  }"
-    , "}"
-    , ""
-    , "static void mi_println_val(MiVal v) {"
-    , "  mi_print_val(v); printf(\"\\n\");"
-    , "}"
-    , ""
-    , "static MiVal mi_field(MiVal rec, const char *name) {"
-    , "  if (rec.type != MI_RECORD) { fprintf(stderr, \"field access on non-record\\n\"); exit(1); }"
-    , "  for (int i = 0; i < rec.as.rec.nfields; i++) {"
-    , "    if (rec.as.rec.names && strcmp(rec.as.rec.names[i], name) == 0)"
-    , "      return rec.as.rec.fields[i];"
-    , "  }"
-    , "  fprintf(stderr, \"field '%s' not found in record '%s'\\n\", name, rec.as.rec.tag);"
-    , "  exit(1);"
-    , "}"
-    , ""
-    -- Built-in IO: print and println as closures
-    , "static MiVal mi_builtin_print(MiVal v, void *env) {"
-    , "  (void)env; mi_print_val(v); return mi_int(0);"
-    , "}"
-    , "static MiVal mi_builtin_println(MiVal v, void *env) {"
-    , "  (void)env; mi_println_val(v); return mi_int(0);"
-    , "}"
-    , ""
-    -- Force a thunk (closure with dummy arg)
-    , "static MiVal mi_force(MiVal v) {"
-    , "  if (v.type == MI_CLOSURE) return mi_apply(v, mi_int(0));"
-    , "  return v;"
-    , "}"
-    , ""
-    -- Built-in if: 3-arg curried function (cond, then-thunk, else-thunk)
-    , "struct mi_if_env2 { MiVal cond; MiVal then_val; };"
-    , "static MiVal mi_builtin_if3(MiVal else_val, void *env) {"
-    , "  struct mi_if_env2 *e = (struct mi_if_env2 *)env;"
-    , "  if (e->cond.as.i != 0) return mi_force(e->then_val);"
-    , "  return mi_force(else_val);"
-    , "}"
-    , "struct mi_if_env1 { MiVal cond; };"
-    , "static MiVal mi_builtin_if2(MiVal then_val, void *env) {"
-    , "  struct mi_if_env1 *e = (struct mi_if_env1 *)env;"
-    , "  struct mi_if_env2 *e2 = malloc(sizeof(struct mi_if_env2));"
-    , "  e2->cond = e->cond; e2->then_val = then_val;"
-    , "  return mi_closure(mi_builtin_if3, e2);"
-    , "}"
-    , "static MiVal mi_builtin_if1(MiVal cond, void *env) {"
-    , "  (void)env;"
-    , "  struct mi_if_env1 *e = malloc(sizeof(struct mi_if_env1));"
-    , "  e->cond = cond;"
-    , "  return mi_closure(mi_builtin_if2, e);"
-    , "}"
-    , ""
-    -- List built-ins: len, get, push, concat, slice, map, fold, filter
-    , "static MiVal mi_builtin_len(MiVal lst, void *env) {"
-    , "  (void)env; return mi_int(lst.as.list.len);"
-    , "}"
-    , "struct mi_get_env { MiVal lst; };"
-    , "static MiVal mi_builtin_get2(MiVal idx, void *env) {"
-    , "  struct mi_get_env *e = (struct mi_get_env *)env;"
-    , "  int i = (int)idx.as.i;"
-    , "  if (i < 0 || i >= e->lst.as.list.len) { fprintf(stderr, \"list index out of range\\n\"); exit(1); }"
-    , "  return e->lst.as.list.items[i];"
-    , "}"
-    , "static MiVal mi_builtin_get1(MiVal lst, void *env) {"
-    , "  (void)env;"
-    , "  struct mi_get_env *e = malloc(sizeof(struct mi_get_env));"
-    , "  e->lst = lst;"
-    , "  return mi_closure(mi_builtin_get2, e);"
-    , "}"
-    , "struct mi_push_env { MiVal lst; };"
-    , "static MiVal mi_builtin_push2(MiVal val, void *env) {"
-    , "  struct mi_push_env *e = (struct mi_push_env *)env;"
-    , "  int n = e->lst.as.list.len;"
-    , "  MiVal *items = malloc((n + 1) * sizeof(MiVal));"
-    , "  for (int i = 0; i < n; i++) items[i] = e->lst.as.list.items[i];"
-    , "  items[n] = val;"
-    , "  return mi_list(items, n + 1);"
-    , "}"
-    , "static MiVal mi_builtin_push1(MiVal lst, void *env) {"
-    , "  (void)env;"
-    , "  struct mi_push_env *e = malloc(sizeof(struct mi_push_env));"
-    , "  e->lst = lst;"
-    , "  return mi_closure(mi_builtin_push2, e);"
-    , "}"
-    , "struct mi_concat_env { MiVal a; };"
-    , "static MiVal mi_builtin_concat2(MiVal b, void *env) {"
-    , "  struct mi_concat_env *e = (struct mi_concat_env *)env;"
-    , "  int na = e->a.as.list.len, nb = b.as.list.len;"
-    , "  MiVal *items = malloc((na + nb) * sizeof(MiVal));"
-    , "  for (int i = 0; i < na; i++) items[i] = e->a.as.list.items[i];"
-    , "  for (int i = 0; i < nb; i++) items[na + i] = b.as.list.items[i];"
-    , "  return mi_list(items, na + nb);"
-    , "}"
-    , "static MiVal mi_builtin_concat1(MiVal a, void *env) {"
-    , "  (void)env;"
-    , "  struct mi_concat_env *e = malloc(sizeof(struct mi_concat_env));"
-    , "  e->a = a;"
-    , "  return mi_closure(mi_builtin_concat2, e);"
-    , "}"
-    , "struct mi_map_env { MiVal fn; };"
-    , "static MiVal mi_builtin_map2(MiVal lst, void *env) {"
-    , "  struct mi_map_env *e = (struct mi_map_env *)env;"
-    , "  int n = lst.as.list.len;"
-    , "  MiVal *items = malloc(n * sizeof(MiVal));"
-    , "  for (int i = 0; i < n; i++) items[i] = mi_apply(e->fn, lst.as.list.items[i]);"
-    , "  return mi_list(items, n);"
-    , "}"
-    , "static MiVal mi_builtin_map1(MiVal fn, void *env) {"
-    , "  (void)env;"
-    , "  struct mi_map_env *e = malloc(sizeof(struct mi_map_env));"
-    , "  e->fn = fn;"
-    , "  return mi_closure(mi_builtin_map2, e);"
-    , "}"
-    , "struct mi_fold_env1 { MiVal fn; };"
-    , "struct mi_fold_env2 { MiVal fn; MiVal acc; };"
-    , "static MiVal mi_builtin_fold3(MiVal lst, void *env) {"
-    , "  struct mi_fold_env2 *e = (struct mi_fold_env2 *)env;"
-    , "  MiVal acc = e->acc;"
-    , "  for (int i = 0; i < lst.as.list.len; i++)"
-    , "    acc = mi_apply(mi_apply(e->fn, acc), lst.as.list.items[i]);"
-    , "  return acc;"
-    , "}"
-    , "static MiVal mi_builtin_fold2(MiVal acc, void *env) {"
-    , "  struct mi_fold_env1 *e1 = (struct mi_fold_env1 *)env;"
-    , "  struct mi_fold_env2 *e2 = malloc(sizeof(struct mi_fold_env2));"
-    , "  e2->fn = e1->fn; e2->acc = acc;"
-    , "  return mi_closure(mi_builtin_fold3, e2);"
-    , "}"
-    , "static MiVal mi_builtin_fold1(MiVal fn, void *env) {"
-    , "  (void)env;"
-    , "  struct mi_fold_env1 *e = malloc(sizeof(struct mi_fold_env1));"
-    , "  e->fn = fn;"
-    , "  return mi_closure(mi_builtin_fold2, e);"
-    , "}"
-    , "struct mi_filter_env { MiVal fn; };"
-    , "static MiVal mi_builtin_filter2(MiVal lst, void *env) {"
-    , "  struct mi_filter_env *e = (struct mi_filter_env *)env;"
-    , "  int n = lst.as.list.len;"
-    , "  MiVal *items = malloc(n * sizeof(MiVal));"
-    , "  int count = 0;"
-    , "  for (int i = 0; i < n; i++) {"
-    , "    MiVal r = mi_apply(e->fn, lst.as.list.items[i]);"
-    , "    if (r.as.i != 0) items[count++] = lst.as.list.items[i];"
-    , "  }"
-    , "  return mi_list(items, count);"
-    , "}"
-    , "static MiVal mi_builtin_filter1(MiVal fn, void *env) {"
-    , "  (void)env;"
-    , "  struct mi_filter_env *e = malloc(sizeof(struct mi_filter_env));"
-    , "  e->fn = fn;"
-    , "  return mi_closure(mi_builtin_filter2, e);"
-    , "}"
-    , ""
-    ]
-
--- ── Helpers ───────────────────────────────────────────────────────
-
-opFunc :: Text -> String
-opFunc "+"  = "mi_add"
-opFunc "-"  = "mi_sub"
-opFunc "*"  = "mi_mul"
-opFunc "/"  = "mi_div"
-opFunc "**" = "mi_pow"
-opFunc "==" = "mi_eq"
-opFunc "/=" = "mi_neq"
-opFunc "<"  = "mi_lt"
-opFunc ">"  = "mi_gt"
-opFunc "<=" = "mi_le"
-opFunc ">=" = "mi_ge"
-opFunc op   = "/* unknown op " ++ T.unpack op ++ " */ mi_add"
-
-sanitize :: Text -> String
-sanitize t
-  | s `elem` cKeywords = "mi_" ++ s
-  | otherwise = concatMap esc s
-  where
-    s = T.unpack t
-    esc '\'' = "_prime"
-    esc c    = [c]
-
-cKeywords :: [String]
-cKeywords =
-  [ "auto", "break", "case", "char", "const", "continue", "default", "do"
-  , "double", "else", "enum", "extern", "float", "for", "goto", "if"
-  , "int", "long", "register", "return", "short", "signed", "sizeof"
-  , "static", "struct", "switch", "typedef", "union", "unsigned", "void"
-  , "volatile", "while", "inline", "restrict"
-  , "print", "println"  -- reserved for builtins
-  , "len", "get", "push", "concat", "map", "fold", "filter"  -- list builtins
+emitPreamble h = hPutStr h $ unlines
+  [ "#define _GNU_SOURCE"
+  , "#include <stdio.h>"
+  , "#include <stdlib.h>"
+  , "#include <string.h>"
+  , "#include <stdint.h>"
+  , "#include <math.h>"
+  , "#include <stdarg.h>"
+  , ""
+  , "// ── Forward declarations ──"
+  , "typedef struct MiVal MiVal;"
+  , "typedef struct MiExpr MiExpr;"
+  , "typedef struct MiEnv MiEnv;"
+  , "typedef struct MiBinding MiBinding;"
+  , "typedef struct MiAlt MiAlt;"
+  , "typedef struct MiPat MiPat;"
+  , ""
+  , "// ── MiVal: runtime values ──"
+  , "typedef enum { MI_INT, MI_FLOAT, MI_STRING, MI_RECORD, MI_CLOSURE, MI_NATIVE, MI_POINTER, MI_LIST } MiType;"
+  , ""
+  , "struct MiVal {"
+  , "  MiType type;"
+  , "  union {"
+  , "    int64_t i;"
+  , "    double f;"
+  , "    char *s;"
+  , "    struct { const char *tag; const char **names; MiVal *fields; int nfields; } rec;"
+  , "    struct { MiExpr *body; const char *param; MiEnv *env; } closure;"
+  , "    struct { MiVal (*fn)(MiVal, void*); void *env; } native;"
+  , "    void *ptr;"
+  , "    struct { MiVal *items; int len; int cap; } list;"
+  , "  } as;"
+  , "};"
+  , ""
+  , "// ── MiExpr: expression tree ──"
+  , "typedef enum {"
+  , "  EXPR_INT, EXPR_FLOAT, EXPR_STRING, EXPR_NAME, EXPR_BINOP, EXPR_APP,"
+  , "  EXPR_LAM, EXPR_WITH, EXPR_RECORD, EXPR_FIELD, EXPR_NAMESPACE,"
+  , "  EXPR_CASE, EXPR_THUNK, EXPR_LIST, EXPR_VAL"
+  , "} ExprType;"
+  , ""
+  , "struct MiExpr {"
+  , "  ExprType type;"
+  , "  union {"
+  , "    int64_t i;"
+  , "    double f;"
+  , "    char *s;"
+  , "    char *name;"
+  , "    struct { char *op; MiExpr *left; MiExpr *right; } binop;"
+  , "    struct { MiExpr *fn; MiExpr *arg; } app;"
+  , "    struct { char *param; MiExpr *body; } lam;"
+  , "    struct { MiExpr *body; int nbindings; MiBinding *bindings; } with;"
+  , "    struct { char *tag; int nbindings; MiBinding *bindings; } record;"
+  , "    struct { MiExpr *expr; char *field; } field;"
+  , "    struct { int nbindings; MiBinding *bindings; } ns;"
+  , "    struct { MiExpr *scrut; int nalts; MiAlt *alts; } cas;"
+  , "    struct { MiExpr *body; } thunk;"
+  , "    struct { int len; MiExpr **items; } list;"
+  , "    MiVal val;"
+  , "  } as;"
+  , "};"
+  , ""
+  , "struct MiBinding {"
+  , "  char *name;"
+  , "  int lazy;"
+  , "  int nparams;"
+  , "  char **params;"
+  , "  MiExpr *body;"
+  , "};"
+  , ""
+  , "// ── MiPat ──"
+  , "typedef enum { PAT_VAR, PAT_WILD, PAT_INT, PAT_STRING, PAT_REC, PAT_LIST } PatType;"
+  , ""
+  , "struct MiPat {"
+  , "  PatType type;"
+  , "  union {"
+  , "    char *var;"
+  , "    int64_t i;"
+  , "    char *s;"
+  , "    struct { char *tag; int nfields; char **field_names; MiPat **field_pats; } rec;"
+  , "    struct { int npats; MiPat **pats; char *rest; } list;"
+  , "  } as;"
+  , "};"
+  , ""
+  , "struct MiAlt {"
+  , "  MiPat *pat;"
+  , "  MiExpr *body;"
+  , "};"
+  , ""
+  , "// ── MiEnv ──"
+  , "struct MiEnv {"
+  , "  char *name;"
+  , "  MiVal val;"
+  , "  MiEnv *next;"
+  , "  MiEnv *parent;"
+  , "};"
+  , ""
+  , "// ── Value constructors ──"
+  , "static MiVal mi_int(int64_t v) { MiVal r; r.type = MI_INT; r.as.i = v; return r; }"
+  , "static MiVal mi_float(double v) { MiVal r; r.type = MI_FLOAT; r.as.f = v; return r; }"
+  , "static MiVal mi_string(const char *s) { MiVal r; r.type = MI_STRING; r.as.s = strdup(s); return r; }"
+  , "static MiVal mi_pointer(void *p) { MiVal r; r.type = MI_POINTER; r.as.ptr = p; return r; }"
+  , "static MiVal mi_list(MiVal *items, int len) {"
+  , "  MiVal r; r.type = MI_LIST; r.as.list.items = items; r.as.list.len = len; r.as.list.cap = len; return r;"
+  , "}"
+  , "static MiVal mi_native(MiVal (*fn)(MiVal, void*)) {"
+  , "  MiVal r; r.type = MI_NATIVE; r.as.native.fn = fn; r.as.native.env = NULL; return r;"
+  , "}"
+  , "static MiVal mi_native_env(MiVal (*fn)(MiVal, void*), void *env) {"
+  , "  MiVal r; r.type = MI_NATIVE; r.as.native.fn = fn; r.as.native.env = env; return r;"
+  , "}"
+  , ""
+  , "// ── Env operations ──"
+  , "static MiEnv *mi_env_new(MiEnv *parent) {"
+  , "  MiEnv *e = calloc(1, sizeof(MiEnv)); e->parent = parent; return e;"
+  , "}"
+  , ""
+  , "static void mi_env_set(MiEnv *env, const char *name, MiVal val) {"
+  , "  MiEnv *entry = malloc(sizeof(MiEnv));"
+  , "  entry->name = strdup(name); entry->val = val;"
+  , "  entry->next = env->next; entry->parent = NULL;"
+  , "  env->next = entry;"
+  , "}"
+  , ""
+  , "static MiVal mi_env_get(MiEnv *env, const char *name) {"
+  , "  MiEnv *frame = env;"
+  , "  while (frame) {"
+  , "    for (MiEnv *e = frame; e; e = e->next)"
+  , "      if (e->name && strcmp(e->name, name) == 0) return e->val;"
+  , "    frame = frame->parent;"
+  , "  }"
+  , "  fprintf(stderr, \"unbound variable: %s\\n\", name); exit(1);"
+  , "}"
+  , ""
+  , "// ── Expr constructors ──"
+  , "static MiExpr *mi_expr_int(int64_t v) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_INT; e->as.i = v; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_float(double v) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_FLOAT; e->as.f = v; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_string(const char *s) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_STRING; e->as.s = strdup(s); return e;"
+  , "}"
+  , "static MiExpr *mi_expr_name(const char *n) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_NAME; e->as.name = strdup(n); return e;"
+  , "}"
+  , "static MiExpr *mi_expr_binop(const char *op, MiExpr *l, MiExpr *r) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_BINOP;"
+  , "  e->as.binop.op = strdup(op); e->as.binop.left = l; e->as.binop.right = r; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_app(MiExpr *fn, MiExpr *arg) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_APP;"
+  , "  e->as.app.fn = fn; e->as.app.arg = arg; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_lam(const char *param, MiExpr *body) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_LAM;"
+  , "  e->as.lam.param = strdup(param); e->as.lam.body = body; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_val(MiVal v) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_VAL; e->as.val = v; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_field(MiExpr *expr, const char *field) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_FIELD;"
+  , "  e->as.field.expr = expr; e->as.field.field = strdup(field); return e;"
+  , "}"
+  , "static MiExpr *mi_expr_thunk(MiExpr *body) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_THUNK; e->as.thunk.body = body; return e;"
+  , "}"
+  , ""
+  , "static MiBinding mi_binding(const char *name, int lazy, int nparams, ...) {"
+  , "  MiBinding b; b.name = strdup(name); b.lazy = lazy; b.nparams = nparams;"
+  , "  va_list args; va_start(args, nparams);"
+  , "  if (nparams > 0) {"
+  , "    b.params = malloc(nparams * sizeof(char*));"
+  , "    for (int i = 0; i < nparams; i++) b.params[i] = strdup(va_arg(args, char*));"
+  , "  } else { b.params = NULL; }"
+  , "  b.body = va_arg(args, MiExpr*); va_end(args); return b;"
+  , "}"
+  , ""
+  , "static MiExpr *mi_expr_with(MiExpr *body, int n, ...) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_WITH;"
+  , "  e->as.with.body = body; e->as.with.nbindings = n;"
+  , "  e->as.with.bindings = malloc(n * sizeof(MiBinding));"
+  , "  va_list args; va_start(args, n);"
+  , "  for (int i = 0; i < n; i++) e->as.with.bindings[i] = va_arg(args, MiBinding);"
+  , "  va_end(args); return e;"
+  , "}"
+  , ""
+  , "static MiExpr *mi_expr_record(const char *tag, int n, ...) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_RECORD;"
+  , "  e->as.record.tag = strdup(tag); e->as.record.nbindings = n;"
+  , "  e->as.record.bindings = malloc(n * sizeof(MiBinding));"
+  , "  va_list args; va_start(args, n);"
+  , "  for (int i = 0; i < n; i++) e->as.record.bindings[i] = va_arg(args, MiBinding);"
+  , "  va_end(args); return e;"
+  , "}"
+  , ""
+  , "static MiExpr *mi_expr_namespace(int n, ...) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_NAMESPACE;"
+  , "  e->as.ns.nbindings = n; e->as.ns.bindings = malloc(n * sizeof(MiBinding));"
+  , "  va_list args; va_start(args, n);"
+  , "  for (int i = 0; i < n; i++) e->as.ns.bindings[i] = va_arg(args, MiBinding);"
+  , "  va_end(args); return e;"
+  , "}"
+  , ""
+  , "static MiExpr *mi_expr_list(int n, ...) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_LIST;"
+  , "  e->as.list.len = n; e->as.list.items = malloc(n * sizeof(MiExpr*));"
+  , "  va_list args; va_start(args, n);"
+  , "  for (int i = 0; i < n; i++) e->as.list.items[i] = va_arg(args, MiExpr*);"
+  , "  va_end(args); return e;"
+  , "}"
+  , ""
+  , "// ── Pat constructors ──"
+  , "static MiPat *mi_pat_var(const char *v) {"
+  , "  MiPat *p = malloc(sizeof(MiPat)); p->type = PAT_VAR; p->as.var = strdup(v); return p;"
+  , "}"
+  , "static MiPat *mi_pat_wild(void) { MiPat *p = malloc(sizeof(MiPat)); p->type = PAT_WILD; return p; }"
+  , "static MiPat *mi_pat_int(int64_t v) {"
+  , "  MiPat *p = malloc(sizeof(MiPat)); p->type = PAT_INT; p->as.i = v; return p;"
+  , "}"
+  , "static MiPat *mi_pat_string(const char *s) {"
+  , "  MiPat *p = malloc(sizeof(MiPat)); p->type = PAT_STRING; p->as.s = strdup(s); return p;"
+  , "}"
+  , "static MiPat *mi_pat_rec(const char *tag, int n, ...) {"
+  , "  MiPat *p = malloc(sizeof(MiPat)); p->type = PAT_REC;"
+  , "  p->as.rec.tag = strdup(tag); p->as.rec.nfields = n;"
+  , "  p->as.rec.field_names = malloc(n * sizeof(char*));"
+  , "  p->as.rec.field_pats = malloc(n * sizeof(MiPat*));"
+  , "  va_list args; va_start(args, n);"
+  , "  for (int i = 0; i < n; i++) {"
+  , "    p->as.rec.field_names[i] = strdup(va_arg(args, char*));"
+  , "    p->as.rec.field_pats[i] = va_arg(args, MiPat*);"
+  , "  }"
+  , "  va_end(args); return p;"
+  , "}"
+  , "static MiPat *mi_pat_list(int n, char *rest, ...) {"
+  , "  MiPat *p = malloc(sizeof(MiPat)); p->type = PAT_LIST;"
+  , "  p->as.list.npats = n; p->as.list.rest = rest ? strdup(rest) : NULL;"
+  , "  p->as.list.pats = malloc(n * sizeof(MiPat*));"
+  , "  va_list args; va_start(args, rest);"
+  , "  for (int i = 0; i < n; i++) p->as.list.pats[i] = va_arg(args, MiPat*);"
+  , "  va_end(args); return p;"
+  , "}"
+  , ""
+  , "static MiAlt mi_alt(MiPat *pat, MiExpr *body) { MiAlt a; a.pat = pat; a.body = body; return a; }"
+  , ""
+  , "static MiExpr *mi_expr_case(MiExpr *scrut, int n, ...) {"
+  , "  MiExpr *e = malloc(sizeof(MiExpr)); e->type = EXPR_CASE;"
+  , "  e->as.cas.scrut = scrut; e->as.cas.nalts = n;"
+  , "  e->as.cas.alts = malloc(n * sizeof(MiAlt));"
+  , "  va_list args; va_start(args, n);"
+  , "  for (int i = 0; i < n; i++) e->as.cas.alts[i] = va_arg(args, MiAlt);"
+  , "  va_end(args); return e;"
+  , "}"
+  , ""
+  , "// ── Helpers ──"
+  , "static double mi_to_float(MiVal v) {"
+  , "  return v.type == MI_FLOAT ? v.as.f : (double)v.as.i;"
+  , "}"
+  , ""
+  , "static MiVal mi_field(MiVal rec, const char *name) {"
+  , "  if (rec.type != MI_RECORD) { fprintf(stderr, \"field access on non-record\\n\"); exit(1); }"
+  , "  for (int i = 0; i < rec.as.rec.nfields; i++)"
+  , "    if (rec.as.rec.names && strcmp(rec.as.rec.names[i], name) == 0)"
+  , "      return rec.as.rec.fields[i];"
+  , "  fprintf(stderr, \"field '%s' not found in record '%s'\\n\", name, rec.as.rec.tag);"
+  , "  exit(1);"
+  , "}"
+  , ""
+  , "static MiVal mi_apply(MiVal f, MiVal arg);"
+  , "static MiVal mi_eval(MiExpr *expr, MiEnv *env);"
+  , ""
+  , "// ── Printing ──"
+  , "static void mi_print_val(MiVal v) {"
+  , "  switch (v.type) {"
+  , "    case MI_INT:    printf(\"%ld\", v.as.i); break;"
+  , "    case MI_FLOAT:  printf(\"%g\", v.as.f); break;"
+  , "    case MI_STRING: printf(\"%s\", v.as.s); break;"
+  , "    case MI_RECORD:"
+  , "      printf(\"%s {\", v.as.rec.tag);"
+  , "      for (int i = 0; i < v.as.rec.nfields; i++) {"
+  , "        if (i > 0) printf(\", \");"
+  , "        if (v.as.rec.names) printf(\"%s = \", v.as.rec.names[i]);"
+  , "        mi_print_val(v.as.rec.fields[i]);"
+  , "      }"
+  , "      printf(\"}\"); break;"
+  , "    case MI_CLOSURE: printf(\"<closure>\"); break;"
+  , "    case MI_NATIVE:  printf(\"<closure>\"); break;"
+  , "    case MI_POINTER: printf(\"<ptr:%p>\", v.as.ptr); break;"
+  , "    case MI_LIST:"
+  , "      printf(\"[\");"
+  , "      for (int i = 0; i < v.as.list.len; i++) {"
+  , "        if (i > 0) printf(\", \");"
+  , "        mi_print_val(v.as.list.items[i]);"
+  , "      }"
+  , "      printf(\"]\"); break;"
+  , "  }"
+  , "}"
+  , "static void mi_println_val(MiVal v) { mi_print_val(v); printf(\"\\n\"); }"
+  , ""
+  , "// ── Application ──"
+  , "static MiVal mi_apply(MiVal f, MiVal arg) {"
+  , "  if (f.type == MI_NATIVE) return f.as.native.fn(arg, f.as.native.env);"
+  , "  if (f.type == MI_CLOSURE) {"
+  , "    MiEnv *call_env = mi_env_new(f.as.closure.env);"
+  , "    mi_env_set(call_env, f.as.closure.param, arg);"
+  , "    return mi_eval(f.as.closure.body, call_env);"
+  , "  }"
+  , "  fprintf(stderr, \"apply on non-function\\n\"); exit(1);"
+  , "}"
+  , ""
+  , "// ── Force thunk ──"
+  , "static MiVal mi_force(MiVal v, MiEnv *env) {"
+  , "  (void)env;"
+  , "  if (v.type == MI_CLOSURE && v.as.closure.param && strcmp(v.as.closure.param, \"_thunk_\") == 0)"
+  , "    return mi_eval(v.as.closure.body, v.as.closure.env);"
+  , "  return v;"
+  , "}"
+  , ""
+  , "// ── Pattern matching ──"
+  , "static int mi_match(MiPat *pat, MiVal val, MiEnv *env) {"
+  , "  switch (pat->type) {"
+  , "    case PAT_VAR:    mi_env_set(env, pat->as.var, val); return 1;"
+  , "    case PAT_WILD:   return 1;"
+  , "    case PAT_INT:    return val.type == MI_INT && val.as.i == pat->as.i;"
+  , "    case PAT_STRING: return val.type == MI_STRING && strcmp(val.as.s, pat->as.s) == 0;"
+  , "    case PAT_REC:"
+  , "      if (val.type != MI_RECORD || strcmp(val.as.rec.tag, pat->as.rec.tag) != 0) return 0;"
+  , "      for (int i = 0; i < pat->as.rec.nfields; i++) {"
+  , "        int found = 0;"
+  , "        for (int j = 0; j < val.as.rec.nfields; j++) {"
+  , "          if (strcmp(val.as.rec.names[j], pat->as.rec.field_names[i]) == 0) {"
+  , "            if (!mi_match(pat->as.rec.field_pats[i], val.as.rec.fields[j], env)) return 0;"
+  , "            found = 1; break;"
+  , "          }"
+  , "        }"
+  , "        if (!found) return 0;"
+  , "      }"
+  , "      return 1;"
+  , "    case PAT_LIST:"
+  , "      if (val.type != MI_LIST) return 0;"
+  , "      if (pat->as.list.rest == NULL && val.as.list.len != pat->as.list.npats) return 0;"
+  , "      if (pat->as.list.rest != NULL && val.as.list.len < pat->as.list.npats) return 0;"
+  , "      for (int i = 0; i < pat->as.list.npats; i++)"
+  , "        if (!mi_match(pat->as.list.pats[i], val.as.list.items[i], env)) return 0;"
+  , "      if (pat->as.list.rest) {"
+  , "        int rlen = val.as.list.len - pat->as.list.npats;"
+  , "        MiVal *ritems = malloc(rlen * sizeof(MiVal));"
+  , "        for (int i = 0; i < rlen; i++) ritems[i] = val.as.list.items[pat->as.list.npats + i];"
+  , "        mi_env_set(env, pat->as.list.rest, mi_list(ritems, rlen));"
+  , "      }"
+  , "      return 1;"
+  , "  }"
+  , "  return 0;"
+  , "}"
+  , ""
+  , "// ── Arithmetic ──"
+  , "static MiVal mi_binop(const char *op, MiVal a, MiVal b) {"
+  , "  if (strcmp(op, \"+\") == 0 && a.type == MI_STRING && b.type == MI_STRING) {"
+  , "    size_t la = strlen(a.as.s), lb = strlen(b.as.s);"
+  , "    char *r = malloc(la + lb + 1); memcpy(r, a.as.s, la); memcpy(r+la, b.as.s, lb+1);"
+  , "    MiVal v; v.type = MI_STRING; v.as.s = r; return v;"
+  , "  }"
+  , "  if (a.type == MI_FLOAT || b.type == MI_FLOAT) {"
+  , "    double fa = mi_to_float(a), fb = mi_to_float(b);"
+  , "    if (strcmp(op, \"+\") == 0) return mi_float(fa + fb);"
+  , "    if (strcmp(op, \"-\") == 0) return mi_float(fa - fb);"
+  , "    if (strcmp(op, \"*\") == 0) return mi_float(fa * fb);"
+  , "    if (strcmp(op, \"/\") == 0) return mi_float(fa / fb);"
+  , "    if (strcmp(op, \"**\") == 0) return mi_float(pow(fa, fb));"
+  , "    if (strcmp(op, \"==\") == 0) return mi_int(fa == fb);"
+  , "    if (strcmp(op, \"/=\") == 0) return mi_int(fa != fb);"
+  , "    if (strcmp(op, \"<\") == 0) return mi_int(fa < fb);"
+  , "    if (strcmp(op, \">\") == 0) return mi_int(fa > fb);"
+  , "    if (strcmp(op, \"<=\") == 0) return mi_int(fa <= fb);"
+  , "    if (strcmp(op, \">=\") == 0) return mi_int(fa >= fb);"
+  , "  }"
+  , "  int64_t ia = a.as.i, ib = b.as.i;"
+  , "  if (strcmp(op, \"+\") == 0) return mi_int(ia + ib);"
+  , "  if (strcmp(op, \"-\") == 0) return mi_int(ia - ib);"
+  , "  if (strcmp(op, \"*\") == 0) return mi_int(ia * ib);"
+  , "  if (strcmp(op, \"/\") == 0) { if (ib==0) { fprintf(stderr,\"division by zero\\n\"); exit(1); } return mi_int(ia / ib); }"
+  , "  if (strcmp(op, \"**\") == 0) { int64_t r=1; for(int64_t e=ib;e>0;e--) r*=ia; return mi_int(r); }"
+  , "  if (strcmp(op, \"==\") == 0) return mi_int(ia == ib);"
+  , "  if (strcmp(op, \"/=\") == 0) return mi_int(ia != ib);"
+  , "  if (strcmp(op, \"<\") == 0) return mi_int(ia < ib);"
+  , "  if (strcmp(op, \">\") == 0) return mi_int(ia > ib);"
+  , "  if (strcmp(op, \"<=\") == 0) return mi_int(ia <= ib);"
+  , "  if (strcmp(op, \">=\") == 0) return mi_int(ia >= ib);"
+  , "  fprintf(stderr, \"unknown operator: %s\\n\", op); exit(1);"
+  , "}"
+  , ""
+  , "// ── Wrap params ──"
+  , "static MiExpr *mi_wrap_lambda(int nparams, char **params, MiExpr *body) {"
+  , "  MiExpr *e = body;"
+  , "  for (int i = nparams - 1; i >= 0; i--) e = mi_expr_lam(params[i], e);"
+  , "  return e;"
+  , "}"
+  , ""
+  , "// ── Evaluator ──"
+  , "static MiVal mi_eval(MiExpr *expr, MiEnv *env) {"
+  , "  switch (expr->type) {"
+  , "    case EXPR_INT:    return mi_int(expr->as.i);"
+  , "    case EXPR_FLOAT:  return mi_float(expr->as.f);"
+  , "    case EXPR_STRING: return mi_string(expr->as.s);"
+  , "    case EXPR_VAL:    return expr->as.val;"
+  , "    case EXPR_NAME:   return mi_env_get(env, expr->as.name);"
+  , ""
+  , "    case EXPR_BINOP: {"
+  , "      MiVal l = mi_eval(expr->as.binop.left, env);"
+  , "      MiVal r = mi_eval(expr->as.binop.right, env);"
+  , "      return mi_binop(expr->as.binop.op, l, r);"
+  , "    }"
+  , ""
+  , "    case EXPR_APP: {"
+  , "      MiVal fn = mi_eval(expr->as.app.fn, env);"
+  , "      MiVal arg = mi_eval(expr->as.app.arg, env);"
+  , "      return mi_apply(fn, arg);"
+  , "    }"
+  , ""
+  , "    case EXPR_LAM: {"
+  , "      MiVal r; r.type = MI_CLOSURE;"
+  , "      r.as.closure.body = expr->as.lam.body;"
+  , "      r.as.closure.param = expr->as.lam.param;"
+  , "      r.as.closure.env = env;"
+  , "      return r;"
+  , "    }"
+  , ""
+  , "    case EXPR_WITH: {"
+  , "      MiEnv *inner = mi_env_new(env);"
+  , "      for (int i = 0; i < expr->as.with.nbindings; i++) {"
+  , "        MiBinding *b = &expr->as.with.bindings[i];"
+  , "        MiExpr *body = b->nparams > 0 ? mi_wrap_lambda(b->nparams, b->params, b->body) : b->body;"
+  , "        if (b->lazy) {"
+  , "          MiVal thunk; thunk.type = MI_CLOSURE;"
+  , "          thunk.as.closure.body = body; thunk.as.closure.param = \"_thunk_\";"
+  , "          thunk.as.closure.env = inner;"
+  , "          mi_env_set(inner, b->name, thunk);"
+  , "        } else {"
+  , "          mi_env_set(inner, b->name, mi_eval(body, inner));"
+  , "        }"
+  , "      }"
+  , "      return mi_eval(expr->as.with.body, inner);"
+  , "    }"
+  , ""
+  , "    case EXPR_RECORD: {"
+  , "      int n = expr->as.record.nbindings;"
+  , "      MiVal *fields = malloc(n * sizeof(MiVal));"
+  , "      const char **names = malloc(n * sizeof(char*));"
+  , "      for (int i = 0; i < n; i++) {"
+  , "        MiBinding *b = &expr->as.record.bindings[i];"
+  , "        names[i] = b->name;"
+  , "        MiExpr *body = b->nparams > 0 ? mi_wrap_lambda(b->nparams, b->params, b->body) : b->body;"
+  , "        fields[i] = mi_eval(body, env);"
+  , "      }"
+  , "      MiVal r; r.type = MI_RECORD;"
+  , "      r.as.rec.tag = expr->as.record.tag; r.as.rec.names = names;"
+  , "      r.as.rec.fields = fields; r.as.rec.nfields = n;"
+  , "      return r;"
+  , "    }"
+  , ""
+  , "    case EXPR_FIELD: {"
+  , "      MiVal v = mi_eval(expr->as.field.expr, env);"
+  , "      v = mi_force(v, env);"
+  , "      return mi_field(v, expr->as.field.field);"
+  , "    }"
+  , ""
+  , "    case EXPR_NAMESPACE: {"
+  , "      MiEnv *inner = mi_env_new(env);"
+  , "      MiVal last = mi_int(0);"
+  , "      for (int i = 0; i < expr->as.ns.nbindings; i++) {"
+  , "        MiBinding *b = &expr->as.ns.bindings[i];"
+  , "        MiExpr *body = b->nparams > 0 ? mi_wrap_lambda(b->nparams, b->params, b->body) : b->body;"
+  , "        if (b->lazy) {"
+  , "          MiVal thunk; thunk.type = MI_CLOSURE;"
+  , "          thunk.as.closure.body = body; thunk.as.closure.param = \"_thunk_\";"
+  , "          thunk.as.closure.env = inner;"
+  , "          mi_env_set(inner, b->name, thunk); last = thunk;"
+  , "        } else {"
+  , "          last = mi_eval(body, inner);"
+  , "          mi_env_set(inner, b->name, last);"
+  , "        }"
+  , "      }"
+  , "      return last;"
+  , "    }"
+  , ""
+  , "    case EXPR_CASE: {"
+  , "      MiVal scrut = mi_eval(expr->as.cas.scrut, env);"
+  , "      scrut = mi_force(scrut, env);"
+  , "      for (int i = 0; i < expr->as.cas.nalts; i++) {"
+  , "        MiEnv *match_env = mi_env_new(env);"
+  , "        if (mi_match(expr->as.cas.alts[i].pat, scrut, match_env))"
+  , "          return mi_eval(expr->as.cas.alts[i].body, match_env);"
+  , "      }"
+  , "      fprintf(stderr, \"match: no matching pattern\\n\"); exit(1);"
+  , "    }"
+  , ""
+  , "    case EXPR_THUNK: {"
+  , "      MiVal r; r.type = MI_CLOSURE;"
+  , "      r.as.closure.body = expr->as.thunk.body;"
+  , "      r.as.closure.param = \"_thunk_\";"
+  , "      r.as.closure.env = env;"
+  , "      return r;"
+  , "    }"
+  , ""
+  , "    case EXPR_LIST: {"
+  , "      int n = expr->as.list.len;"
+  , "      MiVal *items = malloc(n * sizeof(MiVal));"
+  , "      for (int i = 0; i < n; i++) items[i] = mi_eval(expr->as.list.items[i], env);"
+  , "      return mi_list(items, n);"
+  , "    }"
+  , "  }"
+  , "  fprintf(stderr, \"eval: unknown expr type %d\\n\", expr->type); exit(1);"
+  , "}"
+  , ""
+  , "// ── Built-ins ──"
+  , "static MiVal mi_builtin_print(MiVal v, void *e) { (void)e; mi_print_val(v); return mi_int(0); }"
+  , "static MiVal mi_builtin_println(MiVal v, void *e) { (void)e; mi_println_val(v); return mi_int(0); }"
+  , ""
+  , "// if: 3-arg curried"
+  , "struct mi_if_env2 { MiVal cond; MiVal then_val; };"
+  , "static MiVal mi_builtin_if3(MiVal else_val, void *env) {"
+  , "  struct mi_if_env2 *e = (struct mi_if_env2 *)env;"
+  , "  if (e->cond.as.i != 0) return mi_force(e->then_val, NULL);"
+  , "  return mi_force(else_val, NULL);"
+  , "}"
+  , "struct mi_if_env1 { MiVal cond; };"
+  , "static MiVal mi_builtin_if2(MiVal then_val, void *env) {"
+  , "  struct mi_if_env1 *e = (struct mi_if_env1 *)env;"
+  , "  struct mi_if_env2 *e2 = malloc(sizeof(struct mi_if_env2));"
+  , "  e2->cond = e->cond; e2->then_val = then_val;"
+  , "  return mi_native_env(mi_builtin_if3, e2);"
+  , "}"
+  , "static MiVal mi_builtin_if(MiVal cond, void *env) {"
+  , "  (void)env; struct mi_if_env1 *e = malloc(sizeof(struct mi_if_env1));"
+  , "  e->cond = cond; return mi_native_env(mi_builtin_if2, e);"
+  , "}"
+  , ""
+  , "// List built-ins"
+  , "static MiVal mi_builtin_len(MiVal lst, void *e) { (void)e; return mi_int(lst.as.list.len); }"
+  , ""
+  , "struct mi_get_env { MiVal lst; };"
+  , "static MiVal mi_builtin_get2(MiVal idx, void *env) {"
+  , "  struct mi_get_env *e = (struct mi_get_env *)env;"
+  , "  int i = (int)idx.as.i;"
+  , "  if (i < 0 || i >= e->lst.as.list.len) { fprintf(stderr, \"list index out of range\\n\"); exit(1); }"
+  , "  return e->lst.as.list.items[i];"
+  , "}"
+  , "static MiVal mi_builtin_get(MiVal lst, void *env) {"
+  , "  (void)env; struct mi_get_env *e = malloc(sizeof(struct mi_get_env));"
+  , "  e->lst = lst; return mi_native_env(mi_builtin_get2, e);"
+  , "}"
+  , ""
+  , "struct mi_push_env { MiVal lst; };"
+  , "static MiVal mi_builtin_push2(MiVal val, void *env) {"
+  , "  struct mi_push_env *e = (struct mi_push_env *)env;"
+  , "  int n = e->lst.as.list.len; MiVal *items = malloc((n+1) * sizeof(MiVal));"
+  , "  for (int i = 0; i < n; i++) items[i] = e->lst.as.list.items[i];"
+  , "  items[n] = val; return mi_list(items, n+1);"
+  , "}"
+  , "static MiVal mi_builtin_push(MiVal lst, void *env) {"
+  , "  (void)env; struct mi_push_env *e = malloc(sizeof(struct mi_push_env));"
+  , "  e->lst = lst; return mi_native_env(mi_builtin_push2, e);"
+  , "}"
+  , ""
+  , "struct mi_concat_env { MiVal a; };"
+  , "static MiVal mi_builtin_concat2(MiVal b, void *env) {"
+  , "  struct mi_concat_env *e = (struct mi_concat_env *)env;"
+  , "  int na = e->a.as.list.len, nb = b.as.list.len;"
+  , "  MiVal *items = malloc((na+nb) * sizeof(MiVal));"
+  , "  for (int i = 0; i < na; i++) items[i] = e->a.as.list.items[i];"
+  , "  for (int i = 0; i < nb; i++) items[na+i] = b.as.list.items[i];"
+  , "  return mi_list(items, na+nb);"
+  , "}"
+  , "static MiVal mi_builtin_concat(MiVal a, void *env) {"
+  , "  (void)env; struct mi_concat_env *e = malloc(sizeof(struct mi_concat_env));"
+  , "  e->a = a; return mi_native_env(mi_builtin_concat2, e);"
+  , "}"
+  , ""
+  , "struct mi_map_env { MiVal fn; };"
+  , "static MiVal mi_builtin_map2(MiVal lst, void *env) {"
+  , "  struct mi_map_env *e = (struct mi_map_env *)env;"
+  , "  int n = lst.as.list.len; MiVal *items = malloc(n * sizeof(MiVal));"
+  , "  for (int i = 0; i < n; i++) items[i] = mi_apply(e->fn, lst.as.list.items[i]);"
+  , "  return mi_list(items, n);"
+  , "}"
+  , "static MiVal mi_builtin_map(MiVal fn, void *env) {"
+  , "  (void)env; struct mi_map_env *e = malloc(sizeof(struct mi_map_env));"
+  , "  e->fn = fn; return mi_native_env(mi_builtin_map2, e);"
+  , "}"
+  , ""
+  , "struct mi_fold_env1 { MiVal fn; };"
+  , "struct mi_fold_env2 { MiVal fn; MiVal acc; };"
+  , "static MiVal mi_builtin_fold3(MiVal lst, void *env) {"
+  , "  struct mi_fold_env2 *e = (struct mi_fold_env2 *)env;"
+  , "  MiVal acc = e->acc;"
+  , "  for (int i = 0; i < lst.as.list.len; i++)"
+  , "    acc = mi_apply(mi_apply(e->fn, acc), lst.as.list.items[i]);"
+  , "  return acc;"
+  , "}"
+  , "static MiVal mi_builtin_fold2(MiVal acc, void *env) {"
+  , "  struct mi_fold_env1 *e1 = (struct mi_fold_env1 *)env;"
+  , "  struct mi_fold_env2 *e2 = malloc(sizeof(struct mi_fold_env2));"
+  , "  e2->fn = e1->fn; e2->acc = acc; return mi_native_env(mi_builtin_fold3, e2);"
+  , "}"
+  , "static MiVal mi_builtin_fold(MiVal fn, void *env) {"
+  , "  (void)env; struct mi_fold_env1 *e = malloc(sizeof(struct mi_fold_env1));"
+  , "  e->fn = fn; return mi_native_env(mi_builtin_fold2, e);"
+  , "}"
+  , ""
+  , "struct mi_filter_env { MiVal fn; };"
+  , "static MiVal mi_builtin_filter2(MiVal lst, void *env) {"
+  , "  struct mi_filter_env *e = (struct mi_filter_env *)env;"
+  , "  int n = lst.as.list.len; MiVal *items = malloc(n * sizeof(MiVal)); int count = 0;"
+  , "  for (int i = 0; i < n; i++) {"
+  , "    MiVal r = mi_apply(e->fn, lst.as.list.items[i]);"
+  , "    if (r.as.i != 0) items[count++] = lst.as.list.items[i];"
+  , "  }"
+  , "  return mi_list(items, count);"
+  , "}"
+  , "static MiVal mi_builtin_filter(MiVal fn, void *env) {"
+  , "  (void)env; struct mi_filter_env *e = malloc(sizeof(struct mi_filter_env));"
+  , "  e->fn = fn; return mi_native_env(mi_builtin_filter2, e);"
+  , "}"
+  , ""
   ]

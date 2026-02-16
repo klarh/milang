@@ -14,6 +14,15 @@ type Env = Map.Map Text Expr
 emptyEnv :: Env
 emptyEnv = Map.empty
 
+-- | Check if an expression is residual (not a concrete value)
+isResidual :: Expr -> Bool
+isResidual (IntLit _)    = False
+isResidual (FloatLit _)  = False
+isResidual (StringLit _) = False
+isResidual (ListLit _)   = False
+isResidual (Record _ _)  = False
+isResidual _             = True
+
 -- | Reduce an expression as far as possible given the environment.
 -- Fully-known expressions become literals. Partially-known expressions
 -- remain as residual AST fragments.
@@ -61,7 +70,9 @@ reduce env (Namespace bindings) =
 
 reduce env (Case scrut alts) =
   let scrut' = forceThunk env (reduce env scrut)
-  in reduceCase env scrut' alts
+  in if isResidual scrut'
+       then Case scrut' (map (\(Alt p b) -> Alt p (reduce env b)) alts)
+       else reduceCase env scrut' alts
 
 reduce _ e@(CFunction {}) = e  -- C FFI: irreducible
 
@@ -73,15 +84,28 @@ reduce env (ListLit es) = ListLit (map (reduce env) es)
 
 -- Evaluate a sequence of bindings, extending the environment.
 -- Strict bindings are reduced immediately; lazy bindings are deferred.
+-- Self-referencing (recursive) bindings are NOT added to the env — they stay
+-- as residual Names so the reducer doesn't try to inline them infinitely.
 evalBindings :: Env -> [Binding] -> Env
 evalBindings env [] = env
 evalBindings env (b:bs) =
-  let val = if bindLazy b
+  let name = bindName b
+      body = wrapLambda (bindParams b) (bindBody b)
+      isRecursive = isSelfReferencing name body
+      val = if bindLazy b
             then bindBody b  -- lazy: store unevaluated
-            else let body = wrapLambda (bindParams b) (bindBody b)
-                 in reduce env body
-      env' = Map.insert (bindName b) val env
+            else if isRecursive
+                 then body  -- recursive: store without reducing
+                 else reduce env body
+      -- For recursive bindings, don't add to env so calls stay residual
+      env' = if isRecursive
+             then env
+             else Map.insert name val env
   in evalBindings env' bs
+
+-- | Check if an expression references a given name (used to detect recursion)
+isSelfReferencing :: Text -> Expr -> Bool
+isSelfReferencing name expr = name `Set.member` exprFreeVars expr
 
 -- Wrap a body in lambdas for its parameters: f x y = e → \x -> \y -> e
 wrapLambda :: [Text] -> Expr -> Expr
