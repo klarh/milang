@@ -1,0 +1,15 @@
+-- Test runtime closures: functions passed as values
+-- These can't be fully evaluated at compile time
+
+-- map-like: apply a function to a value
+apply f x = f x
+
+-- higher-order: return a closure
+make_adder n = adder { adder x = n + x }
+add3 = make_adder 3
+
+-- use it
+result = apply add3 10
+
+-- print it
+main = println result

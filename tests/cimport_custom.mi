@@ -1,0 +1,11 @@
+-- Test importing a custom C header with source linking
+Lib = import "lib/mylib.h" { src = "lib/mylib.c" }
+
+a = Lib.add_ints 3 4
+main1 = println a
+
+b = Lib.multiply 2.5 4.0
+main2 = println b
+
+c = Lib.greeting 0
+main3 = println c

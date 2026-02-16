@@ -1,0 +1,17 @@
+-- Higher-order functions and closures
+
+-- adder returns a closure capturing n
+adder n x = n + x
+
+-- apply a function to an argument
+add5 = adder 5
+result1 = add5 10
+
+-- compose two functions
+twice f x = f (f x)
+inc x = x + 1
+result2 = twice inc 3
+
+-- closure capturing a local variable
+make_greeter greeting = greeting + " world"
+hi = make_greeter "hello"

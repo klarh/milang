@@ -1,0 +1,9 @@
+-- Test importing a milang module
+
+-- Namespaced import
+Math = import "lib/mymath.mi"
+
+-- Use via field access
+area = Math.circle_area 5
+main1 = println area
+main2 = println Math.pi

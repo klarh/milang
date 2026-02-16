@@ -1,0 +1,11 @@
+-- Test nested imports: import2 -> geometry -> mymath
+
+Geo = import "lib/geometry.mi"
+
+-- circle area via nested import chain
+a1 = Geo.circle_area 10
+main1 = println a1
+
+-- rect area
+a2 = Geo.rect_area 3 4
+main2 = println a2

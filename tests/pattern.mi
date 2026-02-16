@@ -1,0 +1,9 @@
+shape = Circle {r = 5}
+
+area = shape ->
+  Circle {r} = 3.14 * r * r
+  Rect {w; h} = w * h
+
+name = shape ->
+  Circle {r} = "circle"
+  Rect {w; h} = "rectangle"

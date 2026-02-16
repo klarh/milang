@@ -1,0 +1,16 @@
+-- Test runtime closures that must survive to C code
+-- The key: the argument to make_adder comes from a runtime computation
+
+make_adder n x = n + x
+-- This can't be fully evaluated because we pass a closure as a value
+apply_twice f x = f (f x)
+inc x = x + 1
+
+-- All compile-time evaluable
+r1 = apply_twice inc 3
+main1 = println r1
+
+-- Now test: pass make_adder 2 as a function
+add2 = make_adder 2
+r2 = apply_twice add2 10
+main2 = println r2

@@ -1,0 +1,23 @@
+-- Pattern matching where scrutinee is known at compile time
+s1 = Circle {r = 5}
+a1 = s1 ->
+  Circle {r} = r * r
+  Rect {w; h} = w * h
+
+-- Nested record
+origin = Point {x = 0; y = 0}
+moved = Point {x = 3; y = 4}
+
+dist = moved ->
+  Point {x; y} = x * x + y * y
+
+-- Literal patterns
+grade = 85 ->
+  100 = "perfect"
+  85 = "good"
+  0 = "fail"
+
+-- Wildcard
+fallback = 42 ->
+  0 = "zero"
+  _ = "something"

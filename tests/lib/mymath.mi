@@ -1,0 +1,4 @@
+-- A simple math library
+pi = 3.14159
+tau = pi * 2
+circle_area r = pi * r * r
