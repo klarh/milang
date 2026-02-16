@@ -118,6 +118,14 @@ resolveExpr cache lr dir (Case scrut alts) = do
   alts' <- resolveAlts cache lr dir alts
   pure $ Case <$> scrut' <*> alts'
 
+resolveExpr cache lr dir (Thunk body) = do
+  body' <- resolveExpr cache lr dir body
+  pure $ Thunk <$> body'
+
+resolveExpr cache lr dir (ListLit es) = do
+  es' <- mapM (resolveExpr cache lr dir) es
+  pure $ ListLit <$> sequence es'
+
 -- | Common import resolution logic
 resolveImportPath :: ImportCache -> LinkRef -> FilePath -> FilePath -> String -> IO (Either String Expr)
 resolveImportPath cache lr dir fullPath pathStr = do

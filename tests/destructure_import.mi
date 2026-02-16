@@ -1,0 +1,3 @@
+-- Test destructuring imports
+{circle_area} = import "lib/mymath.mi"
+main1 = println (circle_area 5)

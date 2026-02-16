@@ -1,0 +1,14 @@
+-- Test thunks (~expr) and if built-in
+x = 10
+result = if (x > 5) ~(x * 2) ~(x * 3)
+main1 = println result
+
+-- Test false branch
+y = 3
+result2 = if (y > 5) ~(y * 2) ~(y * 3)
+main2 = println result2
+
+-- Test nested if
+z = 7
+result3 = if (z > 10) ~100 ~(if (z > 5) ~50 ~0)
+main3 = println result3

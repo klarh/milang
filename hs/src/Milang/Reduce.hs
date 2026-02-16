@@ -5,6 +5,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import Data.Maybe (isNothing, isJust)
 import Milang.Syntax
 
 -- | Environment: maps names to (possibly residual) expressions
@@ -27,8 +28,8 @@ reduce env (Name n) =
     Nothing  -> Name n  -- unknown / residual
 
 reduce env (BinOp op l r) =
-  let l' = reduce env l
-      r' = reduce env r
+  let l' = forceThunk env (reduce env l)
+      r' = forceThunk env (reduce env r)
   in reduceBinOp op l' r'
 
 reduce env (App f x) =
@@ -50,7 +51,7 @@ reduce env (Record tag bindings) =
   in Record tag bs'
 
 reduce env (FieldAccess e field) =
-  let e' = reduce env e
+  let e' = forceThunk env (reduce env e)
   in reduceFieldAccess e' field
 
 reduce env (Namespace bindings) =
@@ -59,10 +60,14 @@ reduce env (Namespace bindings) =
   in Namespace bs'
 
 reduce env (Case scrut alts) =
-  let scrut' = reduce env scrut
+  let scrut' = forceThunk env (reduce env scrut)
   in reduceCase env scrut' alts
 
 reduce _ e@(CFunction {}) = e  -- C FFI: irreducible
+
+reduce env (Thunk body) = Thunk body  -- thunks stay deferred; forced on demand
+
+reduce env (ListLit es) = ListLit (map (reduce env) es)
 
 -- ── Binding evaluation ────────────────────────────────────────────
 
@@ -137,6 +142,13 @@ boolToExpr False = IntLit 0
 -- ── Application reduction ─────────────────────────────────────────
 
 reduceApp :: Expr -> Expr -> Expr
+-- Built-in `if`: if cond ~then ~else
+-- Fully applied: App (App (App (Name "if") cond) thenExpr) elseExpr
+reduceApp (App (App (Name "if") cond) thenExpr) elseExpr =
+  case cond of
+    IntLit 0 -> forceThunk emptyEnv elseExpr  -- false
+    IntLit _ -> forceThunk emptyEnv thenExpr  -- true (any non-zero)
+    _        -> App (App (App (Name "if") cond) thenExpr) elseExpr  -- residual
 -- Beta reduction: (\x -> body) arg → substitute x with arg in body
 -- Alpha-rename if arg contains free occurrences of x to avoid capture
 reduceApp (Lam p body) arg =
@@ -149,6 +161,11 @@ reduceApp (Lam p body) arg =
      else reduce (Map.singleton p arg) body
 -- Residual
 reduceApp f x = App f x
+
+-- | Force a thunk: if the expression is a Thunk, reduce its body
+forceThunk :: Env -> Expr -> Expr
+forceThunk env (Thunk body) = reduce env body
+forceThunk _   e            = e
 
 -- | Find free variables of an expression (as a Set)
 exprFreeVars :: Expr -> Set.Set Text
@@ -171,6 +188,8 @@ exprFreeVars (Namespace bs)   =
 exprFreeVars (Case s alts)    =
   Set.union (exprFreeVars s) (Set.unions (map (exprFreeVars . altBody) alts))
 exprFreeVars (CFunction {})   = Set.empty
+exprFreeVars (Thunk body)     = exprFreeVars body
+exprFreeVars (ListLit es)     = Set.unions (map exprFreeVars es)
 
 -- | Generate a fresh name by appending primes
 freshName :: Text -> Set.Set Text -> Text
@@ -202,6 +221,8 @@ substExpr n e (Namespace bs) =
 substExpr n e (Case s alts) =
   Case (substExpr n e s) (map (substAlt n e) alts)
 substExpr _ _ e@(CFunction {}) = e
+substExpr n e (Thunk body) = Thunk (substExpr n e body)
+substExpr n e (ListLit es) = ListLit (map (substExpr n e) es)
 
 substBind :: Text -> Expr -> Binding -> Binding
 substBind n e b = b { bindBody = substExpr n e (bindBody b) }
@@ -250,7 +271,26 @@ matchPat (PLit (StringLit a)) (StringLit b)
   | otherwise = Nothing
 matchPat (PRec tag fields) (Record rtag bs)
   | tag == rtag = matchFields fields bs
+matchPat (PList pats mrest) (ListLit es)
+  | isNothing mrest && length pats /= length es = Nothing  -- exact match: wrong length
+  | isJust mrest && length es < length pats = Nothing      -- spread: too few elements
+  | otherwise = do
+      let (headEs, tailEs) = splitAt (length pats) es
+      binds <- matchListElems pats headEs
+      restBinds <- case mrest of
+        Nothing   -> Just []
+        Just name -> Just [(name, ListLit tailEs)]
+      Just (binds ++ restBinds)
 matchPat _ _ = Nothing  -- can't match at compile time → residual
+
+-- Match list elements pairwise
+matchListElems :: [Pat] -> [Expr] -> Maybe [(Text, Expr)]
+matchListElems [] [] = Just []
+matchListElems (p:ps) (e:es) = do
+  binds1 <- matchPat p e
+  binds2 <- matchListElems ps es
+  Just (binds1 ++ binds2)
+matchListElems _ _ = Nothing
 
 matchFields :: [(Text, Pat)] -> [Binding] -> Maybe [(Text, Expr)]
 matchFields [] _ = Just []

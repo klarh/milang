@@ -31,19 +31,52 @@ scn = L.space space1 (L.skipLineComment "--") empty
 
 pProgram :: Parser Expr
 pProgram = do
-  bs <- many (pTopBinding <* skipNewlines)
-  pure $ Namespace bs
+  bss <- many (pTopBindings <* skipNewlines)
+  pure $ Namespace (concat bss)
 
 skipNewlines :: Parser ()
 skipNewlines = void $ many (lexeme newline)
 
 -- ── Bindings ──────────────────────────────────────────────────────
 
--- Top-level binding: must start at column 1
-pTopBinding :: Parser Binding
-pTopBinding = do
+-- Top-level binding(s): must start at column 1
+-- Returns a list because destructuring produces multiple bindings
+pTopBindings :: Parser [Binding]
+pTopBindings = do
   pos <- L.indentGuard sc EQ pos1
-  pBindingAt pos
+  pBindingsAt pos
+
+-- Parse binding(s) at a given indent level.
+-- Tries destructuring ({a; b} = expr) first, then falls back to normal binding.
+pBindingsAt :: Pos -> Parser [Binding]
+pBindingsAt ref = try (pDestructBinding ref) <|> (pure <$> pBindingAt ref)
+
+-- Parse a destructuring binding: {field1; field2 = alias; ...} = expr
+-- Desugars to: _tmp_N = expr; field1 = _tmp_N.field1; alias = _tmp_N.field2; ...
+pDestructBinding :: Pos -> Parser [Binding]
+pDestructBinding _ref = do
+  off <- getOffset
+  _ <- symbol "{"
+  fields <- pDestructField `sepEndBy1` pSep
+  _ <- symbol "}"
+  _ <- symbol "="
+  body <- pExpr
+  let tmpName = T.pack ("_destruct_" ++ show off)
+      tmpBind = Binding tmpName False [] body
+      fieldBinds = map (\(localName, fieldName) ->
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName)
+        ) fields
+  pure (tmpBind : fieldBinds)
+
+-- Parse a single destructuring field: either "name" (shorthand) or "localName = fieldName"
+pDestructField :: Parser (Text, Text)
+pDestructField = do
+  skipBraceWhitespace
+  name <- pIdentifier
+  mField <- optional (symbol "=" *> pIdentifier)
+  pure $ case mField of
+    Just field -> (name, field)   -- {myA = a} means bind myA from field a
+    Nothing    -> (name, name)    -- {a} means bind a from field a
 
 -- Parse a binding given its indent level
 pBindingAt :: Pos -> Parser Binding
@@ -101,10 +134,11 @@ pBindOp = (False <$ symbol "=") <|> (True <$ symbol ":=")
 -- Parse indented child bindings (deeper than ref)
 pIndentedBindings :: Pos -> Parser [Binding]
 pIndentedBindings ref = do
-  many $ try $ do
+  bss <- many $ try $ do
     skipNewlines
     pos <- L.indentGuard sc GT ref
-    pBindingAt pos
+    pBindingsAt pos
+  pure (concat bss)
 
 -- Parse -> (signals a match scope follows)
 pMatchArrow :: Parser [Alt]
@@ -185,7 +219,7 @@ opInfo _    = (50,  LeftAssoc)
 -- Parse an operator token (but not = or := or -> or .)
 pOperator :: Parser Text
 pOperator = try $ lexeme $ do
-  op <- some (oneOf ("+-*/^<>=!&|@#$%~?" :: String))
+  op <- some (oneOf ("+-*/^<>=!&|@#$%?" :: String))
   let t = T.pack op
   -- Don't consume binding operators or match arrow
   if t == "=" || t == ":=" || t == "->"
@@ -220,6 +254,8 @@ pDotChain e = do
 pAtom :: Parser Expr
 pAtom = choice
   [ pParens
+  , pListLit
+  , pThunk
   , pStringLit
   , try pFloatLit
   , pIntLit
@@ -230,8 +266,40 @@ pAtom = choice
 pParens :: Parser Expr
 pParens = between (symbol "(") (symbol ")") pExpr
 
+pThunk :: Parser Expr
+pThunk = do
+  _ <- symbol "~"
+  Thunk <$> pAtomDot
+
+pListLit :: Parser Expr
+pListLit = do
+  _ <- symbol "["
+  es <- pExpr `sepEndBy` symbol ","
+  _ <- symbol "]"
+  pure $ ListLit es
+
 pBraceBindings :: Parser [Binding]
-pBraceBindings = pBraceBinding `sepEndBy` pSep
+pBraceBindings = concat <$> (pBraceBindingOrDestruct `sepEndBy` pSep)
+
+-- Either a destructuring {a; b} = expr or a normal binding inside braces
+pBraceBindingOrDestruct :: Parser [Binding]
+pBraceBindingOrDestruct = try pBraceDestruct <|> (pure <$> pBraceBinding)
+
+pBraceDestruct :: Parser [Binding]
+pBraceDestruct = do
+  skipBraceWhitespace
+  off <- getOffset
+  _ <- symbol "{"
+  fields <- pDestructField `sepEndBy1` pSep
+  _ <- symbol "}"
+  _ <- symbol "="
+  body <- pExpr
+  let tmpName = T.pack ("_destruct_" ++ show off)
+      tmpBind = Binding tmpName False [] body
+      fieldBinds = map (\(localName, fieldName) ->
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName)
+        ) fields
+  pure (tmpBind : fieldBinds)
 
 pBraceBinding :: Parser Binding
 pBraceBinding = do
@@ -309,6 +377,7 @@ pAnyIdentifier = lexeme $ do
 pPattern :: Parser Pat
 pPattern = choice
   [ pPatRecord
+  , pPatList
   , pPatLitInt
   , pPatLitStr
   , pPatWild
@@ -326,6 +395,35 @@ pPatRecord = try $ do
       _ <- symbol "}"
       pure $ PRec tag fields
     else fail "expected uppercase tag for record pattern"
+
+-- [a, b, c] or [head, ...rest]
+pPatList :: Parser Pat
+pPatList = try $ do
+  _ <- symbol "["
+  (pats, mrest) <- pPatListElements
+  _ <- symbol "]"
+  pure $ PList pats mrest
+
+-- Parse list pattern elements, detecting ...rest at the end
+pPatListElements :: Parser ([Pat], Maybe Text)
+pPatListElements = do
+  -- Try empty list
+  mEnd <- optional (lookAhead (symbol "]"))
+  case mEnd of
+    Just _ -> pure ([], Nothing)
+    Nothing -> do
+      -- Check for ...rest (spread at start with no elements before)
+      mSpread <- optional (try (symbol "..." *> pIdentifier))
+      case mSpread of
+        Just rest -> pure ([], Just rest)
+        Nothing -> do
+          p <- pPattern
+          mComma <- optional (symbol ",")
+          case mComma of
+            Nothing -> pure ([p], Nothing)
+            Just _ -> do
+              (rest, mrestName) <- pPatListElements
+              pure (p : rest, mrestName)
 
 -- Field pattern: either "name = pat" or just "name" (shorthand for name = PVar name)
 pPatField :: Parser (Text, Pat)

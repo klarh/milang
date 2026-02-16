@@ -1,0 +1,11 @@
+-- Test record destructuring in bindings
+Point = Point {x = 10; y = 20}
+
+-- Destructure with shorthand: {x; y} = Point
+{x; y} = Point
+main1 = println x
+main2 = println y
+
+-- Destructure with rename: {myX = x} = Point
+{myX = x} = Point
+main3 = println myX

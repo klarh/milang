@@ -3,6 +3,7 @@ module Milang.Syntax where
 
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.List (intercalate)
 
 -- | C type representation for FFI
 data CType
@@ -31,6 +32,8 @@ data Expr
   | FieldAccess Expr !Text     -- expr.field
   | Namespace [Binding]        -- top-level or block of bindings
   | Case Expr [Alt]            -- expr -> { Pat = body; ... }
+  | Thunk Expr                 -- ~expr: deferred evaluation
+  | ListLit [Expr]             -- [a, b, c]: list literal
   | CFunction !Text !Text CType [CType]  -- C FFI: header, c_name, return type, param types
   deriving (Show, Eq)
 
@@ -46,6 +49,7 @@ data Pat
   = PVar !Text               -- x (binds anything)
   | PLit Expr                -- literal match
   | PRec !Text [(Text, Pat)] -- Tag { field = pat, ... }
+  | PList [Pat] (Maybe Text) -- [a, b] or [a, ...rest]
   | PWild                    -- _ (match anything, don't bind)
   deriving (Show, Eq)
 
@@ -78,6 +82,8 @@ prettyExpr i (Namespace bs)  =
 prettyExpr i (Case e alts)   =
   prettyExpr i e ++ " ->\n" ++
   concatMap (\a -> replicate (i+2) ' ' ++ prettyAlt (i+2) a ++ "\n") alts
+prettyExpr i (Thunk e)       = "~(" ++ prettyExpr i e ++ ")"
+prettyExpr i (ListLit es)    = "[" ++ intercalate ", " (map (prettyExpr i) es) ++ "]"
 prettyExpr _ (CFunction hdr name _ _) =
   "<cfn:" ++ T.unpack hdr ++ ":" ++ T.unpack name ++ ">"
 
@@ -98,4 +104,7 @@ prettyPat (PLit e)     = prettyExpr 0 e
 prettyPat (PRec t fs)  =
   T.unpack t ++ " { " ++
   unwords [T.unpack f ++ " = " ++ prettyPat p | (f,p) <- fs] ++ " }"
+prettyPat (PList ps mrest) =
+  "[" ++ intercalate ", " (map prettyPat ps) ++
+  maybe "" (\r -> ", ..." ++ T.unpack r) mrest ++ "]"
 prettyPat PWild        = "_"

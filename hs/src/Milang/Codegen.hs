@@ -52,7 +52,15 @@ captureIO st _h expr = do
     Namespace bs -> do
       emit "int main(void) {\n"
       emit "  MiVal mi_print = mi_closure(mi_builtin_print, NULL);\n"
-      emit "  MiVal mi_println = mi_closure(mi_builtin_println, NULL);\n\n"
+      emit "  MiVal mi_println = mi_closure(mi_builtin_println, NULL);\n"
+      emit "  MiVal mi_if = mi_closure(mi_builtin_if1, NULL);\n"
+      emit "  MiVal mi_len = mi_closure(mi_builtin_len, NULL);\n"
+      emit "  MiVal mi_get = mi_closure(mi_builtin_get1, NULL);\n"
+      emit "  MiVal mi_push = mi_closure(mi_builtin_push1, NULL);\n"
+      emit "  MiVal mi_concat = mi_closure(mi_builtin_concat1, NULL);\n"
+      emit "  MiVal mi_map = mi_closure(mi_builtin_map1, NULL);\n"
+      emit "  MiVal mi_fold = mi_closure(mi_builtin_fold1, NULL);\n"
+      emit "  MiVal mi_filter = mi_closure(mi_builtin_filter1, NULL);\n\n"
       mapM_ (\b -> do
         let cname = sanitize (bindName b)
         code <- exprToC st (bindBody b)
@@ -68,7 +76,15 @@ captureIO st _h expr = do
     _ -> do
       emit "int main(void) {\n"
       emit "  MiVal mi_print = mi_closure(mi_builtin_print, NULL);\n"
-      emit "  MiVal mi_println = mi_closure(mi_builtin_println, NULL);\n\n"
+      emit "  MiVal mi_println = mi_closure(mi_builtin_println, NULL);\n"
+      emit "  MiVal mi_if = mi_closure(mi_builtin_if1, NULL);\n"
+      emit "  MiVal mi_len = mi_closure(mi_builtin_len, NULL);\n"
+      emit "  MiVal mi_get = mi_closure(mi_builtin_get1, NULL);\n"
+      emit "  MiVal mi_push = mi_closure(mi_builtin_push1, NULL);\n"
+      emit "  MiVal mi_concat = mi_closure(mi_builtin_concat1, NULL);\n"
+      emit "  MiVal mi_map = mi_closure(mi_builtin_map1, NULL);\n"
+      emit "  MiVal mi_fold = mi_closure(mi_builtin_fold1, NULL);\n"
+      emit "  MiVal mi_filter = mi_closure(mi_builtin_filter1, NULL);\n\n"
       code <- exprToC st expr
       emit $ "  mi_print_val(" ++ code ++ "); printf(\"\\n\");\n"
       emit "  return 0;\n}\n"
@@ -170,6 +186,20 @@ exprToC st (CFunction hdr cname retTy paramTys) = do
   modifyIORef (cgIncludes st) (("#include " ++ show (T.unpack hdr)) :)
   -- Generate curried wrapper closures
   cfunctionToC st (T.unpack cname) retTy paramTys
+
+-- Thunk: deferred expression, compiled as a zero-arg closure
+exprToC st (Thunk body) = exprToC st (Lam "_thunk_" body)
+
+-- List literal: [a, b, c]
+exprToC st (ListLit es) = do
+  let n = length es
+  elemCodes <- mapM (\(i, e) -> do
+    code <- exprToC st e
+    pure $ "    _items[" ++ show i ++ "] = " ++ code ++ ";\n"
+    ) (zip [0::Int ..] es)
+  pure $ "({\n    MiVal *_items = malloc(" ++ show n ++ " * sizeof(MiVal));\n" ++
+    concat elemCodes ++
+    "    mi_list(_items, " ++ show n ++ ");\n  })"
 
 -- | Generate curried closure wrappers for a C function.
 -- Input params (CInt, CFloat, CString, CPtr) become curried closure args.
@@ -418,12 +448,30 @@ patCheck s (PLit (IntLit n)) = "if (" ++ s ++ ".as.i == " ++ show n ++ ")"
 patCheck s (PLit (StringLit t)) = "if (" ++ s ++ ".type == MI_STRING && strcmp(" ++ s ++ ".as.s, " ++ show (T.unpack t) ++ ") == 0)"
 patCheck s (PLit _) = "if (0) /* unsupported literal pattern */"
 patCheck s (PRec tag _) = "if (" ++ s ++ ".type == MI_RECORD && strcmp(" ++ s ++ ".as.rec.tag, \"" ++ T.unpack tag ++ "\") == 0)"
+patCheck s (PList pats Nothing) = "if (" ++ s ++ ".type == MI_LIST && " ++ s ++ ".as.list.len == " ++ show (length pats) ++ ")"
+patCheck s (PList pats (Just _)) = "if (" ++ s ++ ".type == MI_LIST && " ++ s ++ ".as.list.len >= " ++ show (length pats) ++ ")"
 
 patBinds :: String -> Pat -> String
 patBinds s (PVar v) = "      MiVal " ++ sanitize v ++ " = " ++ s ++ ";\n"
 patBinds _ PWild = ""
 patBinds _ (PLit _) = ""
 patBinds s (PRec _ fields) = concatMap (fieldBind s) fields
+patBinds s (PList pats mrest) =
+  concatMap (\(i, p) -> listElemBind s i p) (zip [0::Int ..] pats) ++
+  case mrest of
+    Nothing -> ""
+    Just name ->
+      let n = length pats
+      in "      MiVal *_rest_items = malloc((" ++ s ++ ".as.list.len - " ++ show n ++ ") * sizeof(MiVal));\n" ++
+         "      for (int _ri = " ++ show n ++ "; _ri < " ++ s ++ ".as.list.len; _ri++)\n" ++
+         "        _rest_items[_ri - " ++ show n ++ "] = " ++ s ++ ".as.list.items[_ri];\n" ++
+         "      MiVal " ++ sanitize name ++ " = mi_list(_rest_items, " ++ s ++ ".as.list.len - " ++ show n ++ ");\n"
+
+-- Bind a single list element by index in a pattern match
+listElemBind :: String -> Int -> Pat -> String
+listElemBind s i (PVar v) = "      MiVal " ++ sanitize v ++ " = " ++ s ++ ".as.list.items[" ++ show i ++ "];\n"
+listElemBind _ _ PWild = ""
+listElemBind s i _ = "      MiVal _elem_" ++ show i ++ " = " ++ s ++ ".as.list.items[" ++ show i ++ "];\n"
 
 fieldBind :: String -> (Text, Pat) -> String
 fieldBind s (field, PVar v) =
@@ -454,6 +502,8 @@ freeVars (Namespace bs)   bound =
 freeVars (Case s alts)    bound =
   freeVars s bound ++ concatMap (\a -> freeVars (altBody a) bound) alts
 freeVars (CFunction {})   _     = []
+freeVars (Thunk body)     bound = freeVars body bound
+freeVars (ListLit es)     bound = concatMap (\e -> freeVars e bound) es
 
 -- ── C runtime preamble ────────────────────────────────────────────
 
@@ -467,7 +517,7 @@ emitPreamble h = do
     , "#include <stdint.h>"
     , "#include <math.h>"
     , ""
-    , "typedef enum { MI_INT, MI_FLOAT, MI_STRING, MI_RECORD, MI_CLOSURE, MI_POINTER } MiType;"
+    , "typedef enum { MI_INT, MI_FLOAT, MI_STRING, MI_RECORD, MI_CLOSURE, MI_POINTER, MI_LIST } MiType;"
     , ""
     , "typedef struct MiVal {"
     , "  MiType type;"
@@ -478,6 +528,7 @@ emitPreamble h = do
     , "    struct { const char *tag; const char **names; struct MiVal *fields; int nfields; } rec;"
     , "    struct { struct MiVal (*fn)(struct MiVal, void*); void *env; } closure;"
     , "    void *ptr;"
+    , "    struct { struct MiVal *items; int len; int cap; } list;"
     , "  } as;"
     , "} MiVal;"
     , ""
@@ -485,6 +536,10 @@ emitPreamble h = do
     , "static MiVal mi_float(double v) { MiVal r; r.type = MI_FLOAT; r.as.f = v; return r; }"
     , "static MiVal mi_string(const char *s) { MiVal r; r.type = MI_STRING; r.as.s = strdup(s); return r; }"
     , "static MiVal mi_pointer(void *p) { MiVal r; r.type = MI_POINTER; r.as.ptr = p; return r; }"
+    , ""
+    , "static MiVal mi_list(MiVal *items, int len) {"
+    , "  MiVal r; r.type = MI_LIST; r.as.list.items = items; r.as.list.len = len; r.as.list.cap = len; return r;"
+    , "}"
     , ""
     , "static MiVal mi_closure(MiVal (*fn)(MiVal, void*), void *env) {"
     , "  MiVal r; r.type = MI_CLOSURE; r.as.closure.fn = fn; r.as.closure.env = env; return r;"
@@ -557,6 +612,14 @@ emitPreamble h = do
     , "      break;"
     , "    case MI_CLOSURE: printf(\"<closure>\"); break;"
     , "    case MI_POINTER: printf(\"<ptr:%p>\", v.as.ptr); break;"
+    , "    case MI_LIST:"
+    , "      printf(\"[\");"
+    , "      for (int i = 0; i < v.as.list.len; i++) {"
+    , "        if (i > 0) printf(\", \");"
+    , "        mi_print_val(v.as.list.items[i]);"
+    , "      }"
+    , "      printf(\"]\");"
+    , "      break;"
     , "  }"
     , "}"
     , ""
@@ -580,6 +643,134 @@ emitPreamble h = do
     , "}"
     , "static MiVal mi_builtin_println(MiVal v, void *env) {"
     , "  (void)env; mi_println_val(v); return mi_int(0);"
+    , "}"
+    , ""
+    -- Force a thunk (closure with dummy arg)
+    , "static MiVal mi_force(MiVal v) {"
+    , "  if (v.type == MI_CLOSURE) return mi_apply(v, mi_int(0));"
+    , "  return v;"
+    , "}"
+    , ""
+    -- Built-in if: 3-arg curried function (cond, then-thunk, else-thunk)
+    , "struct mi_if_env2 { MiVal cond; MiVal then_val; };"
+    , "static MiVal mi_builtin_if3(MiVal else_val, void *env) {"
+    , "  struct mi_if_env2 *e = (struct mi_if_env2 *)env;"
+    , "  if (e->cond.as.i != 0) return mi_force(e->then_val);"
+    , "  return mi_force(else_val);"
+    , "}"
+    , "struct mi_if_env1 { MiVal cond; };"
+    , "static MiVal mi_builtin_if2(MiVal then_val, void *env) {"
+    , "  struct mi_if_env1 *e = (struct mi_if_env1 *)env;"
+    , "  struct mi_if_env2 *e2 = malloc(sizeof(struct mi_if_env2));"
+    , "  e2->cond = e->cond; e2->then_val = then_val;"
+    , "  return mi_closure(mi_builtin_if3, e2);"
+    , "}"
+    , "static MiVal mi_builtin_if1(MiVal cond, void *env) {"
+    , "  (void)env;"
+    , "  struct mi_if_env1 *e = malloc(sizeof(struct mi_if_env1));"
+    , "  e->cond = cond;"
+    , "  return mi_closure(mi_builtin_if2, e);"
+    , "}"
+    , ""
+    -- List built-ins: len, get, push, concat, slice, map, fold, filter
+    , "static MiVal mi_builtin_len(MiVal lst, void *env) {"
+    , "  (void)env; return mi_int(lst.as.list.len);"
+    , "}"
+    , "struct mi_get_env { MiVal lst; };"
+    , "static MiVal mi_builtin_get2(MiVal idx, void *env) {"
+    , "  struct mi_get_env *e = (struct mi_get_env *)env;"
+    , "  int i = (int)idx.as.i;"
+    , "  if (i < 0 || i >= e->lst.as.list.len) { fprintf(stderr, \"list index out of range\\n\"); exit(1); }"
+    , "  return e->lst.as.list.items[i];"
+    , "}"
+    , "static MiVal mi_builtin_get1(MiVal lst, void *env) {"
+    , "  (void)env;"
+    , "  struct mi_get_env *e = malloc(sizeof(struct mi_get_env));"
+    , "  e->lst = lst;"
+    , "  return mi_closure(mi_builtin_get2, e);"
+    , "}"
+    , "struct mi_push_env { MiVal lst; };"
+    , "static MiVal mi_builtin_push2(MiVal val, void *env) {"
+    , "  struct mi_push_env *e = (struct mi_push_env *)env;"
+    , "  int n = e->lst.as.list.len;"
+    , "  MiVal *items = malloc((n + 1) * sizeof(MiVal));"
+    , "  for (int i = 0; i < n; i++) items[i] = e->lst.as.list.items[i];"
+    , "  items[n] = val;"
+    , "  return mi_list(items, n + 1);"
+    , "}"
+    , "static MiVal mi_builtin_push1(MiVal lst, void *env) {"
+    , "  (void)env;"
+    , "  struct mi_push_env *e = malloc(sizeof(struct mi_push_env));"
+    , "  e->lst = lst;"
+    , "  return mi_closure(mi_builtin_push2, e);"
+    , "}"
+    , "struct mi_concat_env { MiVal a; };"
+    , "static MiVal mi_builtin_concat2(MiVal b, void *env) {"
+    , "  struct mi_concat_env *e = (struct mi_concat_env *)env;"
+    , "  int na = e->a.as.list.len, nb = b.as.list.len;"
+    , "  MiVal *items = malloc((na + nb) * sizeof(MiVal));"
+    , "  for (int i = 0; i < na; i++) items[i] = e->a.as.list.items[i];"
+    , "  for (int i = 0; i < nb; i++) items[na + i] = b.as.list.items[i];"
+    , "  return mi_list(items, na + nb);"
+    , "}"
+    , "static MiVal mi_builtin_concat1(MiVal a, void *env) {"
+    , "  (void)env;"
+    , "  struct mi_concat_env *e = malloc(sizeof(struct mi_concat_env));"
+    , "  e->a = a;"
+    , "  return mi_closure(mi_builtin_concat2, e);"
+    , "}"
+    , "struct mi_map_env { MiVal fn; };"
+    , "static MiVal mi_builtin_map2(MiVal lst, void *env) {"
+    , "  struct mi_map_env *e = (struct mi_map_env *)env;"
+    , "  int n = lst.as.list.len;"
+    , "  MiVal *items = malloc(n * sizeof(MiVal));"
+    , "  for (int i = 0; i < n; i++) items[i] = mi_apply(e->fn, lst.as.list.items[i]);"
+    , "  return mi_list(items, n);"
+    , "}"
+    , "static MiVal mi_builtin_map1(MiVal fn, void *env) {"
+    , "  (void)env;"
+    , "  struct mi_map_env *e = malloc(sizeof(struct mi_map_env));"
+    , "  e->fn = fn;"
+    , "  return mi_closure(mi_builtin_map2, e);"
+    , "}"
+    , "struct mi_fold_env1 { MiVal fn; };"
+    , "struct mi_fold_env2 { MiVal fn; MiVal acc; };"
+    , "static MiVal mi_builtin_fold3(MiVal lst, void *env) {"
+    , "  struct mi_fold_env2 *e = (struct mi_fold_env2 *)env;"
+    , "  MiVal acc = e->acc;"
+    , "  for (int i = 0; i < lst.as.list.len; i++)"
+    , "    acc = mi_apply(mi_apply(e->fn, acc), lst.as.list.items[i]);"
+    , "  return acc;"
+    , "}"
+    , "static MiVal mi_builtin_fold2(MiVal acc, void *env) {"
+    , "  struct mi_fold_env1 *e1 = (struct mi_fold_env1 *)env;"
+    , "  struct mi_fold_env2 *e2 = malloc(sizeof(struct mi_fold_env2));"
+    , "  e2->fn = e1->fn; e2->acc = acc;"
+    , "  return mi_closure(mi_builtin_fold3, e2);"
+    , "}"
+    , "static MiVal mi_builtin_fold1(MiVal fn, void *env) {"
+    , "  (void)env;"
+    , "  struct mi_fold_env1 *e = malloc(sizeof(struct mi_fold_env1));"
+    , "  e->fn = fn;"
+    , "  return mi_closure(mi_builtin_fold2, e);"
+    , "}"
+    , "struct mi_filter_env { MiVal fn; };"
+    , "static MiVal mi_builtin_filter2(MiVal lst, void *env) {"
+    , "  struct mi_filter_env *e = (struct mi_filter_env *)env;"
+    , "  int n = lst.as.list.len;"
+    , "  MiVal *items = malloc(n * sizeof(MiVal));"
+    , "  int count = 0;"
+    , "  for (int i = 0; i < n; i++) {"
+    , "    MiVal r = mi_apply(e->fn, lst.as.list.items[i]);"
+    , "    if (r.as.i != 0) items[count++] = lst.as.list.items[i];"
+    , "  }"
+    , "  return mi_list(items, count);"
+    , "}"
+    , "static MiVal mi_builtin_filter1(MiVal fn, void *env) {"
+    , "  (void)env;"
+    , "  struct mi_filter_env *e = malloc(sizeof(struct mi_filter_env));"
+    , "  e->fn = fn;"
+    , "  return mi_closure(mi_builtin_filter2, e);"
     , "}"
     , ""
     ]
@@ -617,4 +808,5 @@ cKeywords =
   , "static", "struct", "switch", "typedef", "union", "unsigned", "void"
   , "volatile", "while", "inline", "restrict"
   , "print", "println"  -- reserved for builtins
+  , "len", "get", "push", "concat", "map", "fold", "filter"  -- list builtins
   ]
