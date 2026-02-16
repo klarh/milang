@@ -1,0 +1,18 @@
+-- Test tail call optimization
+-- These would stack overflow without TCO
+
+-- Simple tail-recursive countdown (1 million iterations)
+count_down n = if (n == 0) ~0 ~(count_down (n - 1))
+main1 = println (count_down 1000000)
+
+-- Tail-recursive sum via accumulator
+sum_acc acc n = if (n == 0) ~acc ~(sum_acc (acc + n) (n - 1))
+main2 = println (sum_acc 0 100000)
+
+-- Mutual-style: recursive with pattern matching in the loop
+tail xs = xs ->
+  [_, ...rest] = rest
+  _ = []
+
+sum_list xs = if (len xs == 0) ~0 ~(get xs 0 + sum_list (tail xs))
+main3 = println (sum_list [10, 20, 30, 40])
