@@ -141,8 +141,8 @@ exprToC st (FieldAccess e field) = do
 
 exprToC st (Namespace bindings) = do
   bindCodes <- mapM (bindingStructToC st) bindings
-  pure $ "mi_expr_namespace(" ++ show (length bindings) ++ ", " ++
-    intercalate ", " bindCodes ++ ")"
+  let args = if null bindCodes then "" else ", " ++ intercalate ", " bindCodes
+  pure $ "mi_expr_namespace(" ++ show (length bindings) ++ args ++ ")"
 
 exprToC st (Case scrut alts) = do
   sc <- exprToC st scrut
@@ -875,21 +875,29 @@ emitPreamble h = hPutStr h $ unlines
   , ""
   , "    case EXPR_NAMESPACE: {"
   , "      MiEnv *inner = mi_env_new(env);"
-  , "      MiVal last = mi_int(0);"
-  , "      for (int i = 0; i < expr->as.ns.nbindings; i++) {"
+  , "      int n = expr->as.ns.nbindings;"
+  , "      MiVal *vals = malloc(n * sizeof(MiVal));"
+  , "      const char **names = malloc(n * sizeof(const char *));"
+  , "      for (int i = 0; i < n; i++) {"
   , "        MiBinding *b = &expr->as.ns.bindings[i];"
   , "        MiExpr *body = b->nparams > 0 ? mi_wrap_lambda(b->nparams, b->params, b->body) : b->body;"
+  , "        names[i] = b->name;"
   , "        if (b->lazy) {"
   , "          MiVal thunk; thunk.type = MI_CLOSURE;"
   , "          thunk.as.closure.body = body; thunk.as.closure.param = \"_thunk_\";"
   , "          thunk.as.closure.env = inner;"
-  , "          mi_env_set(inner, b->name, thunk); last = thunk;"
+  , "          mi_env_set(inner, b->name, thunk); vals[i] = thunk;"
   , "        } else {"
-  , "          last = mi_eval(body, inner);"
-  , "          mi_env_set(inner, b->name, last);"
+  , "          vals[i] = mi_eval(body, inner);"
+  , "          mi_env_set(inner, b->name, vals[i]);"
   , "        }"
   , "      }"
-  , "      return last;"
+  , "      MiVal rec; rec.type = MI_RECORD;"
+  , "      rec.as.rec.tag = \"_module_\";"
+  , "      rec.as.rec.nfields = n;"
+  , "      rec.as.rec.names = names;"
+  , "      rec.as.rec.fields = vals;"
+  , "      return rec;"
   , "    }"
   , ""
   , "    case EXPR_CASE: {"

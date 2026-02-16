@@ -1,0 +1,8 @@
+-- Test circular imports: A imports B, B imports A
+A = import "lib/module_a.mi"
+B = import "lib/module_b.mi"
+
+main1 = println A.greeting
+main2 = println B.farewell
+main3 = println A.combined
+main4 = println B.combined

@@ -4,6 +4,7 @@ module Milang.Import (resolveImports, LinkInfo(..)) where
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Data.IORef
 import System.FilePath (takeDirectory, (</>), normalise, takeExtension, takeBaseName)
 import System.Directory (doesFileExist)
@@ -29,20 +30,32 @@ mergeLinkInfo a b = LinkInfo
   , linkSources = linkSources a ++ linkSources b
   }
 
--- | Cache of already-resolved imports (path → resolved AST)
+-- | Cache of already-resolved imports (path -> resolved AST)
 type ImportCache = IORef (Map.Map FilePath Expr)
+
+-- | Set of files currently being resolved (for cycle detection)
+type InProgress = IORef (Set.Set FilePath)
 
 -- | Accumulated link info
 type LinkRef = IORef LinkInfo
+
+-- | Resolution context passed through all resolve functions
+data ResCtx = ResCtx
+  { rcCache      :: ImportCache
+  , rcInProgress :: InProgress
+  , rcLinkRef    :: LinkRef
+  }
 
 -- | Resolve all `import "path"` calls in an AST by loading and parsing files.
 -- Returns the resolved AST and accumulated link info for gcc.
 resolveImports :: FilePath -> Expr -> IO (Either String (Expr, LinkInfo))
 resolveImports basePath expr = do
   cache <- newIORef Map.empty
+  inProg <- newIORef Set.empty
   linkRef <- newIORef emptyLinkInfo
-  let baseDir = takeDirectory basePath
-  result <- resolveExpr cache linkRef baseDir expr
+  let ctx = ResCtx cache inProg linkRef
+      baseDir = takeDirectory basePath
+  result <- resolveExpr ctx baseDir expr
   case result of
     Left err -> pure $ Left err
     Right ast -> do
@@ -52,95 +65,125 @@ resolveImports basePath expr = do
 addLinkInfo :: LinkRef -> LinkInfo -> IO ()
 addLinkInfo ref li = modifyIORef ref (mergeLinkInfo li)
 
-resolveExpr :: ImportCache -> LinkRef -> FilePath -> Expr -> IO (Either String Expr)
-resolveExpr _ _ _ e@(IntLit _)    = pure $ Right e
-resolveExpr _ _ _ e@(FloatLit _)  = pure $ Right e
-resolveExpr _ _ _ e@(StringLit _) = pure $ Right e
-resolveExpr _ _ _ e@(Name _)      = pure $ Right e
-resolveExpr _ _ _ e@(CFunction {}) = pure $ Right e
+resolveExpr :: ResCtx -> FilePath -> Expr -> IO (Either String Expr)
+resolveExpr _ _ e@(IntLit _)    = pure $ Right e
+resolveExpr _ _ e@(FloatLit _)  = pure $ Right e
+resolveExpr _ _ e@(StringLit _) = pure $ Right e
+resolveExpr _ _ e@(Name _)      = pure $ Right e
+resolveExpr _ _ e@(CFunction {}) = pure $ Right e
 
-resolveExpr cache lr dir (BinOp op l r) = do
-  l' <- resolveExpr cache lr dir l
-  r' <- resolveExpr cache lr dir r
+resolveExpr ctx dir (BinOp op l r) = do
+  l' <- resolveExpr ctx dir l
+  r' <- resolveExpr ctx dir r
   pure $ BinOp op <$> l' <*> r'
 
--- Intercept `import "path" { opts }` — With (App (Name "import") (StringLit path)) bindings
-resolveExpr cache lr dir (With (App (Name "import") (StringLit path)) opts) = do
+-- Intercept `import "path" { opts }`
+resolveExpr ctx dir (With (App (Name "import") (StringLit path)) opts) = do
   let pathStr = T.unpack path
       fullPath = normalise (dir </> pathStr)
-  -- Extract link options from the With bindings
   importOpts <- extractImportOpts dir opts
-  addLinkInfo lr importOpts
-  -- Also auto-detect for .h imports
+  addLinkInfo (rcLinkRef ctx) importOpts
   when (takeExtension pathStr == ".h") $ do
     autoInfo <- autoLinkInfo fullPath
-    addLinkInfo lr autoInfo
-  resolveImportPath cache lr dir fullPath pathStr
+    addLinkInfo (rcLinkRef ctx) autoInfo
+  fst <$> resolveImportPath ctx fullPath pathStr
 
--- Intercept `import "path"` — App (Name "import") (StringLit path)
-resolveExpr cache lr dir (App (Name "import") (StringLit path)) = do
+-- Intercept `import "path"`
+resolveExpr ctx dir (App (Name "import") (StringLit path)) = do
   let pathStr = T.unpack path
       fullPath = normalise (dir </> pathStr)
-  -- Auto-detect link info for .h imports
   when (takeExtension pathStr == ".h") $ do
     autoInfo <- autoLinkInfo fullPath
-    addLinkInfo lr autoInfo
-  resolveImportPath cache lr dir fullPath pathStr
+    addLinkInfo (rcLinkRef ctx) autoInfo
+  fst <$> resolveImportPath ctx fullPath pathStr
 
-resolveExpr cache lr dir (App f x) = do
-  f' <- resolveExpr cache lr dir f
-  x' <- resolveExpr cache lr dir x
+resolveExpr ctx dir (App f x) = do
+  f' <- resolveExpr ctx dir f
+  x' <- resolveExpr ctx dir x
   pure $ App <$> f' <*> x'
 
-resolveExpr cache lr dir (Lam p b) = do
-  b' <- resolveExpr cache lr dir b
+resolveExpr ctx dir (Lam p b) = do
+  b' <- resolveExpr ctx dir b
   pure $ Lam p <$> b'
 
-resolveExpr cache lr dir (With body bs) = do
-  body' <- resolveExpr cache lr dir body
-  bs' <- resolveBindings cache lr dir bs
+resolveExpr ctx dir (With body bs) = do
+  body' <- resolveExpr ctx dir body
+  bs' <- resolveBindings ctx dir bs
   pure $ With <$> body' <*> bs'
 
-resolveExpr cache lr dir (Record tag bs) = do
-  bs' <- resolveBindings cache lr dir bs
+resolveExpr ctx dir (Record tag bs) = do
+  bs' <- resolveBindings ctx dir bs
   pure $ Record tag <$> bs'
 
-resolveExpr cache lr dir (FieldAccess e field) = do
-  e' <- resolveExpr cache lr dir e
+resolveExpr ctx dir (FieldAccess e field) = do
+  e' <- resolveExpr ctx dir e
   pure $ FieldAccess <$> e' <*> pure field
 
-resolveExpr cache lr dir (Namespace bs) = do
-  bs' <- resolveBindings cache lr dir bs
+resolveExpr ctx dir (Namespace bs) = do
+  bs' <- resolveBindings ctx dir bs
   pure $ Namespace <$> bs'
 
-resolveExpr cache lr dir (Case scrut alts) = do
-  scrut' <- resolveExpr cache lr dir scrut
-  alts' <- resolveAlts cache lr dir alts
+resolveExpr ctx dir (Case scrut alts) = do
+  scrut' <- resolveExpr ctx dir scrut
+  alts' <- resolveAlts ctx dir alts
   pure $ Case <$> scrut' <*> alts'
 
-resolveExpr cache lr dir (Thunk body) = do
-  body' <- resolveExpr cache lr dir body
+resolveExpr ctx dir (Thunk body) = do
+  body' <- resolveExpr ctx dir body
   pure $ Thunk <$> body'
 
-resolveExpr cache lr dir (ListLit es) = do
-  es' <- mapM (resolveExpr cache lr dir) es
+resolveExpr ctx dir (ListLit es) = do
+  es' <- mapM (resolveExpr ctx dir) es
   pure $ ListLit <$> sequence es'
 
--- | Common import resolution logic
-resolveImportPath :: ImportCache -> LinkRef -> FilePath -> FilePath -> String -> IO (Either String Expr)
-resolveImportPath cache lr dir fullPath pathStr = do
-  cached <- Map.lookup fullPath <$> readIORef cache
+-- | Resolve an import path. Returns (Either String Expr, Bool) where the Bool
+-- indicates whether this was a circular import (True = cycle detected).
+resolveImportPath :: ResCtx -> FilePath -> String -> IO (Either String Expr, Bool)
+resolveImportPath ctx fullPath pathStr = do
+  -- Check cache first (fully resolved from a prior import)
+  cached <- Map.lookup fullPath <$> readIORef (rcCache ctx)
   case cached of
-    Just expr -> pure $ Right expr
+    Just expr -> pure (Right expr, False)
     Nothing -> do
-      result <- case takeExtension pathStr of
-        ".h" -> loadCHeader fullPath
-        _    -> loadFile cache lr fullPath
-      case result of
-        Left err -> pure $ Left err
-        Right expr -> do
-          modifyIORef cache (Map.insert fullPath expr)
-          pure $ Right expr
+      -- Check if this file is currently being resolved (circular import)
+      inProg <- readIORef (rcInProgress ctx)
+      if Set.member fullPath inProg
+        then do
+          -- Circular import detected. Parse file, return only non-import
+          -- bindings. The caller marks this binding lazy so the codegen
+          -- emits a thunk — by the time the thunk is forced at runtime,
+          -- the full module is available in the environment.
+          result <- parseOwnBindings fullPath
+          pure (result, True)
+        else do
+          result <- case takeExtension pathStr of
+            ".h" -> loadCHeader fullPath
+            _    -> loadFile ctx fullPath
+          case result of
+            Left err -> pure (Left err, False)
+            Right expr -> do
+              modifyIORef (rcCache ctx) (Map.insert fullPath expr)
+              pure (Right expr, False)
+
+-- | Parse a file and return only its non-import bindings (for circular refs)
+parseOwnBindings :: FilePath -> IO (Either String Expr)
+parseOwnBindings path = do
+  src <- TIO.readFile path
+  case parseProgram path src of
+    Left err -> pure $ Left (show err)
+    Right ast -> pure $ Right (extractOwnBindings ast)
+
+-- | Extract non-import bindings from a Namespace
+extractOwnBindings :: Expr -> Expr
+extractOwnBindings (Namespace bs) = Namespace (filter (not . isImportBinding) bs)
+extractOwnBindings e = e
+
+-- | Check if a binding's body is an import expression
+isImportBinding :: Binding -> Bool
+isImportBinding b = case bindBody b of
+  App (Name "import") (StringLit _)   -> True
+  With (App (Name "import") (StringLit _)) _ -> True
+  _ -> False
 
 -- | Extract link options from import { ... } bindings
 extractImportOpts :: FilePath -> [Binding] -> IO LinkInfo
@@ -162,18 +205,15 @@ extractImportOpts dir bs = do
         "pkg-config" ["--libs", pkgStr] ""
       pure $ case (ec1, ec2) of
         (ExitSuccess, ExitSuccess) -> words cflags ++ words libs
-        _ -> []  -- pkg-config failed, silently skip
+        _ -> []
     getPkgConfig _ = pure []
 
 -- | Auto-detect link info for .h imports
 autoLinkInfo :: FilePath -> IO LinkInfo
 autoLinkInfo hdrPath = do
-  -- Check built-in system header map
   let sysFlags = systemHeaderFlags hdrPath
-  -- Add -I for the header's directory so gcc can find it
   let hdrDir = takeDirectory hdrPath
       includeFlag = if null hdrDir || hdrDir == "." then [] else ["-I" ++ hdrDir]
-  -- Check for companion .c file
   let baseName = takeBaseName hdrPath
       cFile = takeDirectory hdrPath </> baseName ++ ".c"
   hasCFile <- doesFileExist cFile
@@ -193,13 +233,18 @@ when :: Bool -> IO () -> IO ()
 when True  a = a
 when False _ = pure ()
 
--- | Load and resolve a milang file, returning its top-level Namespace
-loadFile :: ImportCache -> LinkRef -> FilePath -> IO (Either String Expr)
-loadFile cache lr path = do
+-- | Load and resolve a milang file.
+-- Marks the file as in-progress to detect circular imports.
+loadFile :: ResCtx -> FilePath -> IO (Either String Expr)
+loadFile ctx path = do
   src <- TIO.readFile path
   case parseProgram path src of
     Left err -> pure $ Left (show err)
-    Right ast -> resolveExpr cache lr (takeDirectory path) ast
+    Right ast -> do
+      modifyIORef (rcInProgress ctx) (Set.insert path)
+      result <- resolveExpr ctx (takeDirectory path) ast
+      modifyIORef (rcInProgress ctx) (Set.delete path)
+      pure result
 
 -- | Parse a C header file, returning a Namespace of CFunction bindings
 loadCHeader :: FilePath -> IO (Either String Expr)
@@ -220,24 +265,53 @@ loadCHeader path = do
         , bindBody   = CFunction hdr n r p
         }
 
-resolveBindings :: ImportCache -> LinkRef -> FilePath -> [Binding] -> IO (Either String [Binding])
-resolveBindings cache lr dir = go
+-- | Resolve bindings, detecting circular imports and marking them lazy.
+resolveBindings :: ResCtx -> FilePath -> [Binding] -> IO (Either String [Binding])
+resolveBindings ctx dir = go
   where
     go [] = pure $ Right []
     go (b:bs) = do
-      body' <- resolveExpr cache lr dir (bindBody b)
+      (body', circular) <- resolveBindingBody ctx dir b
       rest <- go bs
       pure $ do
         b' <- body'
         bs' <- rest
-        Right (b { bindBody = b' } : bs')
+        -- Circular imports become lazy bindings (thunks at runtime)
+        let b'' = if circular then b { bindBody = b', bindLazy = True }
+                              else b { bindBody = b' }
+        Right (b'' : bs')
 
-resolveAlts :: ImportCache -> LinkRef -> FilePath -> [Alt] -> IO (Either String [Alt])
-resolveAlts cache lr dir = go
+-- | Resolve a binding body, detecting circular imports.
+resolveBindingBody :: ResCtx -> FilePath -> Binding -> IO (Either String Expr, Bool)
+resolveBindingBody ctx dir b = case bindBody b of
+  App (Name "import") (StringLit path) -> do
+    let pathStr = T.unpack path
+        fullPath = normalise (dir </> pathStr)
+    when (takeExtension pathStr == ".h") $ do
+      autoInfo <- autoLinkInfo fullPath
+      addLinkInfo (rcLinkRef ctx) autoInfo
+    resolveImportPath ctx fullPath pathStr
+
+  With (App (Name "import") (StringLit path)) opts -> do
+    let pathStr = T.unpack path
+        fullPath = normalise (dir </> pathStr)
+    importOpts <- extractImportOpts dir opts
+    addLinkInfo (rcLinkRef ctx) importOpts
+    when (takeExtension pathStr == ".h") $ do
+      autoInfo <- autoLinkInfo fullPath
+      addLinkInfo (rcLinkRef ctx) autoInfo
+    resolveImportPath ctx fullPath pathStr
+
+  _ -> do
+    result <- resolveExpr ctx dir (bindBody b)
+    pure (result, False)
+
+resolveAlts :: ResCtx -> FilePath -> [Alt] -> IO (Either String [Alt])
+resolveAlts ctx dir = go
   where
     go [] = pure $ Right []
     go (a:as) = do
-      body' <- resolveExpr cache lr dir (altBody a)
+      body' <- resolveExpr ctx dir (altBody a)
       rest <- go as
       pure $ do
         b' <- body'

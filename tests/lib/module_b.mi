@@ -1,0 +1,5 @@
+-- Module B imports Module A (circular)
+A = import "module_a.mi"
+
+farewell = "goodbye"
+combined = A.greeting + " and " + farewell

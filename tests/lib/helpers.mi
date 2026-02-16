@@ -1,0 +1,4 @@
+-- Helper module that uses the shared imports module
+Imports = import "imports.mi"
+
+double_area r = Imports.MyMath.circle_area r * 2

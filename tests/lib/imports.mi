@@ -1,0 +1,3 @@
+-- Shared imports module — all external deps in one place
+MyMath = import "mymath.mi"
+Geo = import "geometry.mi"
