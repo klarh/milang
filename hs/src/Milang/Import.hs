@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Milang.Import (resolveImports, LinkInfo(..)) where
+module Milang.Import (resolveImports, findURLImports, LinkInfo(..)) where
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -14,6 +14,7 @@ import System.Exit (ExitCode(..))
 import Milang.Syntax
 import Milang.Parser (parseProgram)
 import Milang.CHeader (parseCHeader, CFunSig(..))
+import Milang.Remote (fetchRemote, isURL)
 
 -- | Link info accumulated during import resolution
 data LinkInfo = LinkInfo
@@ -80,22 +81,37 @@ resolveExpr ctx dir (BinOp op l r) = do
 -- Intercept `import "path" { opts }`
 resolveExpr ctx dir (With (App (Name "import") (StringLit path)) opts) = do
   let pathStr = T.unpack path
-      fullPath = normalise (dir </> pathStr)
   importOpts <- extractImportOpts dir opts
   addLinkInfo (rcLinkRef ctx) importOpts
-  when (takeExtension pathStr == ".h") $ do
-    autoInfo <- autoLinkInfo fullPath
-    addLinkInfo (rcLinkRef ctx) autoInfo
-  fst <$> resolveImportPath ctx fullPath pathStr
+  let sha256 = extractSha256 opts
+  if isURL pathStr
+    then do
+      result <- fetchRemote pathStr sha256
+      case result of
+        Left err -> pure $ Left err
+        Right localPath -> fst <$> resolveImportPath ctx localPath pathStr
+    else do
+      let fullPath = normalise (dir </> pathStr)
+      when (takeExtension pathStr == ".h") $ do
+        autoInfo <- autoLinkInfo fullPath
+        addLinkInfo (rcLinkRef ctx) autoInfo
+      fst <$> resolveImportPath ctx fullPath pathStr
 
 -- Intercept `import "path"`
 resolveExpr ctx dir (App (Name "import") (StringLit path)) = do
   let pathStr = T.unpack path
-      fullPath = normalise (dir </> pathStr)
-  when (takeExtension pathStr == ".h") $ do
-    autoInfo <- autoLinkInfo fullPath
-    addLinkInfo (rcLinkRef ctx) autoInfo
-  fst <$> resolveImportPath ctx fullPath pathStr
+  if isURL pathStr
+    then do
+      result <- fetchRemote pathStr Nothing
+      case result of
+        Left err -> pure $ Left err
+        Right localPath -> fst <$> resolveImportPath ctx localPath pathStr
+    else do
+      let fullPath = normalise (dir </> pathStr)
+      when (takeExtension pathStr == ".h") $ do
+        autoInfo <- autoLinkInfo fullPath
+        addLinkInfo (rcLinkRef ctx) autoInfo
+      fst <$> resolveImportPath ctx fullPath pathStr
 
 resolveExpr ctx dir (App f x) = do
   f' <- resolveExpr ctx dir f
@@ -208,6 +224,12 @@ extractImportOpts dir bs = do
         _ -> []
     getPkgConfig _ = pure []
 
+-- | Extract sha256 hash from import options, if present
+extractSha256 :: [Binding] -> Maybe String
+extractSha256 [] = Nothing
+extractSha256 (Binding "sha256" _ _ (StringLit s) : _) = Just (T.unpack s)
+extractSha256 (_ : bs) = extractSha256 bs
+
 -- | Auto-detect link info for .h imports
 autoLinkInfo :: FilePath -> IO LinkInfo
 autoLinkInfo hdrPath = do
@@ -286,21 +308,36 @@ resolveBindingBody :: ResCtx -> FilePath -> Binding -> IO (Either String Expr, B
 resolveBindingBody ctx dir b = case bindBody b of
   App (Name "import") (StringLit path) -> do
     let pathStr = T.unpack path
-        fullPath = normalise (dir </> pathStr)
-    when (takeExtension pathStr == ".h") $ do
-      autoInfo <- autoLinkInfo fullPath
-      addLinkInfo (rcLinkRef ctx) autoInfo
-    resolveImportPath ctx fullPath pathStr
+    if isURL pathStr
+      then do
+        result <- fetchRemote pathStr Nothing
+        case result of
+          Left err -> pure (Left err, False)
+          Right localPath -> resolveImportPath ctx localPath pathStr
+      else do
+        let fullPath = normalise (dir </> pathStr)
+        when (takeExtension pathStr == ".h") $ do
+          autoInfo <- autoLinkInfo fullPath
+          addLinkInfo (rcLinkRef ctx) autoInfo
+        resolveImportPath ctx fullPath pathStr
 
   With (App (Name "import") (StringLit path)) opts -> do
     let pathStr = T.unpack path
-        fullPath = normalise (dir </> pathStr)
+        sha256 = extractSha256 opts
     importOpts <- extractImportOpts dir opts
     addLinkInfo (rcLinkRef ctx) importOpts
-    when (takeExtension pathStr == ".h") $ do
-      autoInfo <- autoLinkInfo fullPath
-      addLinkInfo (rcLinkRef ctx) autoInfo
-    resolveImportPath ctx fullPath pathStr
+    if isURL pathStr
+      then do
+        result <- fetchRemote pathStr sha256
+        case result of
+          Left err -> pure (Left err, False)
+          Right localPath -> resolveImportPath ctx localPath pathStr
+      else do
+        let fullPath = normalise (dir </> pathStr)
+        when (takeExtension pathStr == ".h") $ do
+          autoInfo <- autoLinkInfo fullPath
+          addLinkInfo (rcLinkRef ctx) autoInfo
+        resolveImportPath ctx fullPath pathStr
 
   _ -> do
     result <- resolveExpr ctx dir (bindBody b)
@@ -317,3 +354,24 @@ resolveAlts ctx dir = go
         b' <- body'
         as' <- rest
         Right (a { altBody = b' } : as')
+
+-- | Find all URL imports in an AST.  Returns (url, Maybe sha256) pairs.
+-- Used by `milang pin` to discover which imports need hashes.
+findURLImports :: Expr -> [(String, Maybe String)]
+findURLImports = go
+  where
+    go (App (Name "import") (StringLit path))
+      | isURL (T.unpack path) = [(T.unpack path, Nothing)]
+    go (With (App (Name "import") (StringLit path)) opts)
+      | isURL (T.unpack path) = [(T.unpack path, extractSha256 opts)]
+    go (BinOp _ l r)      = go l ++ go r
+    go (App f x)           = go f ++ go x
+    go (Lam _ b)           = go b
+    go (With e bs)         = go e ++ concatMap (go . bindBody) bs
+    go (Record _ bs)       = concatMap (go . bindBody) bs
+    go (FieldAccess e _)   = go e
+    go (Namespace bs)      = concatMap (go . bindBody) bs
+    go (Case s as)         = go s ++ concatMap (go . altBody) as
+    go (Thunk b)           = go b
+    go (ListLit es)        = concatMap go es
+    go _                   = []
