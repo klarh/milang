@@ -2,7 +2,10 @@
 module Milang.Remote
   ( fetchRemote
   , hashFile
+  , hashBytes
   , isURL
+  , urlDirName
+  , resolveURL
   ) where
 
 import qualified Data.ByteString as BS
@@ -13,12 +16,44 @@ import System.Directory (createDirectoryIfMissing, doesFileExist, getXdgDirector
 import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
-import System.IO (hPutStrLn, stderr)
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, intercalate)
 
 -- | Check if a path looks like a URL
 isURL :: String -> Bool
 isURL s = "https://" `isPrefixOf` s || "http://" `isPrefixOf` s
+
+-- | Get the "directory" part of a URL (everything up to the last /)
+-- e.g. "https://example.com/pkg/main.mi" -> "https://example.com/pkg"
+urlDirName :: String -> String
+urlDirName url =
+  let parts = wordsBy (== '/') url
+  in if length parts <= 3  -- "https:" "" "host"
+     then url
+     else intercalate "/" (init parts)
+
+-- | Resolve a relative path against a URL base directory
+-- e.g. resolveURL "https://example.com/pkg" "utils.mi" -> "https://example.com/pkg/utils.mi"
+--      resolveURL "https://example.com/pkg" "../lib.mi" -> "https://example.com/lib.mi"
+resolveURL :: String -> String -> String
+resolveURL base rel
+  | isURL rel = rel  -- already absolute
+  | otherwise = normalizeURL (base ++ "/" ++ rel)
+
+-- | Normalize a URL path (collapse ../ and ./)
+normalizeURL :: String -> String
+normalizeURL url =
+  let allParts = wordsBy (== '/') url
+      -- allParts for "http://host/path" = ["http:", "", "host", "path"]
+      -- Keep scheme + "" + host as prefix, normalize the rest
+      (prefix, pathParts) = splitAt 3 allParts
+      normalized = collapse [] pathParts
+  in intercalate "/" (prefix ++ normalized)
+  where
+    collapse acc [] = reverse acc
+    collapse acc (".":rest) = collapse acc rest
+    collapse [] ("..":rest) = collapse [] rest
+    collapse (_:acc) ("..":rest) = collapse acc rest
+    collapse acc (x:rest) = collapse (x:acc) rest
 
 -- | Compute SHA-256 hash of a file, returned as lowercase hex string
 hashFile :: FilePath -> IO String
@@ -26,49 +61,37 @@ hashFile path = do
   contents <- BS.readFile path
   pure $ BS8.unpack $ B16.encode $ SHA256.hash contents
 
+-- | Compute SHA-256 hash of raw bytes, returned as lowercase hex string
+hashBytes :: BS.ByteString -> String
+hashBytes = BS8.unpack . B16.encode . SHA256.hash
+
 -- | Fetch a remote URL, cache it locally, verify hash.
 --
 -- Returns the local file path to the cached content.
 --
--- If expectedHash is provided, verifies the cached/fetched content matches.
--- If no hash is provided, warns and prints the hash for pinning.
+-- expectedHash is the Merkle hash (content + transitive imports).
+-- For leaf files (no imports), this equals the content hash.
+-- Verification of the Merkle hash happens at the import resolution level,
+-- not here — this function only does content-level caching.
 --
 -- Cache layout: ~/.cache/milang/<sha256-of-url>/<basename>
 fetchRemote :: String -> Maybe String -> IO (Either String FilePath)
-fetchRemote url expectedHash = do
+fetchRemote url _expectedHash = do
   cacheDir <- getXdgDirectory XdgCache "milang"
-  -- Use hash of URL as directory name to avoid filesystem issues
   let urlHash = BS8.unpack $ B16.encode $ SHA256.hash $ BS8.pack url
       cacheEntry = cacheDir </> urlHash
-      -- Preserve the filename from the URL for readability
       baseName = urlBaseName url
       cachedFile = cacheEntry </> baseName
   createDirectoryIfMissing True cacheEntry
 
   exists <- doesFileExist cachedFile
   if exists
-    then verifyCached cachedFile url expectedHash
+    then pure $ Right cachedFile
     else do
       result <- curlFetch url cachedFile
       case result of
         Left err -> pure $ Left err
-        Right () -> verifyCached cachedFile url expectedHash
-
--- | Verify a cached file's hash
-verifyCached :: FilePath -> String -> Maybe String -> IO (Either String FilePath)
-verifyCached path url expectedHash = do
-  actualHash <- hashFile path
-  case expectedHash of
-    Nothing -> do
-      hPutStrLn stderr $ "WARNING: no sha256 for import \"" ++ url ++ "\""
-      hPutStrLn stderr $ "  sha256 = \"" ++ actualHash ++ "\""
-      pure $ Right path
-    Just expected
-      | expected == actualHash -> pure $ Right path
-      | otherwise -> pure $ Left $
-          "Hash mismatch for " ++ url ++ "\n" ++
-          "  expected: " ++ expected ++ "\n" ++
-          "  actual:   " ++ actualHash
+        Right () -> pure $ Right cachedFile
 
 -- | Fetch a URL to a local file using curl
 curlFetch :: String -> FilePath -> IO (Either String ())

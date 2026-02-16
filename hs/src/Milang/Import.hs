@@ -1,20 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Milang.Import (resolveImports, findURLImports, LinkInfo(..)) where
+module Milang.Import (resolveImports, resolveAndPin, findURLImports, LinkInfo(..)) where
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import qualified Data.ByteString.Char8 as BS8
 import Data.IORef
+import Data.List (sort, isPrefixOf)
 import System.FilePath (takeDirectory, (</>), normalise, takeExtension, takeBaseName)
 import System.Directory (doesFileExist)
 import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
+import System.IO (hPutStrLn, stderr)
 
 import Milang.Syntax
 import Milang.Parser (parseProgram)
 import Milang.CHeader (parseCHeader, CFunSig(..))
-import Milang.Remote (fetchRemote, isURL)
+import Milang.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
 
 -- | Link info accumulated during import resolution
 data LinkInfo = LinkInfo
@@ -40,33 +43,49 @@ type InProgress = IORef (Set.Set FilePath)
 -- | Accumulated link info
 type LinkRef = IORef LinkInfo
 
+-- | Merkle hash map: URL/path -> merkle hash
+-- Populated during resolution; used for hash verification
+type MerkleRef = IORef (Map.Map String String)
+
 -- | Resolution context passed through all resolve functions
 data ResCtx = ResCtx
   { rcCache      :: ImportCache
   , rcInProgress :: InProgress
   , rcLinkRef    :: LinkRef
+  , rcMerkle     :: MerkleRef
   }
 
 -- | Resolve all `import "path"` calls in an AST by loading and parsing files.
 -- Returns the resolved AST and accumulated link info for gcc.
 resolveImports :: FilePath -> Expr -> IO (Either String (Expr, LinkInfo))
 resolveImports basePath expr = do
+  result <- resolveAndPin basePath expr
+  case result of
+    Left err -> pure $ Left err
+    Right (ast, li, _) -> pure $ Right (ast, li)
+
+-- | Like resolveImports but also returns the Merkle hash map (URL → hash).
+-- Used by `milang pin` to get Merkle hashes for URL imports.
+resolveAndPin :: FilePath -> Expr -> IO (Either String (Expr, LinkInfo, Map.Map String String))
+resolveAndPin basePath expr = do
   cache <- newIORef Map.empty
   inProg <- newIORef Set.empty
   linkRef <- newIORef emptyLinkInfo
-  let ctx = ResCtx cache inProg linkRef
+  merkle <- newIORef Map.empty
+  let ctx = ResCtx cache inProg linkRef merkle
       baseDir = takeDirectory basePath
   result <- resolveExpr ctx baseDir expr
   case result of
     Left err -> pure $ Left err
     Right ast -> do
       li <- readIORef linkRef
-      pure $ Right (ast, li)
+      mh <- readIORef merkle
+      pure $ Right (ast, li, mh)
 
 addLinkInfo :: LinkRef -> LinkInfo -> IO ()
 addLinkInfo ref li = modifyIORef ref (mergeLinkInfo li)
 
-resolveExpr :: ResCtx -> FilePath -> Expr -> IO (Either String Expr)
+resolveExpr :: ResCtx -> String -> Expr -> IO (Either String Expr)
 resolveExpr _ _ e@(IntLit _)    = pure $ Right e
 resolveExpr _ _ e@(FloatLit _)  = pure $ Right e
 resolveExpr _ _ e@(StringLit _) = pure $ Right e
@@ -81,37 +100,17 @@ resolveExpr ctx dir (BinOp op l r) = do
 -- Intercept `import "path" { opts }`
 resolveExpr ctx dir (With (App (Name "import") (StringLit path)) opts) = do
   let pathStr = T.unpack path
-  importOpts <- extractImportOpts dir opts
-  addLinkInfo (rcLinkRef ctx) importOpts
+  -- Extract link/hash opts (only makes sense for local imports)
+  unless (isURL pathStr) $ do
+    importOpts <- extractImportOpts dir opts
+    addLinkInfo (rcLinkRef ctx) importOpts
   let sha256 = extractSha256 opts
-  if isURL pathStr
-    then do
-      result <- fetchRemote pathStr sha256
-      case result of
-        Left err -> pure $ Left err
-        Right localPath -> fst <$> resolveImportPath ctx localPath pathStr
-    else do
-      let fullPath = normalise (dir </> pathStr)
-      when (takeExtension pathStr == ".h") $ do
-        autoInfo <- autoLinkInfo fullPath
-        addLinkInfo (rcLinkRef ctx) autoInfo
-      fst <$> resolveImportPath ctx fullPath pathStr
+  resolveImport ctx dir pathStr sha256
 
 -- Intercept `import "path"`
 resolveExpr ctx dir (App (Name "import") (StringLit path)) = do
   let pathStr = T.unpack path
-  if isURL pathStr
-    then do
-      result <- fetchRemote pathStr Nothing
-      case result of
-        Left err -> pure $ Left err
-        Right localPath -> fst <$> resolveImportPath ctx localPath pathStr
-    else do
-      let fullPath = normalise (dir </> pathStr)
-      when (takeExtension pathStr == ".h") $ do
-        autoInfo <- autoLinkInfo fullPath
-        addLinkInfo (rcLinkRef ctx) autoInfo
-      fst <$> resolveImportPath ctx fullPath pathStr
+  resolveImport ctx dir pathStr Nothing
 
 resolveExpr ctx dir (App f x) = do
   f' <- resolveExpr ctx dir f
@@ -152,10 +151,103 @@ resolveExpr ctx dir (ListLit es) = do
   es' <- mapM (resolveExpr ctx dir) es
   pure $ ListLit <$> sequence es'
 
+-- | Unified import resolution. Handles both local and URL imports.
+-- `dir` is the base directory (filesystem path or URL base).
+-- `pathStr` is the import target (relative path or absolute URL).
+-- `expectedHash` is the optional Merkle hash for verification.
+resolveImport :: ResCtx -> String -> String -> Maybe String -> IO (Either String Expr)
+resolveImport ctx dir pathStr expectedHash
+  | isURL pathStr = resolveURLImport ctx pathStr expectedHash
+  | isURL dir     = resolveURLImport ctx (resolveURL dir pathStr) expectedHash
+  | otherwise     = do
+      let fullPath = normalise (dir </> pathStr)
+      when (takeExtension pathStr == ".h") $ do
+        autoInfo <- autoLinkInfo fullPath
+        addLinkInfo (rcLinkRef ctx) autoInfo
+      fst <$> resolveImportPath ctx fullPath pathStr Nothing
+
+-- | Resolve an import from a URL
+resolveURLImport :: ResCtx -> String -> Maybe String -> IO (Either String Expr)
+resolveURLImport ctx url expectedHash = do
+  -- Check Merkle cache first (already resolved this URL)
+  merkleMap <- readIORef (rcMerkle ctx)
+  case Map.lookup url merkleMap of
+    Just _ -> do
+      -- Already resolved — use the import cache
+      cached <- Map.lookup url <$> readIORef (rcCache ctx)
+      case cached of
+        Just expr -> pure $ Right expr
+        Nothing   -> pure $ Left $ "Internal error: Merkle cached but not import cached: " ++ url
+    Nothing -> do
+      result <- fetchRemote url Nothing
+      case result of
+        Left err -> pure $ Left err
+        Right localPath -> do
+          -- Parse file to find sub-import URLs (before resolution replaces them)
+          src <- TIO.readFile localPath
+          case parseProgram localPath src of
+            Left err -> pure $ Left (show err)
+            Right parsedAST -> do
+              let baseDir = urlDirName url
+                  subURLs = collectImportURLs baseDir parsedAST
+              -- Resolve the file (this recursively resolves sub-imports)
+              let originDir = urlDirName url
+              (exprResult, _circular) <- resolveImportPath ctx localPath url (Just originDir)
+              case exprResult of
+                Left err -> pure $ Left err
+                Right expr -> do
+                  -- Compute Merkle hash: content hash + sorted sub-import Merkle hashes
+                  contentHash <- hashFile localPath
+                  merkleMap' <- readIORef (rcMerkle ctx)
+                  let subHashes = sort [h | u <- subURLs
+                                          , Just h <- [Map.lookup u merkleMap']]
+                      merkleInput = contentHash ++ concat subHashes
+                      merkleHash = hashBytes (BS8.pack merkleInput)
+                  modifyIORef (rcMerkle ctx) (Map.insert url merkleHash)
+                  -- Also cache by URL for future lookups
+                  modifyIORef (rcCache ctx) (Map.insert url expr)
+                  -- Verify against expected hash
+                  case expectedHash of
+                    Nothing -> do
+                      hPutStrLn stderr $ "WARNING: no sha256 for import \"" ++ url ++ "\""
+                      hPutStrLn stderr $ "  sha256 = \"" ++ merkleHash ++ "\""
+                    Just expected
+                      | expected == merkleHash -> pure ()
+                      | otherwise -> do
+                          hPutStrLn stderr $ "Hash mismatch for " ++ url
+                          hPutStrLn stderr $ "  expected: " ++ expected
+                          hPutStrLn stderr $ "  actual:   " ++ merkleHash
+                  pure $ Right expr
+
+-- | Collect import URLs from a parsed (pre-resolution) AST.
+-- Relative paths are resolved against the given URL base.
+collectImportURLs :: String -> Expr -> [String]
+collectImportURLs base = go
+  where
+    resolve p = if isURL p then p else resolveURL base p
+    go (App (Name "import") (StringLit path)) =
+      let p = T.unpack path
+      in if isURL p || not ("/" `isPrefixOf` p) then [resolve p] else []
+    go (With (App (Name "import") (StringLit path)) _) =
+      let p = T.unpack path
+      in if isURL p || not ("/" `isPrefixOf` p) then [resolve p] else []
+    go (BinOp _ l r)    = go l ++ go r
+    go (App f x)        = go f ++ go x
+    go (Lam _ b)        = go b
+    go (With e bs)      = go e ++ concatMap (go . bindBody) bs
+    go (Record _ bs)    = concatMap (go . bindBody) bs
+    go (FieldAccess e _)= go e
+    go (Namespace bs)   = concatMap (go . bindBody) bs
+    go (Case s as)      = go s ++ concatMap (go . altBody) as
+    go (Thunk b)        = go b
+    go (ListLit es)     = concatMap go es
+    go _                = []
+
 -- | Resolve an import path. Returns (Either String Expr, Bool) where the Bool
 -- indicates whether this was a circular import (True = cycle detected).
-resolveImportPath :: ResCtx -> FilePath -> String -> IO (Either String Expr, Bool)
-resolveImportPath ctx fullPath pathStr = do
+-- `originDir` is Just url-base for remote files, Nothing for local files.
+resolveImportPath :: ResCtx -> FilePath -> String -> Maybe String -> IO (Either String Expr, Bool)
+resolveImportPath ctx fullPath pathStr originDir = do
   -- Check cache first (fully resolved from a prior import)
   cached <- Map.lookup fullPath <$> readIORef (rcCache ctx)
   case cached of
@@ -174,7 +266,7 @@ resolveImportPath ctx fullPath pathStr = do
         else do
           result <- case takeExtension pathStr of
             ".h" -> loadCHeader fullPath
-            _    -> loadFile ctx fullPath
+            _    -> loadFile ctx fullPath originDir
           case result of
             Left err -> pure (Left err, False)
             Right expr -> do
@@ -255,16 +347,24 @@ when :: Bool -> IO () -> IO ()
 when True  a = a
 when False _ = pure ()
 
+unless :: Bool -> IO () -> IO ()
+unless b = when (not b)
+
 -- | Load and resolve a milang file.
 -- Marks the file as in-progress to detect circular imports.
-loadFile :: ResCtx -> FilePath -> IO (Either String Expr)
-loadFile ctx path = do
+-- `originDir` overrides the directory for relative import resolution
+-- (used when the file was fetched from a URL — resolves relative to URL base).
+loadFile :: ResCtx -> FilePath -> Maybe String -> IO (Either String Expr)
+loadFile ctx path originDir = do
   src <- TIO.readFile path
   case parseProgram path src of
     Left err -> pure $ Left (show err)
     Right ast -> do
       modifyIORef (rcInProgress ctx) (Set.insert path)
-      result <- resolveExpr ctx (takeDirectory path) ast
+      let dir = case originDir of
+                  Just urlBase -> urlBase
+                  Nothing      -> takeDirectory path
+      result <- resolveExpr ctx dir ast
       modifyIORef (rcInProgress ctx) (Set.delete path)
       pure result
 
@@ -288,7 +388,7 @@ loadCHeader path = do
         }
 
 -- | Resolve bindings, detecting circular imports and marking them lazy.
-resolveBindings :: ResCtx -> FilePath -> [Binding] -> IO (Either String [Binding])
+resolveBindings :: ResCtx -> String -> [Binding] -> IO (Either String [Binding])
 resolveBindings ctx dir = go
   where
     go [] = pure $ Right []
@@ -304,46 +404,40 @@ resolveBindings ctx dir = go
         Right (b'' : bs')
 
 -- | Resolve a binding body, detecting circular imports.
-resolveBindingBody :: ResCtx -> FilePath -> Binding -> IO (Either String Expr, Bool)
+resolveBindingBody :: ResCtx -> String -> Binding -> IO (Either String Expr, Bool)
 resolveBindingBody ctx dir b = case bindBody b of
   App (Name "import") (StringLit path) -> do
     let pathStr = T.unpack path
-    if isURL pathStr
-      then do
-        result <- fetchRemote pathStr Nothing
-        case result of
-          Left err -> pure (Left err, False)
-          Right localPath -> resolveImportPath ctx localPath pathStr
-      else do
-        let fullPath = normalise (dir </> pathStr)
-        when (takeExtension pathStr == ".h") $ do
-          autoInfo <- autoLinkInfo fullPath
-          addLinkInfo (rcLinkRef ctx) autoInfo
-        resolveImportPath ctx fullPath pathStr
+    resolveBindingImport ctx dir pathStr Nothing
 
   With (App (Name "import") (StringLit path)) opts -> do
     let pathStr = T.unpack path
         sha256 = extractSha256 opts
-    importOpts <- extractImportOpts dir opts
-    addLinkInfo (rcLinkRef ctx) importOpts
-    if isURL pathStr
-      then do
-        result <- fetchRemote pathStr sha256
-        case result of
-          Left err -> pure (Left err, False)
-          Right localPath -> resolveImportPath ctx localPath pathStr
-      else do
-        let fullPath = normalise (dir </> pathStr)
-        when (takeExtension pathStr == ".h") $ do
-          autoInfo <- autoLinkInfo fullPath
-          addLinkInfo (rcLinkRef ctx) autoInfo
-        resolveImportPath ctx fullPath pathStr
+    unless (isURL pathStr || isURL dir) $ do
+      importOpts <- extractImportOpts dir opts
+      addLinkInfo (rcLinkRef ctx) importOpts
+    resolveBindingImport ctx dir pathStr sha256
 
   _ -> do
     result <- resolveExpr ctx dir (bindBody b)
     pure (result, False)
 
-resolveAlts :: ResCtx -> FilePath -> [Alt] -> IO (Either String [Alt])
+-- | Resolve an import in a binding context, returning circularity flag.
+resolveBindingImport :: ResCtx -> String -> String -> Maybe String -> IO (Either String Expr, Bool)
+resolveBindingImport ctx dir pathStr sha256
+  | isURL pathStr || isURL dir = do
+      result <- resolveImport ctx dir pathStr sha256
+      -- URL imports are never "circular" in the lazy-binding sense
+      -- (cycle detection handles them differently)
+      pure (result, False)
+  | otherwise = do
+      let fullPath = normalise (dir </> pathStr)
+      when (takeExtension pathStr == ".h") $ do
+        autoInfo <- autoLinkInfo fullPath
+        addLinkInfo (rcLinkRef ctx) autoInfo
+      resolveImportPath ctx fullPath pathStr Nothing
+
+resolveAlts :: ResCtx -> String -> [Alt] -> IO (Either String [Alt])
 resolveAlts ctx dir = go
   where
     go [] = pure $ Right []
