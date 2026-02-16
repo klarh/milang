@@ -1,0 +1,7 @@
+hs/dist-newstyle/
+milang
+/tmp/milang_out*
+
+# Generated C output left in tests/
+tests/*.c
+!tests/lib/*.c
