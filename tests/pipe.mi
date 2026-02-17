@@ -1,0 +1,14 @@
+double x = x * 2
+inc x = x + 1
+negate x = 0 - x
+
+r1 = 5 |> double
+r2 = 5 |> double |> inc
+r3 = 3 |> inc |> double |> inc
+
+-- Pipe with partial application
+add x y = x + y
+r4 = 10 |> add 5
+
+-- Pipe mixed with other operators
+r5 = 3 + 2 |> double

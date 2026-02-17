@@ -254,11 +254,13 @@ pInfixRest minPrec left = do
            _ <- many (try $ char '\\' *> newline *> sc)
            let nextPrec = if assoc == RightAssoc then prec else prec + 1
            right <- pPrec nextPrec
-           pInfixRest minPrec (BinOp op left right)
+           let result = if op == "|>" then App right left else BinOp op left right
+           pInfixRest minPrec result
 
 data Assoc = LeftAssoc | RightAssoc deriving (Eq)
 
 opInfo :: Text -> (Int, Assoc)
+opInfo "|>" = (5,   LeftAssoc)
 opInfo "**" = (150, RightAssoc)
 opInfo "*"  = (100, LeftAssoc)
 opInfo "/"  = (100, LeftAssoc)
