@@ -235,6 +235,17 @@ reduceApp (Name "fields") (Record _ bs) =
 reduceApp (Name "fieldNames") (Record _ bs) =
   ListLit [StringLit (bindName b) | b <- bs]
 reduceApp (Name "tag") (Record t _) = StringLit t
+-- getField record "name" → field value
+reduceApp (App (Name "getField") (Record _ bs)) (StringLit name) =
+  case [bindBody b | b <- bs, bindName b == name] of
+    (v:_) -> v
+    []    -> App (App (Name "getField") (Record "" bs)) (StringLit name)  -- residual
+-- setField record "name" value → copy with field overridden
+reduceApp (App (App (Name "setField") (Record t bs)) (StringLit name)) val =
+  let updated = map (\b -> if bindName b == name then b { bindBody = val } else b) bs
+      exists = any (\b -> bindName b == name) bs
+      result = if exists then updated else bs ++ [Binding name False [] val Nothing]
+  in Record t result
 -- Positional record extension: (Pair {_0=1}) 2 → Pair {_0=1, _1=2}
 reduceApp (Record tag bs) arg
   | isPositionalRecord bs =

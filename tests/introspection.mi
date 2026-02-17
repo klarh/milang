@@ -30,3 +30,22 @@ r11 = contains [1, 2, 3] 5
 containsField rec x = contains (fields rec) x
 r12 = containsField (Set {a = 1; b = 2; c = 3}) 2
 r13 = containsField (Set {a = 1; b = 2; c = 3}) 5
+
+-- getField: access field by name string
+r14 = getField p "x"
+r15 = getField p "z"
+
+-- setField: copy with field overridden
+r16 = setField p "x" 42
+r17 = getField r16 "x"
+r18 = getField r16 "y"
+
+-- setField: add new field
+r19 = setField p "w" 99
+
+-- chained setField
+r20 = setField (setField p "x" 10) "y" 20
+
+-- generic mapFields using introspection
+mapFields f rec = fold (\acc name -> setField acc name (f (getField acc name))) rec (fieldNames rec)
+r21 = mapFields (\x -> x * 2) p
