@@ -1,0 +1,32 @@
+-- Record introspection: fields, fieldNames, tag
+
+-- Basic record
+p = Point {x = 1; y = 2; z = 3}
+r1 = fields p
+r2 = fieldNames p
+r3 = tag p
+
+-- ADT with named fields
+Shape = {Circle r; Rect w h}
+c = Circle 5
+r4 = fields c
+r5 = fieldNames c
+r6 = tag c
+
+rect = Rect 3 4
+r7 = fields rect
+r8 = fieldNames rect
+
+-- Zero-field constructor
+n = None
+r9 = tag n
+
+-- User-defined contains via introspection
+contains lst x = fold (\acc el -> if (el == x) ~1 ~acc) ~0 lst
+r10 = contains [1, 2, 3] 2
+r11 = contains [1, 2, 3] 5
+
+-- Contains on record field values
+containsField rec x = contains (fields rec) x
+r12 = containsField (Set {a = 1; b = 2; c = 3}) 2
+r13 = containsField (Set {a = 1; b = 2; c = 3}) 5

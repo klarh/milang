@@ -229,6 +229,12 @@ reduceApp (Lam p body) arg =
 reduceApp (Name n) arg
   | not (T.null n) && isUpper (T.head n) =
     Record n [Binding "_0" False [] arg Nothing]
+-- Record introspection builtins
+reduceApp (Name "fields") (Record _ bs) =
+  ListLit [bindBody b | b <- bs]
+reduceApp (Name "fieldNames") (Record _ bs) =
+  ListLit [StringLit (bindName b) | b <- bs]
+reduceApp (Name "tag") (Record t _) = StringLit t
 -- Positional record extension: (Pair {_0=1}) 2 → Pair {_0=1, _1=2}
 reduceApp (Record tag bs) arg
   | isPositionalRecord bs =
