@@ -238,7 +238,8 @@ pApp = do
 pAtomDot :: Parser Expr
 pAtomDot = do
   e <- pAtom
-  pDotChain e
+  e' <- pDotChain e
+  pRecordUpdates e'
 
 pDotChain :: Expr -> Parser Expr
 pDotChain e = do
@@ -248,6 +249,23 @@ pDotChain e = do
     Just _  -> do
       field <- pAnyIdentifier
       pDotChain (FieldAccess e field)
+
+-- Parse zero or more record updates: expr:{f1=v1} :{f2=v2} ...
+pRecordUpdates :: Expr -> Parser Expr
+pRecordUpdates e = do
+  mUpd <- optional (try pRecordUpdate)
+  case mUpd of
+    Nothing -> pure e
+    Just bs -> pRecordUpdates (RecordUpdate e bs)
+
+-- Parse :{bindings}
+pRecordUpdate :: Parser [Binding]
+pRecordUpdate = do
+  _ <- symbol ":"
+  _ <- symbol "{"
+  bs <- pBraceBindings
+  _ <- symbol "}"
+  pure bs
 
 -- ── Atoms ─────────────────────────────────────────────────────────
 

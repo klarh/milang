@@ -34,6 +34,7 @@ data Expr
   | Case Expr [Alt]            -- expr -> { Pat = body; ... }
   | Thunk Expr                 -- ~expr: deferred evaluation
   | ListLit [Expr]             -- [a, b, c]: list literal
+  | RecordUpdate Expr [Binding] -- expr:{field = val, ...}: copy with overrides
   | CFunction !Text !Text CType [CType]  -- C FFI: header, c_name, return type, param types
   deriving (Show, Eq)
 
@@ -84,6 +85,8 @@ prettyExpr i (Case e alts)   =
   concatMap (\a -> replicate (i+2) ' ' ++ prettyAlt (i+2) a ++ "\n") alts
 prettyExpr i (Thunk e)       = "~(" ++ prettyExpr i e ++ ")"
 prettyExpr i (ListLit es)    = "[" ++ intercalate ", " (map (prettyExpr i) es) ++ "]"
+prettyExpr i (RecordUpdate e bs) =
+  prettyExpr i e ++ ":{" ++ intercalate "; " (map (prettyBinding i) bs) ++ "}"
 prettyExpr _ (CFunction hdr name _ _) =
   "<cfn:" ++ T.unpack hdr ++ ":" ++ T.unpack name ++ ">"
 

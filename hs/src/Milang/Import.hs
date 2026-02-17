@@ -151,6 +151,14 @@ resolveExpr ctx dir (ListLit es) = do
   es' <- mapM (resolveExpr ctx dir) es
   pure $ ListLit <$> sequence es'
 
+resolveExpr ctx dir (RecordUpdate base updates) = do
+  base' <- resolveExpr ctx dir base
+  resolvedUpdates <- mapM (\b -> do
+    (bodyResult, _circular) <- resolveBindingBody ctx dir b
+    pure $ fmap (\body' -> b { bindBody = body' }) bodyResult
+    ) updates
+  pure $ RecordUpdate <$> base' <*> sequence resolvedUpdates
+
 -- | Unified import resolution. Handles both local and URL imports.
 -- `dir` is the base directory (filesystem path or URL base).
 -- `pathStr` is the import target (relative path or absolute URL).
@@ -241,6 +249,7 @@ collectImportURLs base = go
     go (Case s as)      = go s ++ concatMap (go . altBody) as
     go (Thunk b)        = go b
     go (ListLit es)     = concatMap go es
+    go (RecordUpdate e bs) = go e ++ concatMap (go . bindBody) bs
     go _                = []
 
 -- | Resolve an import path. Returns (Either String Expr, Bool) where the Bool
@@ -468,4 +477,5 @@ findURLImports = go
     go (Case s as)         = go s ++ concatMap (go . altBody) as
     go (Thunk b)           = go b
     go (ListLit es)        = concatMap go es
+    go (RecordUpdate e bs) = go e ++ concatMap (go . bindBody) bs
     go _                   = []

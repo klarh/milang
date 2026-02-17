@@ -84,6 +84,21 @@ reduce env (Thunk body) = Thunk body  -- thunks stay deferred; forced on demand
 
 reduce env (ListLit es) = ListLit (map (reduce env) es)
 
+reduce env (RecordUpdate e bs) =
+  let e' = reduce env e
+      bs' = map (reduceBind env) bs
+  in case e' of
+    Record tag fields ->
+      let overrides = [(bindName b, bindBody b) | b <- bs']
+          updated = map (\f -> case lookup (bindName f) overrides of
+                                 Just newBody -> f { bindBody = newBody }
+                                 Nothing      -> f) fields
+          -- Add any new fields not in the original
+          existingNames = map bindName fields
+          newFields = [b | b <- bs', bindName b `notElem` existingNames]
+      in Record tag (updated ++ newFields)
+    _ -> RecordUpdate e' bs'
+
 -- ── Binding evaluation ────────────────────────────────────────────
 
 -- Evaluate a sequence of bindings, extending the environment.
@@ -218,6 +233,8 @@ exprFreeVars (Case s alts)    =
 exprFreeVars (CFunction {})   = Set.empty
 exprFreeVars (Thunk body)     = exprFreeVars body
 exprFreeVars (ListLit es)     = Set.unions (map exprFreeVars es)
+exprFreeVars (RecordUpdate e bs) =
+  Set.union (exprFreeVars e) (Set.unions (map (exprFreeVars . bindBody) bs))
 
 -- | Generate a fresh name by appending primes
 freshName :: Text -> Set.Set Text -> Text
@@ -251,6 +268,7 @@ substExpr n e (Case s alts) =
 substExpr _ _ e@(CFunction {}) = e
 substExpr n e (Thunk body) = Thunk (substExpr n e body)
 substExpr n e (ListLit es) = ListLit (map (substExpr n e) es)
+substExpr n e (RecordUpdate ex bs) = RecordUpdate (substExpr n e ex) (map (substBind n e) bs)
 
 substBind :: Text -> Expr -> Binding -> Binding
 substBind n e b = b { bindBody = substExpr n e (bindBody b) }
