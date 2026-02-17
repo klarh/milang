@@ -6,6 +6,7 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Maybe (isNothing, isJust)
+import Data.Char (isUpper)
 import Milang.Syntax
 
 -- | Environment: maps names to (possibly residual) expressions
@@ -33,8 +34,8 @@ reduce _   e@(StringLit _) = e
 
 reduce env (Name n) =
   case Map.lookup n env of
-    Just val -> reduce env val   -- reduce on access (forces lazy bindings)
-    Nothing  -> Name n  -- unknown / residual
+    Just val -> reduce env val
+    Nothing  -> Name n
 
 reduce env (BinOp op l r) =
   let l' = forceThunk env (reduce env l)
@@ -202,8 +203,21 @@ reduceApp (Lam p body) arg =
            body' = substExpr p (Name fresh) body
        in reduce (Map.singleton fresh arg) body'
      else reduce (Map.singleton p arg) body
+-- Uppercase constructor application: Just 5 → Just {_0 = 5}
+reduceApp (Name n) arg
+  | not (T.null n) && isUpper (T.head n) =
+    Record n [Binding "_0" False [] arg]
+-- Positional record extension: (Pair {_0=1}) 2 → Pair {_0=1, _1=2}
+reduceApp (Record tag bs) arg
+  | isPositionalRecord bs =
+    let nextIdx = "_" <> T.pack (show (length bs))
+    in Record tag (bs ++ [Binding nextIdx False [] arg])
 -- Residual
 reduceApp f x = App f x
+
+-- | Check if all record fields are positional (_0, _1, ...)
+isPositionalRecord :: [Binding] -> Bool
+isPositionalRecord bs = all (\(b, i) -> bindName b == "_" <> T.pack (show i)) (zip bs [0::Int ..])
 
 -- | Force a thunk: if the expression is a Thunk, reduce its body
 forceThunk :: Env -> Expr -> Expr

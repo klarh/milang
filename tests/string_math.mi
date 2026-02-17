@@ -1,0 +1,59 @@
+greeting = "hello world"
+
+-- len works on strings
+string_len = len greeting
+
+-- charAt
+first_char = charAt greeting 0
+last_char = charAt greeting 10
+
+-- slice
+hello = slice greeting 0 5
+world = slice greeting 6 11
+
+-- indexOf
+idx = indexOf greeting "world"
+not_found = indexOf greeting "xyz"
+
+-- split
+parts = split greeting " "
+parts_len = len parts
+
+-- join
+joined = join ", " ["a", "b", "c"]
+
+-- trim
+trimmed = trim "  hello  "
+
+-- toUpper / toLower
+upper = toUpper greeting
+lower = toLower "HELLO"
+
+-- replace
+replaced = replace "hello world" "world" "milang"
+
+-- toString
+int_str = toString 42
+float_str = toString 3.14
+
+-- toInt / toFloat
+parsed_int = toInt "123"
+parsed_float = toFloat "3.14"
+float_to_int = toInt 3.7
+
+-- abs
+abs_pos = abs 5
+abs_neg = abs (0 - 3)
+abs_float = abs (0.0 - 2.5)
+
+-- min / max
+minimum = min 3 7
+maximum = max 3 7
+min_float = min 1.5 2.5
+max_float = max 1.5 2.5
+
+-- string comparison
+eq = "abc" == "abc"
+neq = "abc" /= "xyz"
+lt = "abc" < "def"
+gt = "def" > "abc"

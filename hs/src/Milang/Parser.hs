@@ -84,7 +84,8 @@ pBindingAt ref = do
   name <- pBindingName
   params <- many (try pIdentifier)
   lazy <- pBindOp
-  body <- pExpr
+  -- Body expression: either on same line, or deferred to indented block
+  body <- try pExpr <|> pure (IntLit 0)
   -- Check for trailing -> (match scope)
   mMatch <- optional (try pMatchArrow)
   let body' = case mMatch of
@@ -112,7 +113,7 @@ pBindingName = try $ do
 
 -- After parsing the body, check for indented children.
 -- If body is a Case (from ->), indented lines are match alternatives.
--- Otherwise, indented lines are regular bindings (With).
+-- Otherwise, indented lines are regular bindings or bare expressions (With).
 pIndentedChildren :: Pos -> Expr -> Parser Expr
 pIndentedChildren ref body = do
   case body of
@@ -124,29 +125,55 @@ pIndentedChildren ref body = do
         pMatchAlt
       pure $ Case scrut (existingAlts ++ alts)
     _ -> do
-      -- Parse indented bindings
-      children <- pIndentedBindings ref
-      if null children then pure body else pure $ With body children
+      -- Parse indented bindings or bare expressions
+      children <- pIndentedStatements ref
+      if null children then pure body
+      else
+        -- The last bare expression (if any) becomes the body
+        let (stmts, result) = splitLastExpr children body
+        in pure $ With result stmts
 
 pBindOp :: Parser Bool
 pBindOp = (False <$ symbol "=") <|> (True <$ symbol ":=")
 
--- Parse indented child bindings (deeper than ref)
-pIndentedBindings :: Pos -> Parser [Binding]
-pIndentedBindings ref = do
-  bss <- many $ try $ do
+-- Parse indented child bindings or bare expressions (deeper than ref)
+pIndentedStatements :: Pos -> Parser [Binding]
+pIndentedStatements ref = do
+  items <- many $ try $ do
     skipNewlines
     pos <- L.indentGuard sc GT ref
-    pBindingsAt pos
-  pure (concat bss)
+    pStatementAt pos
+  pure (concat items)
+
+-- Parse either a binding (name = expr) or a bare expression (auto-named)
+pStatementAt :: Pos -> Parser [Binding]
+pStatementAt pos = try (pBindingsAt pos) <|> pBareExpr
+
+-- Parse a bare expression and wrap it in an auto-named binding
+pBareExpr :: Parser [Binding]
+pBareExpr = do
+  off <- getOffset
+  e <- pExpr
+  let name = T.pack ("_stmt_" ++ show off)
+  pure [Binding name False [] e]
+
+-- Split bindings: if the last item is an auto-generated statement binding,
+-- use its body as the With result; otherwise use the original body.
+splitLastExpr :: [Binding] -> Expr -> ([Binding], Expr)
+splitLastExpr [] fallback = ([], fallback)
+splitLastExpr bs fallback =
+  let lastB = last bs
+      initBs = init bs
+  in if "_stmt_" `T.isPrefixOf` bindName lastB
+     then (initBs, bindBody lastB)
+     else (bs, fallback)
 
 -- Parse -> (signals a match scope follows)
 pMatchArrow :: Parser [Alt]
 pMatchArrow = do
   _ <- symbol "->"
-  -- Optionally parse inline alternatives on same line
-  -- (for single-arm matches or brace-delimited)
-  pure []
+  -- Parse optional inline alternatives separated by ;
+  try (pMatchAlt `sepBy1` symbol ";") <|> pure []
 
 -- Parse a single match alternative: Pattern = body [{ scope }]
 pMatchAlt :: Parser Alt
@@ -278,6 +305,7 @@ pAtom = choice
   , try pFloatLit
   , pIntLit
   , pLambda
+  , try pUnionDecl
   , pNameOrRecord
   ]
 
@@ -296,12 +324,52 @@ pListLit = do
   _ <- symbol "]"
   pure $ ListLit es
 
+-- | Parse a union/enum declaration: {Just _; None; Pair _ _}
+-- Produces a Namespace of constructor bindings.
+pUnionDecl :: Parser Expr
+pUnionDecl = do
+  _ <- symbol "{"
+  skipBraceWhitespace
+  ctors <- pConstructorDecl `sepEndBy1` pSep
+  skipBraceWhitespace
+  _ <- symbol "}"
+  pure $ Namespace (map ctorToBinding ctors)
+
+-- Parse a single constructor: UpperName followed by zero or more _
+pConstructorDecl :: Parser (Text, Int)
+pConstructorDecl = do
+  skipBraceWhitespace
+  name <- pAnyIdentifier
+  if T.null name || not (isUpper (T.head name))
+    then fail "expected uppercase constructor name"
+    else do
+      args <- many (symbol "_")
+      pure (name, length args)
+
+-- Convert a constructor declaration to a binding
+ctorToBinding :: (Text, Int) -> Binding
+ctorToBinding (name, 0) = Binding name False [] (Record name [])
+ctorToBinding (name, arity) =
+  let params = [T.pack ("_" ++ show i) | i <- [0 .. arity - 1]]
+      fields = [Binding p False [] (Name p) | p <- params]
+      body = foldr (\p b -> Lam p b) (Record name fields) params
+  in Binding name False [] body
+
 pBraceBindings :: Parser [Binding]
 pBraceBindings = concat <$> (pBraceBindingOrDestruct `sepEndBy` pSep)
 
--- Either a destructuring {a; b} = expr or a normal binding inside braces
+-- Either a destructuring {a; b} = expr, a normal binding, or a bare expression
 pBraceBindingOrDestruct :: Parser [Binding]
-pBraceBindingOrDestruct = try pBraceDestruct <|> (pure <$> pBraceBinding)
+pBraceBindingOrDestruct = try pBraceDestruct <|> try (pure <$> pBraceBinding) <|> pBraceBareExpr
+
+-- Parse a bare expression inside braces, auto-naming it
+pBraceBareExpr :: Parser [Binding]
+pBraceBareExpr = do
+  skipBraceWhitespace
+  off <- getOffset
+  e <- pExpr
+  let name = T.pack ("_stmt_" ++ show off)
+  pure [Binding name False [] e]
 
 pBraceDestruct :: Parser [Binding]
 pBraceDestruct = do

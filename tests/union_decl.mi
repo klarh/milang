@@ -1,0 +1,21 @@
+-- Union/enum declarations
+Maybe = {Just _; None}
+
+-- Use constructors via namespace
+a = Maybe.Just 42
+b = Maybe.None
+
+-- Pattern matching
+unwrap x = x -> Just {_0} = _0
+result = unwrap a
+
+-- Multi-arg constructors
+Either = {Left _; Right _}
+ok = Either.Right "success"
+err = Either.Left "oops"
+
+-- Tree with 2-arg constructor
+Tree = {Node _ _; Leaf _}
+tree = Tree.Node (Tree.Leaf 1) (Tree.Leaf 2)
+left_val = tree._0._0
+right_val = tree._1._0

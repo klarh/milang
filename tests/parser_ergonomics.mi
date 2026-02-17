@@ -1,0 +1,14 @@
+-- Test 1: Semicolon-separated match alternatives
+classify x = x -> 0 = "zero"; 1 = "one"; _ = "other"
+r1 = classify 0
+r2 = classify 1
+r3 = classify 42
+
+-- Test 2: Multi-arm inline match with records
+Maybe = {Just _; None}
+describe x = x -> Just {_0} = "has " + toString _0; None {} = "nothing"
+r4 = describe (Just 5)
+r5 = describe None
+
+-- Test 3: Bare expressions in brace scopes
+result = 42 {println "side effect 1"; println "side effect 2"}

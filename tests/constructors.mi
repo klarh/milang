@@ -1,0 +1,21 @@
+-- Algebraic data type constructors
+-- Bare uppercase names become zero-field records
+
+none = None
+just5 = Just 5
+pair = Pair 1 2
+
+-- Pattern matching on constructors
+unwrap x = x -> Just {_0} = _0
+unwrapped = unwrap (Just 42)
+
+-- Multi-arg constructor fields
+get_first p = p._0
+get_second p = p._1
+first = get_first (Pair "hello" "world")
+second = get_second (Pair "hello" "world")
+
+-- Nested constructors
+tree = Node (Leaf 1) (Leaf 2)
+left_val = tree._0._0
+right_val = tree._1._0

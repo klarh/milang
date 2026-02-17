@@ -1,0 +1,5 @@
+-- Main with multi-statement body
+main world =
+  world.io.println "hello"
+  world.io.println "world"
+  0
