@@ -31,7 +31,7 @@ parseExpr = parse (sc *> pExpr <* eof)
 
 -- Space consumer that also eats newlines
 scn :: Parser ()
-scn = L.space space1 (L.skipLineComment "--") empty
+scn = L.space space1 (L.skipLineComment "--") (L.skipBlockCommentNested "/*" "*/")
 
 -- ── Program: sequence of top-level bindings ───────────────────────
 
@@ -41,7 +41,7 @@ pProgram = do
   pure $ Namespace (concat bss)
 
 skipNewlines :: Parser ()
-skipNewlines = void $ many (lexeme newline)
+skipNewlines = scn
 
 -- ── Bindings ──────────────────────────────────────────────────────
 
@@ -254,13 +254,19 @@ pInfixRest minPrec left = do
            _ <- many (try $ char '\\' *> newline *> sc)
            let nextPrec = if assoc == RightAssoc then prec else prec + 1
            right <- pPrec nextPrec
-           let result = if op == "|>" then App right left else BinOp op left right
+           let result
+                 | op == "|>" = App right left
+                 | op == ">>" = Lam "_c" (App right (App left (Name "_c")))
+                 | op == "<<" = Lam "_c" (App left (App right (Name "_c")))
+                 | otherwise  = BinOp op left right
            pInfixRest minPrec result
 
 data Assoc = LeftAssoc | RightAssoc deriving (Eq)
 
 opInfo :: Text -> (Int, Assoc)
 opInfo "|>" = (5,   LeftAssoc)
+opInfo ">>" = (10,  LeftAssoc)
+opInfo "<<" = (10,  RightAssoc)
 opInfo "**" = (150, RightAssoc)
 opInfo "*"  = (100, LeftAssoc)
 opInfo "/"  = (100, LeftAssoc)

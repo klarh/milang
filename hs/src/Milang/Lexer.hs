@@ -30,16 +30,27 @@ type Parser = Parsec Void Text
 lineComment :: Parser ()
 lineComment = L.skipLineComment "--"
 
+-- | Block comment (/* ... */ style, nestable)
+blockComment :: Parser ()
+blockComment = L.skipBlockCommentNested "/*" "*/"
+
+-- | Single-line block comment for inline use (no newlines allowed inside)
+inlineBlockComment :: Parser ()
+inlineBlockComment = try $ do
+  _ <- string "/*"
+  _ <- manyTill (satisfy (/= '\n')) (string "*/")
+  pure ()
+
 -- | Space consumer: eats spaces/tabs but NOT newlines (important for indentation)
 sc :: Parser ()
 sc = L.space
   (void $ some (char ' ' <|> char '\t'))
   lineComment
-  empty
+  inlineBlockComment
 
 -- | Space consumer that also eats newlines (for inside braces)
 scn :: Parser ()
-scn = L.space space1 lineComment empty
+scn = L.space space1 lineComment blockComment
 
 -- | Wrap a parser to consume trailing whitespace (not newlines)
 lexeme :: Parser a -> Parser a

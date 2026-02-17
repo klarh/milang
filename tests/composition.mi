@@ -1,0 +1,23 @@
+-- Function composition operators
+
+double x = x * 2
+inc x = x + 1
+square x = x * x
+
+-- Left-to-right composition (>>)
+double_then_inc = double >> inc
+r1 = double_then_inc 5
+
+-- Right-to-left composition (<<)
+inc_then_double = double << inc
+r2 = inc_then_double 5
+
+-- Chaining
+pipeline = double >> inc >> square
+r3 = pipeline 3
+
+-- Composition with pipe operator
+r4 = 5 |> double >> inc
+
+-- Right-to-left chain
+r5 = (square << inc << double) 4

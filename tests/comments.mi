@@ -1,0 +1,14 @@
+/* Block comment at file start */
+
+-- Line comment
+x = 42
+
+y = x + 1 /* inline block comment */
+
+/* Multi-line
+   block
+   comment */
+z = y * 2
+
+/* Nested /* block /* comments */ work */ too */
+w = z + 1
