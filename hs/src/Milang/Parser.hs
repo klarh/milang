@@ -3,7 +3,7 @@ module Milang.Parser (parseProgram, parseExpr) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Char (isUpper)
+import Data.Char (isUpper, isDigit)
 import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -104,9 +104,15 @@ pBindingAt ref = do
 
 -- Name on the LHS of a binding: lowercase or uppercase (for module aliases)
 -- Uppercase binding must be followed by = or := (not {, which would be a record)
+-- Positional names (_0, _1, ...) are reserved and cannot be used as field names
 pBindingName :: Parser Text
 pBindingName = try $ do
   n <- pAnyIdentifier
+  -- Reject positional field names (_0, _1, ...)
+  case T.uncons n of
+    Just ('_', rest) | not (T.null rest) && T.all isDigit rest ->
+      fail $ "'" ++ T.unpack n ++ "' is reserved for positional field access"
+    _ -> pure ()
   -- Peek ahead: must be followed by params or =/:=
   -- If uppercase and next char is '{', this isn't a binding — fail
   if isUpper (T.head n)
@@ -417,6 +423,11 @@ pBraceBinding = do
   skipBraceWhitespace
   pos <- grabPos
   name <- pIdentifier
+  -- Reject positional field names (_0, _1, ...)
+  case T.uncons name of
+    Just ('_', rest) | not (T.null rest) && T.all isDigit rest ->
+      fail $ "'" ++ T.unpack name ++ "' is reserved for positional field access"
+    _ -> pure ()
   params <- many (try pIdentifier)
   lazy <- pBindOp
   body <- pExpr
