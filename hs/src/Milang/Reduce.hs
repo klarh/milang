@@ -295,11 +295,20 @@ substAlt n e a = a { altBody = substExpr n e (altBody a)
 
 -- ── Field access reduction ────────────────────────────────────────
 
+-- | Check if a name is a positional field (_0, _1, ...) and return the index
+positionalIndex :: Text -> Maybe Int
+positionalIndex t = case T.uncons t of
+  Just ('_', rest) | not (T.null rest) && T.all (\c -> c >= '0' && c <= '9') rest ->
+    Just (read (T.unpack rest))
+  _ -> Nothing
+
 reduceFieldAccess :: Expr -> Text -> Expr
 reduceFieldAccess (Record _ bs) field =
-  case [bindBody b | b <- bs, bindName b == field] of
-    (v:_) -> v
-    []    -> FieldAccess (Record "" bs) field  -- field not found, residual
+  case positionalIndex field of
+    Just i | i < length bs -> bindBody (bs !! i)
+    _ -> case [bindBody b | b <- bs, bindName b == field] of
+      (v:_) -> v
+      []    -> FieldAccess (Record "" bs) field  -- field not found, residual
 reduceFieldAccess (Namespace bs) field =
   case [bindBody b | b <- bs, bindName b == field] of
     (v:_) -> v
@@ -367,12 +376,17 @@ matchListElems _ _ = Nothing
 matchFields :: [(Text, Pat)] -> [Binding] -> Maybe [(Text, Expr)]
 matchFields [] _ = Just []
 matchFields ((f, p):fps) bs =
-  case [bindBody b | b <- bs, bindName b == f] of
-    (v:_) -> do
-      binds1 <- matchPat p v
+  case positionalIndex f of
+    Just i | i < length bs -> do
+      binds1 <- matchPat p (bindBody (bs !! i))
       binds2 <- matchFields fps bs
       Just (binds1 ++ binds2)
-    [] -> Nothing
+    _ -> case [bindBody b | b <- bs, bindName b == f] of
+      (v:_) -> do
+        binds1 <- matchPat p v
+        binds2 <- matchFields fps bs
+        Just (binds1 ++ binds2)
+      [] -> Nothing
 
 -- ── Compile-time warnings ─────────────────────────────────────────
 
@@ -388,10 +402,12 @@ warnings = warnExpr
 warnExpr :: Expr -> [Warning]
 -- Field access on a known record where field doesn't exist
 warnExpr (FieldAccess (Record tag bs) field) =
-  case [() | b <- bs, bindName b == field] of
-    [] -> [Warning Nothing $
-            "field '" ++ T.unpack field ++ "' not found in record '" ++ T.unpack tag ++ "'"]
-    _  -> []
+  case positionalIndex field of
+    Just i | i < length bs -> []  -- valid positional access
+    _ -> case [() | b <- bs, bindName b == field] of
+      [] -> [Warning Nothing $
+              "field '" ++ T.unpack field ++ "' not found in record '" ++ T.unpack tag ++ "'"]
+      _  -> []
 -- Case on a known value where no pattern matches
 warnExpr (Case scrut alts)
   | not (isResidual scrut) =

@@ -1,0 +1,17 @@
+-- Positional field access on named records
+pt = Point {x = 10; y = 20}
+px = pt._0
+py = pt._1
+
+-- Positional access on ADT constructors
+Shape = {Circle _; Rect _ _}
+c = Shape.Circle 5
+cr = c._0
+
+r = Shape.Rect 3 4
+rw = r._0
+rh = r._1
+
+-- Positional destructuring in patterns
+first = pt ->
+  Point {_0} = _0
