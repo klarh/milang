@@ -1,0 +1,16 @@
+-- Mutual recursion: isEven/isOdd call each other
+isEven n = n ->
+  0 = 1
+  _ = isOdd (n - 1)
+
+isOdd n = n ->
+  0 = 0
+  _ = isEven (n - 1)
+
+r1 = isEven 10
+r2 = isOdd 10
+r3 = isEven 7
+r4 = isOdd 7
+
+-- TCO: mutual recursion at depth 100000
+r5 = isEven 100000

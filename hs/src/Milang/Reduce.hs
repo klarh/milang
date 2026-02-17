@@ -7,6 +7,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Maybe (isNothing, isJust)
 import Data.Char (isUpper)
+import Data.Graph (stronglyConnComp, SCC(..))
 import Milang.Syntax
 
 -- | Environment: maps names to (possibly residual) expressions
@@ -55,7 +56,6 @@ reduce env (Lam p b) =
 reduce env (With body bindings) =
   let env' = evalBindings env bindings
       body' = reduce env' body
-      -- Keep residual bindings (might have side effects)
       bs' = map (reduceBind env') bindings
       residualBs = filter (isResidual . bindBody) bs'
   in if null residualBs then body' else With body' residualBs
@@ -107,25 +107,27 @@ reduce env (RecordUpdate e bs) =
 -- Self-referencing (recursive) bindings are NOT added to the env — they stay
 -- as residual Names so the reducer doesn't try to inline them infinitely.
 evalBindings :: Env -> [Binding] -> Env
-evalBindings env [] = env
-evalBindings env (b:bs) =
+evalBindings env bindings =
+  let bindNames = Set.fromList [bindName b | b <- bindings]
+      nodes = [ (b, bindName b,
+                 Set.toList $ Set.intersection bindNames
+                   (exprFreeVars (wrapLambda (bindParams b) (bindBody b))))
+               | b <- bindings ]
+      sccs = stronglyConnComp nodes
+  in foldl evalSCC env sccs
+
+-- Evaluate one SCC group
+evalSCC :: Env -> SCC Binding -> Env
+evalSCC env (AcyclicSCC b) =
   let name = bindName b
       body = wrapLambda (bindParams b) (bindBody b)
-      isRecursive = isSelfReferencing name body
       val = if bindLazy b
-            then bindBody b  -- lazy: store unevaluated
-            else if isRecursive
-                 then body  -- recursive: store without reducing
-                 else reduce env body
-      -- For recursive bindings, don't add to env so calls stay residual
-      env' = if isRecursive
-             then env
-             else Map.insert name val env
-  in evalBindings env' bs
-
--- | Check if an expression references a given name (used to detect recursion)
-isSelfReferencing :: Text -> Expr -> Bool
-isSelfReferencing name expr = name `Set.member` exprFreeVars expr
+            then bindBody b
+            else reduce env body
+  in Map.insert name val env
+evalSCC env (CyclicSCC _) =
+  -- Mutually recursive group: don't add to env, keep calls residual in codegen
+  env
 
 -- Wrap a body in lambdas for its parameters: f x y = e → \x -> \y -> e
 wrapLambda :: [Text] -> Expr -> Expr
