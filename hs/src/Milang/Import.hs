@@ -310,11 +310,11 @@ extractImportOpts dir bs = do
   pkgFlags <- concat <$> mapM getPkgConfig bs
   pure $ LinkInfo (flags ++ pkgFlags) srcs
   where
-    getFlag (Binding "flags" _ _ (StringLit s)) = words (T.unpack s)
+    getFlag (Binding "flags" _ _ (StringLit s) _) = words (T.unpack s)
     getFlag _ = []
-    getSrc d (Binding "src" _ _ (StringLit s)) = [normalise (d </> T.unpack s)]
+    getSrc d (Binding "src" _ _ (StringLit s) _) = [normalise (d </> T.unpack s)]
     getSrc _ _ = []
-    getPkgConfig (Binding "pkg" _ _ (StringLit pkg)) = do
+    getPkgConfig (Binding "pkg" _ _ (StringLit pkg) _) = do
       let pkgStr = T.unpack pkg
       (ec1, cflags, _) <- readProcessWithExitCode
         "pkg-config" ["--cflags", pkgStr] ""
@@ -328,7 +328,7 @@ extractImportOpts dir bs = do
 -- | Extract sha256 hash from import options, if present
 extractSha256 :: [Binding] -> Maybe String
 extractSha256 [] = Nothing
-extractSha256 (Binding "sha256" _ _ (StringLit s) : _) = Just (T.unpack s)
+extractSha256 (Binding "sha256" _ _ (StringLit s) _ : _) = Just (T.unpack s)
 extractSha256 (_ : bs) = extractSha256 bs
 
 -- | Auto-detect link info for .h imports
@@ -394,6 +394,7 @@ loadCHeader path = do
         , bindLazy   = False
         , bindParams = []
         , bindBody   = CFunction hdr n r p
+        , bindPos    = Nothing
         }
 
 -- | Resolve bindings, detecting circular imports and marking them lazy.

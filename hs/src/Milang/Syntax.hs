@@ -5,6 +5,16 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.List (intercalate)
 
+-- | Source position for error reporting
+data SrcPos = SrcPos
+  { srcFile :: !String
+  , srcLine :: !Int
+  , srcCol  :: !Int
+  } deriving (Show, Eq)
+
+prettySrcPos :: SrcPos -> String
+prettySrcPos (SrcPos f l c) = f ++ ":" ++ show l ++ ":" ++ show c
+
 -- | C type representation for FFI
 data CType
   = CInt          -- int, long, short, etc.
@@ -38,11 +48,16 @@ data Expr
   | CFunction !Text !Text CType [CType]  -- C FFI: header, c_name, return type, param types
   deriving (Show, Eq)
 
+-- | Extract source position from an expression (checks binding context)
+exprPos :: Expr -> Maybe SrcPos
+exprPos _ = Nothing
+
 data Binding = Binding
   { bindName :: !Text
   , bindLazy :: !Bool      -- True = :=, False = =
   , bindParams :: ![Text]  -- f x y = ... → params = [x, y]
   , bindBody :: Expr
+  , bindPos :: !(Maybe SrcPos)  -- source location of this binding
   } deriving (Show, Eq)
 
 -- | Pattern for case expressions / destructuring
@@ -94,7 +109,7 @@ prettyBindings :: Int -> [Binding] -> String
 prettyBindings i = concatMap (\b -> replicate i ' ' ++ prettyBinding i b ++ "\n")
 
 prettyBinding :: Int -> Binding -> String
-prettyBinding i (Binding n lz ps body) =
+prettyBinding i (Binding n lz ps body _) =
   T.unpack n ++ concatMap ((" " ++) . T.unpack) ps ++
   (if lz then " := " else " = ") ++ prettyExpr i body
 

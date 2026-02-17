@@ -13,6 +13,12 @@ import Control.Monad (void)
 import Milang.Syntax
 import Milang.Lexer (Parser, sc, lexeme, symbol)
 
+-- | Capture current source position as SrcPos
+grabPos :: Parser SrcPos
+grabPos = do
+  sp <- getSourcePos
+  pure $ SrcPos (sourceName sp) (unPos (sourceLine sp)) (unPos (sourceColumn sp))
+
 -- ── Entry points ──────────────────────────────────────────────────
 
 parseProgram :: String -> Text -> Either (ParseErrorBundle Text Void) Expr
@@ -55,6 +61,7 @@ pBindingsAt ref = try (pDestructBinding ref) <|> (pure <$> pBindingAt ref)
 -- Desugars to: _tmp_N = expr; field1 = _tmp_N.field1; alias = _tmp_N.field2; ...
 pDestructBinding :: Pos -> Parser [Binding]
 pDestructBinding _ref = do
+  pos <- grabPos
   off <- getOffset
   _ <- symbol "{"
   fields <- pDestructField `sepEndBy1` pSep
@@ -62,9 +69,9 @@ pDestructBinding _ref = do
   _ <- symbol "="
   body <- pExpr
   let tmpName = T.pack ("_destruct_" ++ show off)
-      tmpBind = Binding tmpName False [] body
+      tmpBind = Binding tmpName False [] body (Just pos)
       fieldBinds = map (\(localName, fieldName) ->
-        Binding localName False [] (FieldAccess (Name tmpName) fieldName)
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos)
         ) fields
   pure (tmpBind : fieldBinds)
 
@@ -81,22 +88,19 @@ pDestructField = do
 -- Parse a binding given its indent level
 pBindingAt :: Pos -> Parser Binding
 pBindingAt ref = do
+  pos <- grabPos
   name <- pBindingName
   params <- many (try pIdentifier)
   lazy <- pBindOp
-  -- Body expression: either on same line, or deferred to indented block
   body <- try pExpr <|> pure (IntLit 0)
-  -- Check for trailing -> (match scope)
   mMatch <- optional (try pMatchArrow)
   let body' = case mMatch of
         Just alts -> Case body alts
         Nothing   -> body
-  -- Check for trailing brace scope: expr {bindings}
   mWith <- optional (try pBraceWith)
   let body'' = maybe body' (With body') mWith
-  -- Check for indented child bindings or match alts
   children <- pIndentedChildren ref body''
-  pure $ Binding name lazy params children
+  pure $ Binding name lazy params children (Just pos)
 
 -- Name on the LHS of a binding: lowercase or uppercase (for module aliases)
 -- Uppercase binding must be followed by = or := (not {, which would be a record)
@@ -152,10 +156,11 @@ pStatementAt pos = try (pBindingsAt pos) <|> pBareExpr
 -- Parse a bare expression and wrap it in an auto-named binding
 pBareExpr :: Parser [Binding]
 pBareExpr = do
+  pos <- grabPos
   off <- getOffset
   e <- pExpr
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding name False [] e]
+  pure [Binding name False [] e (Just pos)]
 
 -- Split bindings: if the last item is an auto-generated statement binding,
 -- use its body as the With result; otherwise use the original body.
@@ -348,12 +353,12 @@ pConstructorDecl = do
 
 -- Convert a constructor declaration to a binding
 ctorToBinding :: (Text, Int) -> Binding
-ctorToBinding (name, 0) = Binding name False [] (Record name [])
+ctorToBinding (name, 0) = Binding name False [] (Record name []) Nothing
 ctorToBinding (name, arity) =
   let params = [T.pack ("_" ++ show i) | i <- [0 .. arity - 1]]
-      fields = [Binding p False [] (Name p) | p <- params]
+      fields = [Binding p False [] (Name p) Nothing | p <- params]
       body = foldr (\p b -> Lam p b) (Record name fields) params
-  in Binding name False [] body
+  in Binding name False [] body Nothing
 
 pBraceBindings :: Parser [Binding]
 pBraceBindings = concat <$> (pBraceBindingOrDestruct `sepEndBy` pSep)
@@ -366,14 +371,16 @@ pBraceBindingOrDestruct = try pBraceDestruct <|> try (pure <$> pBraceBinding) <|
 pBraceBareExpr :: Parser [Binding]
 pBraceBareExpr = do
   skipBraceWhitespace
+  pos <- grabPos
   off <- getOffset
   e <- pExpr
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding name False [] e]
+  pure [Binding name False [] e (Just pos)]
 
 pBraceDestruct :: Parser [Binding]
 pBraceDestruct = do
   skipBraceWhitespace
+  pos <- grabPos
   off <- getOffset
   _ <- symbol "{"
   fields <- pDestructField `sepEndBy1` pSep
@@ -381,23 +388,23 @@ pBraceDestruct = do
   _ <- symbol "="
   body <- pExpr
   let tmpName = T.pack ("_destruct_" ++ show off)
-      tmpBind = Binding tmpName False [] body
+      tmpBind = Binding tmpName False [] body (Just pos)
       fieldBinds = map (\(localName, fieldName) ->
-        Binding localName False [] (FieldAccess (Name tmpName) fieldName)
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos)
         ) fields
   pure (tmpBind : fieldBinds)
 
 pBraceBinding :: Parser Binding
 pBraceBinding = do
   skipBraceWhitespace
+  pos <- grabPos
   name <- pIdentifier
   params <- many (try pIdentifier)
   lazy <- pBindOp
   body <- pExpr
-  -- Allow nested brace scopes
   mWith <- optional (try pBraceWith)
   let body' = maybe body (With body) mWith
-  pure $ Binding name lazy params body'
+  pure $ Binding name lazy params body' (Just pos)
 
 pSep :: Parser ()
 pSep = void (symbol ";") <|> void (some (lexeme newline))

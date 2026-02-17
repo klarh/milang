@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Milang.Reduce (reduce, Env, emptyEnv) where
+module Milang.Reduce (reduce, Env, emptyEnv, warnings, Warning(..)) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -206,12 +206,12 @@ reduceApp (Lam p body) arg =
 -- Uppercase constructor application: Just 5 → Just {_0 = 5}
 reduceApp (Name n) arg
   | not (T.null n) && isUpper (T.head n) =
-    Record n [Binding "_0" False [] arg]
+    Record n [Binding "_0" False [] arg Nothing]
 -- Positional record extension: (Pair {_0=1}) 2 → Pair {_0=1, _1=2}
 reduceApp (Record tag bs) arg
   | isPositionalRecord bs =
     let nextIdx = "_" <> T.pack (show (length bs))
-    in Record tag (bs ++ [Binding nextIdx False [] arg])
+    in Record tag (bs ++ [Binding nextIdx False [] arg Nothing])
 -- Residual
 reduceApp f x = App f x
 
@@ -361,3 +361,66 @@ matchFields ((f, p):fps) bs =
       binds2 <- matchFields fps bs
       Just (binds1 ++ binds2)
     [] -> Nothing
+
+-- ── Compile-time warnings ─────────────────────────────────────────
+
+data Warning = Warning
+  { warnPos :: Maybe SrcPos
+  , warnMsg :: String
+  } deriving (Show)
+
+-- | Analyze a reduced AST for potential issues
+warnings :: Expr -> [Warning]
+warnings = warnExpr
+
+warnExpr :: Expr -> [Warning]
+-- Field access on a known record where field doesn't exist
+warnExpr (FieldAccess (Record tag bs) field) =
+  case [() | b <- bs, bindName b == field] of
+    [] -> [Warning Nothing $
+            "field '" ++ T.unpack field ++ "' not found in record '" ++ T.unpack tag ++ "'"]
+    _  -> []
+-- Case on a known value where no pattern matches
+warnExpr (Case scrut alts)
+  | not (isResidual scrut) =
+    case tryMatch scrut alts of
+      Nothing -> [Warning Nothing "no pattern matches this value"]
+      Just _  -> concatMap (warnExpr . altBody) alts
+  | otherwise = warnExpr scrut ++ concatMap (warnExpr . altBody) alts
+-- BinOp type mismatch on known values
+warnExpr (BinOp op l r)
+  | not (isResidual l) && not (isResidual r) = warnBinOp op l r
+  | otherwise = warnExpr l ++ warnExpr r
+-- Recurse into subexpressions
+warnExpr (App f x) = warnExpr f ++ warnExpr x
+warnExpr (Lam _ b) = warnExpr b
+warnExpr (With body bs) = warnExpr body ++ concatMap warnBinding bs
+warnExpr (Record _ bs) = concatMap warnBinding bs
+warnExpr (FieldAccess e _) = warnExpr e
+warnExpr (Namespace bs) = concatMap warnBinding bs
+warnExpr (Case s alts) = warnExpr s ++ concatMap (warnExpr . altBody) alts
+warnExpr (Thunk e) = warnExpr e
+warnExpr (ListLit es) = concatMap warnExpr es
+warnExpr (RecordUpdate e bs) = warnExpr e ++ concatMap warnBinding bs
+warnExpr _ = []
+
+warnBinding :: Binding -> [Warning]
+warnBinding b =
+  let ws = warnExpr (bindBody b)
+  in map (\w -> w { warnPos = warnPos w <|> bindPos b }) ws
+  where
+    Nothing <|> y = y
+    x       <|> _ = x
+
+warnBinOp :: Text -> Expr -> Expr -> [Warning]
+warnBinOp "+" (StringLit _) (IntLit _) = [Warning Nothing "cannot add string and int"]
+warnBinOp "+" (IntLit _) (StringLit _) = [Warning Nothing "cannot add int and string"]
+warnBinOp "+" (StringLit _) (FloatLit _) = [Warning Nothing "cannot add string and float"]
+warnBinOp "+" (FloatLit _) (StringLit _) = [Warning Nothing "cannot add float and string"]
+warnBinOp "-" (StringLit _) _ = [Warning Nothing "cannot subtract from string"]
+warnBinOp "-" _ (StringLit _) = [Warning Nothing "cannot subtract string"]
+warnBinOp "*" (StringLit _) _ = [Warning Nothing "cannot multiply string"]
+warnBinOp "*" _ (StringLit _) = [Warning Nothing "cannot multiply by string"]
+warnBinOp "/" _ (IntLit 0) = [Warning Nothing "division by zero"]
+warnBinOp "/" _ (FloatLit 0) = [Warning Nothing "division by zero"]
+warnBinOp _ _ _ = []

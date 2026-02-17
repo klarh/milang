@@ -14,7 +14,8 @@ import qualified Data.Text.IO as TIO
 import Milang.Syntax (prettyExpr, Expr)
 import Milang.Parser (parseProgram)
 import Milang.Import (resolveImports, resolveAndPin, findURLImports, LinkInfo(..))
-import Milang.Reduce (reduce, emptyEnv)
+import Milang.Reduce (reduce, emptyEnv, warnings, Warning(..))
+import Milang.Syntax (prettySrcPos)
 import Milang.Codegen (codegen)
 import qualified Data.Map.Strict as Map
 
@@ -64,7 +65,18 @@ loadAndReduce file = do
   result <- loadAndParse file
   case result of
     Left err  -> pure $ Left err
-    Right (ast, li) -> pure $ Right (reduce emptyEnv ast, li)
+    Right (ast, li) -> do
+      let reduced = reduce emptyEnv ast
+      let ws = warnings reduced
+      mapM_ (printWarning file) ws
+      pure $ Right (reduced, li)
+
+printWarning :: FilePath -> Warning -> IO ()
+printWarning _file (Warning mpos msg) =
+  let loc = case mpos of
+              Just pos -> prettySrcPos pos
+              Nothing  -> _file
+  in hPutStrLn stderr $ "warning: " ++ loc ++ ": " ++ msg
 
 -- | dump: show parsed AST (before import resolution)
 cmdDump :: FilePath -> IO ()
