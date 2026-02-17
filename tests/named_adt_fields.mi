@@ -1,0 +1,44 @@
+-- Named ADT constructor fields
+
+-- Declaration with named fields
+Shape = {Circle r; Rect w h; Point}
+
+-- Positional construction produces named fields
+c1 = Circle 5
+r1 = c1.r
+r2 = c1._0
+
+-- Multi-field positional
+rect = Rect 3 4
+r3 = rect.w
+r4 = rect.h
+r5 = rect._0
+r6 = rect._1
+
+-- Named construction also works
+c2 = Circle {r = 10}
+r7 = c2.r
+
+-- Zero-field constructor
+p = Point
+
+-- Pattern match with named fields
+area shape = shape ->
+  Circle {r = r} = r * r
+  Rect {w = w; h = h} = w * h
+  Point = 0
+
+r8 = area c1
+r9 = area rect
+r10 = area p
+r11 = area c2
+
+-- Option type with named field
+Option = {Some val; None}
+x = Some 42
+r12 = x.val
+r13 = x._0
+
+-- Old-style ad-hoc constructors still use positional
+j = Just 99
+r14 = j._0

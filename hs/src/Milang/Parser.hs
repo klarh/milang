@@ -384,23 +384,31 @@ pUnionDecl = do
   _ <- symbol "}"
   pure $ Namespace (map ctorToBinding ctors)
 
--- Parse a single constructor: UpperName followed by zero or more _
-pConstructorDecl :: Parser (Text, Int)
+-- Parse a single constructor: UpperName followed by zero or more field names or _
+pConstructorDecl :: Parser (Text, [Text])
 pConstructorDecl = do
   skipBraceWhitespace
   name <- pAnyIdentifier
   if T.null name || not (isUpper (T.head name))
     then fail "expected uppercase constructor name"
     else do
-      args <- many (symbol "_")
-      pure (name, length args)
+      fields <- many pConstructorField
+      let named = zipWith (\f i -> if f == "_" then T.pack ("_" ++ show i) else f)
+                          fields [0::Int ..]
+      pure (name, named)
+
+-- Parse a constructor field: either _ or a lowercase name
+pConstructorField :: Parser Text
+pConstructorField = symbol "_" <|> lexeme (do
+  c <- lowerChar
+  cs <- many (alphaNumChar <|> char '_' <|> char '\'')
+  pure $ T.pack (c : cs))
 
 -- Convert a constructor declaration to a binding
-ctorToBinding :: (Text, Int) -> Binding
-ctorToBinding (name, 0) = Binding name False [] (Record name []) Nothing
-ctorToBinding (name, arity) =
-  let params = [T.pack ("_" ++ show i) | i <- [0 .. arity - 1]]
-      fields = [Binding p False [] (Name p) Nothing | p <- params]
+ctorToBinding :: (Text, [Text]) -> Binding
+ctorToBinding (name, []) = Binding name False [] (Record name []) Nothing
+ctorToBinding (name, params) =
+  let fields = [Binding p False [] (Name p) Nothing | p <- params]
       body = foldr (\p b -> Lam p b) (Record name fields) params
   in Binding name False [] body Nothing
 
@@ -524,6 +532,7 @@ pPattern = choice
   , pPatLitStr
   , pPatWild
   , pPatVar
+  , pPatBareConstructor
   ]
 
 -- Tag {x; y} or Tag {x = pat; y = pat}
@@ -590,3 +599,11 @@ pPatWild = PWild <$ symbol "_"
 
 pPatVar :: Parser Pat
 pPatVar = PVar <$> pIdentifier
+
+-- Bare uppercase name as zero-field constructor pattern: Point = ...
+pPatBareConstructor :: Parser Pat
+pPatBareConstructor = try $ do
+  tag <- pAnyIdentifier
+  if not (T.null tag) && isUpper (T.head tag)
+    then pure $ PRec tag []
+    else fail "expected uppercase constructor"

@@ -118,13 +118,23 @@ reduce env (RecordUpdate e bs) =
 -- as residual Names so the reducer doesn't try to inline them infinitely.
 evalBindings :: Env -> [Binding] -> Env
 evalBindings env bindings =
-  let bindNames = Set.fromList [bindName b | b <- bindings]
+  let expanded = concatMap expandUnion bindings
+      bindNames = Set.fromList [bindName b | b <- expanded]
       nodes = [ (b, bindName b,
                  Set.toList $ Set.intersection bindNames
                    (exprFreeVars (wrapLambda (bindParams b) (bindBody b))))
-               | b <- bindings ]
+               | b <- expanded ]
       sccs = stronglyConnComp nodes
   in foldl evalSCC env sccs
+
+-- | Expand union declarations: if a binding's body is a Namespace of all-uppercase
+-- bindings, inject those as additional top-level bindings
+expandUnion :: Binding -> [Binding]
+expandUnion b = case bindBody b of
+  Namespace ctors
+    | all (\c -> let n = bindName c in not (T.null n) && isUpper (T.head n)) ctors ->
+      b : ctors  -- keep the Shape binding + add Circle, Rect, etc.
+  _ -> [b]
 
 -- Evaluate one SCC group
 evalSCC :: Env -> SCC Binding -> Env
