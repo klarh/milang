@@ -1,0 +1,2 @@
+-- Test world.getEnv and world.process.exec
+main world = done {home = world.getEnv "HOME"; _p = world.io.println home.value; result = world.process.exec "echo" ["hello from exec"]; _q = world.io.println result.value; done = 0}

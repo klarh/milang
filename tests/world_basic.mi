@@ -1,0 +1,6 @@
+-- Test capability-based IO via world record
+
+-- Helper that uses a restricted capability
+greet io = io.println "restricted works"
+
+main world = greet world.io

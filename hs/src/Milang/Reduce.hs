@@ -53,7 +53,11 @@ reduce env (Lam p b) =
 
 reduce env (With body bindings) =
   let env' = evalBindings env bindings
-  in reduce env' body
+      body' = reduce env' body
+      -- Keep residual bindings (might have side effects)
+      bs' = map (reduceBind env') bindings
+      residualBs = filter (isResidual . bindBody) bs'
+  in if null residualBs then body' else With body' residualBs
 
 reduce env (Record tag bindings) =
   let bs' = map (reduceBind env) bindings
