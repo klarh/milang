@@ -246,7 +246,7 @@ collectImportURLs base = go
     go (Record _ bs)    = concatMap (go . bindBody) bs
     go (FieldAccess e _)= go e
     go (Namespace bs)   = concatMap (go . bindBody) bs
-    go (Case s as)      = go s ++ concatMap (go . altBody) as
+    go (Case s as)      = go s ++ concatMap (\a -> maybe [] go (altGuard a) ++ go (altBody a)) as
     go (Thunk b)        = go b
     go (ListLit es)     = concatMap go es
     go (RecordUpdate e bs) = go e ++ concatMap (go . bindBody) bs
@@ -453,11 +453,15 @@ resolveAlts ctx dir = go
     go [] = pure $ Right []
     go (a:as) = do
       body' <- resolveExpr ctx dir (altBody a)
+      guard' <- case altGuard a of
+        Nothing -> pure $ Right Nothing
+        Just g  -> fmap (fmap Just) (resolveExpr ctx dir g)
       rest <- go as
       pure $ do
         b' <- body'
+        g' <- guard'
         as' <- rest
-        Right (a { altBody = b' } : as')
+        Right (a { altBody = b', altGuard = g' } : as')
 
 -- | Find all URL imports in an AST.  Returns (url, Maybe sha256) pairs.
 -- Used by `milang pin` to discover which imports need hashes.
@@ -475,7 +479,7 @@ findURLImports = go
     go (Record _ bs)       = concatMap (go . bindBody) bs
     go (FieldAccess e _)   = go e
     go (Namespace bs)      = concatMap (go . bindBody) bs
-    go (Case s as)         = go s ++ concatMap (go . altBody) as
+    go (Case s as)         = go s ++ concatMap (\a -> maybe [] go (altGuard a) ++ go (altBody a)) as
     go (Thunk b)           = go b
     go (ListLit es)        = concatMap go es
     go (RecordUpdate e bs) = go e ++ concatMap (go . bindBody) bs

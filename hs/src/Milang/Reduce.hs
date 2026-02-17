@@ -76,7 +76,7 @@ reduce env (Namespace bindings) =
 reduce env (Case scrut alts) =
   let scrut' = forceThunk env (reduce env scrut)
   in if isResidual scrut'
-       then Case scrut' (map (\(Alt p b) -> Alt p (reduce env b)) alts)
+       then Case scrut' (map (\(Alt p g b) -> Alt p (fmap (reduce env) g) (reduce env b)) alts)
        else reduceCase env scrut' alts
 
 reduce _ e@(CFunction {}) = e  -- C FFI: irreducible
@@ -243,7 +243,9 @@ exprFreeVars (Namespace bs)   =
   let bnames = Set.fromList (map bindName bs)
   in Set.difference (Set.unions (map (exprFreeVars . bindBody) bs)) bnames
 exprFreeVars (Case s alts)    =
-  Set.union (exprFreeVars s) (Set.unions (map (exprFreeVars . altBody) alts))
+  Set.union (exprFreeVars s) (Set.unions (map altFreeVars alts))
+  where altFreeVars (Alt _ mg b) =
+          Set.union (exprFreeVars b) (maybe Set.empty exprFreeVars mg)
 exprFreeVars (CFunction {})   = Set.empty
 exprFreeVars (Thunk body)     = exprFreeVars body
 exprFreeVars (ListLit es)     = Set.unions (map exprFreeVars es)
@@ -288,7 +290,8 @@ substBind :: Text -> Expr -> Binding -> Binding
 substBind n e b = b { bindBody = substExpr n e (bindBody b) }
 
 substAlt :: Text -> Expr -> Alt -> Alt
-substAlt n e a = a { altBody = substExpr n e (altBody a) }
+substAlt n e a = a { altBody = substExpr n e (altBody a)
+                   , altGuard = fmap (substExpr n e) (altGuard a) }
 
 -- ── Field access reduction ────────────────────────────────────────
 
@@ -307,18 +310,27 @@ reduceFieldAccess e field = FieldAccess e field
 
 reduceCase :: Env -> Expr -> [Alt] -> Expr
 reduceCase env scrut alts =
-  case tryMatch scrut alts of
+  case tryMatch env scrut alts of
     Just (binds, body) ->
       let env' = Map.union (Map.fromList binds) env
       in reduce env' body
     Nothing -> Case scrut alts  -- residual
 
-tryMatch :: Expr -> [Alt] -> Maybe ([(Text, Expr)], Expr)
-tryMatch _ [] = Nothing
-tryMatch scrut (Alt pat body : rest) =
+tryMatch :: Env -> Expr -> [Alt] -> Maybe ([(Text, Expr)], Expr)
+tryMatch _ _ [] = Nothing
+tryMatch env scrut (Alt pat guard body : rest) =
   case matchPat pat scrut of
-    Just binds -> Just (binds, body)
-    Nothing    -> tryMatch scrut rest
+    Just binds ->
+      case guard of
+        Nothing -> Just (binds, body)
+        Just g  ->
+          let env' = Map.union (Map.fromList binds) env
+              g' = reduce env' g
+          in case g' of
+               IntLit 0 -> tryMatch env scrut rest  -- guard failed
+               IntLit _ -> Just (binds, body)       -- guard passed
+               _        -> Nothing                  -- guard residual, can't decide
+    Nothing -> tryMatch env scrut rest
 
 matchPat :: Pat -> Expr -> Maybe [(Text, Expr)]
 matchPat (PVar v) e = Just [(v, e)]
@@ -383,10 +395,10 @@ warnExpr (FieldAccess (Record tag bs) field) =
 -- Case on a known value where no pattern matches
 warnExpr (Case scrut alts)
   | not (isResidual scrut) =
-    case tryMatch scrut alts of
+    case tryMatch Map.empty scrut alts of
       Nothing -> [Warning Nothing "no pattern matches this value"]
-      Just _  -> concatMap (warnExpr . altBody) alts
-  | otherwise = warnExpr scrut ++ concatMap (warnExpr . altBody) alts
+      Just _  -> concatMap warnAlt alts
+  | otherwise = warnExpr scrut ++ concatMap warnAlt alts
 -- BinOp type mismatch on known values
 warnExpr (BinOp op l r)
   | not (isResidual l) && not (isResidual r) = warnBinOp op l r
@@ -398,11 +410,13 @@ warnExpr (With body bs) = warnExpr body ++ concatMap warnBinding bs
 warnExpr (Record _ bs) = concatMap warnBinding bs
 warnExpr (FieldAccess e _) = warnExpr e
 warnExpr (Namespace bs) = concatMap warnBinding bs
-warnExpr (Case s alts) = warnExpr s ++ concatMap (warnExpr . altBody) alts
 warnExpr (Thunk e) = warnExpr e
 warnExpr (ListLit es) = concatMap warnExpr es
 warnExpr (RecordUpdate e bs) = warnExpr e ++ concatMap warnBinding bs
 warnExpr _ = []
+
+warnAlt :: Alt -> [Warning]
+warnAlt (Alt _ mg b) = maybe [] warnExpr mg ++ warnExpr b
 
 warnBinding :: Binding -> [Warning]
 warnBinding b =

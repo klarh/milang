@@ -238,10 +238,13 @@ bindingStructToC st b = do
 
 -- | Convert an Alt to C MiAlt struct
 altToC :: CGState -> Alt -> IO String
-altToC st (Alt pat body) = do
+altToC st (Alt pat guard body) = do
   pc <- patToC pat
   bc <- exprToC st body
-  pure $ "mi_alt(" ++ pc ++ ", " ++ bc ++ ")"
+  gc <- case guard of
+    Nothing -> pure "NULL"
+    Just g  -> exprToC st g
+  pure $ "mi_alt(" ++ pc ++ ", " ++ gc ++ ", " ++ bc ++ ")"
 
 -- | Convert a Pat to C MiPat
 patToC :: Pat -> IO String
@@ -528,6 +531,7 @@ emitPreamble h = hPutStr h $ unlines
   , ""
   , "struct MiAlt {"
   , "  MiPat *pat;"
+  , "  MiExpr *guard;  // optional guard expression (NULL = no guard)"
   , "  MiExpr *body;"
   , "};"
   , ""
@@ -719,7 +723,7 @@ emitPreamble h = hPutStr h $ unlines
   , "  va_end(args); return p;"
   , "}"
   , ""
-  , "static MiAlt mi_alt(MiPat *pat, MiExpr *body) { MiAlt a; a.pat = pat; a.body = body; return a; }"
+  , "static MiAlt mi_alt(MiPat *pat, MiExpr *guard, MiExpr *body) { MiAlt a; a.pat = pat; a.guard = guard; a.body = body; return a; }"
   , ""
   , "static MiExpr *mi_expr_case(MiExpr *scrut, int n, ...) {"
   , "  MiExpr *e = calloc(1, sizeof(MiExpr)); e->type = EXPR_CASE;"
@@ -1001,6 +1005,11 @@ emitPreamble h = hPutStr h $ unlines
   , "      for (int i = 0; i < expr->as.cas.nalts; i++) {"
   , "        MiEnv *match_env = mi_env_new(env);"
   , "        if (mi_match(expr->as.cas.alts[i].pat, scrut, match_env)) {"
+  , "          // Check guard if present"
+  , "          if (expr->as.cas.alts[i].guard) {"
+  , "            MiVal gv = mi_eval(expr->as.cas.alts[i].guard, match_env);"
+  , "            if (gv.type == MI_INT && gv.as.i == 0) continue;  // guard failed"
+  , "          }"
   , "          // TCO: tail position"
   , "          expr = expr->as.cas.alts[i].body; env = match_env; goto eval_top;"
   , "        }"

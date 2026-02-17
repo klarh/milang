@@ -1,0 +1,15 @@
+classify x = x ->
+  | x < 0 = "negative"
+  | x == 0 = "zero"
+  | _ = "positive"
+
+r1 = classify 5
+r2 = classify 0
+r3 = classify (0 - 3)
+
+abs x = x ->
+  | x < 0 = 0 - x
+  | _ = x
+
+r4 = abs (0 - 7)
+r5 = abs 4

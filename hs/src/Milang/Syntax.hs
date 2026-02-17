@@ -71,8 +71,9 @@ data Pat
 
 -- | Case alternative
 data Alt = Alt
-  { altPat  :: Pat
-  , altBody :: Expr
+  { altPat   :: Pat
+  , altGuard :: Maybe Expr  -- optional guard: | condition
+  , altBody  :: Expr
   } deriving (Show, Eq)
 
 -- | Pretty-print an expression (for dump/debug)
@@ -114,7 +115,11 @@ prettyBinding i (Binding n lz ps body _) =
   (if lz then " := " else " = ") ++ prettyExpr i body
 
 prettyAlt :: Int -> Alt -> String
-prettyAlt i (Alt p b) = prettyPat p ++ " = " ++ prettyExpr i b
+prettyAlt i (Alt p mg b) =
+  let guardStr = case mg of
+        Nothing -> ""
+        Just g  -> " ? " ++ prettyExpr i g
+  in prettyPat p ++ guardStr ++ " = " ++ prettyExpr i b
 
 prettyPat :: Pat -> String
 prettyPat (PVar v)     = T.unpack v

@@ -180,16 +180,34 @@ pMatchArrow = do
   -- Parse optional inline alternatives separated by ;
   try (pMatchAlt `sepBy1` symbol ";") <|> pure []
 
--- Parse a single match alternative: Pattern = body [{ scope }]
+-- Parse a single match alternative: Pattern = body, or | guard = body
 pMatchAlt :: Parser Alt
-pMatchAlt = do
+pMatchAlt = try pGuardAlt <|> pPatternAlt
+
+-- Guard alternative: | condition = body
+pGuardAlt :: Parser Alt
+pGuardAlt = do
+  _ <- symbol "|"
+  cond <- pExpr
+  _ <- symbol "="
+  body <- pExpr
+  mWith <- optional (try pBraceWith)
+  let body' = maybe body (With body) mWith
+  -- | _ = body means "always match" (no guard needed)
+  let guard = case cond of
+        Name "_" -> Nothing
+        _        -> Just cond
+  pure $ Alt PWild guard body'
+
+-- Pattern alternative: Pattern = body
+pPatternAlt :: Parser Alt
+pPatternAlt = do
   pat <- pPattern
   _ <- symbol "="
   body <- pExpr
-  -- Allow trailing brace scope on the body
   mWith <- optional (try pBraceWith)
   let body' = maybe body (With body) mWith
-  pure $ Alt pat body'
+  pure $ Alt pat Nothing body'
 
 -- Parse a trailing {bindings} block (for With expressions)
 pBraceWith :: Parser [Binding]
