@@ -46,6 +46,8 @@ data Expr
   | ListLit [Expr]             -- [a, b, c]: list literal
   | RecordUpdate Expr [Binding] -- expr:{field = val, ...}: copy with overrides
   | CFunction !Text !Text CType [CType]  -- C FFI: header, c_name, return type, param types
+  | Quote Expr                 -- #expr: quote expression to AST records
+  | Splice Expr                -- $expr: splice AST records back to code
   deriving (Show, Eq)
 
 -- | Extract source position from an expression (checks binding context)
@@ -105,6 +107,8 @@ prettyExpr i (RecordUpdate e bs) =
   prettyExpr i e ++ ":{" ++ intercalate "; " (map (prettyBinding i) bs) ++ "}"
 prettyExpr _ (CFunction hdr name _ _) =
   "<cfn:" ++ T.unpack hdr ++ ":" ++ T.unpack name ++ ">"
+prettyExpr i (Quote e) = "#(" ++ prettyExpr i e ++ ")"
+prettyExpr i (Splice e) = "$(" ++ prettyExpr i e ++ ")"
 
 prettyBindings :: Int -> [Binding] -> String
 prettyBindings i = concatMap (\b -> replicate i ' ' ++ prettyBinding i b ++ "\n")

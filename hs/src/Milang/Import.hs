@@ -159,6 +159,14 @@ resolveExpr ctx dir (RecordUpdate base updates) = do
     ) updates
   pure $ RecordUpdate <$> base' <*> sequence resolvedUpdates
 
+resolveExpr ctx dir (Quote body) = do
+  body' <- resolveExpr ctx dir body
+  pure $ Quote <$> body'
+
+resolveExpr ctx dir (Splice body) = do
+  body' <- resolveExpr ctx dir body
+  pure $ Splice <$> body'
+
 -- | Unified import resolution. Handles both local and URL imports.
 -- `dir` is the base directory (filesystem path or URL base).
 -- `pathStr` is the import target (relative path or absolute URL).
@@ -250,6 +258,8 @@ collectImportURLs base = go
     go (Thunk b)        = go b
     go (ListLit es)     = concatMap go es
     go (RecordUpdate e bs) = go e ++ concatMap (go . bindBody) bs
+    go (Quote b)        = go b
+    go (Splice b)       = go b
     go _                = []
 
 -- | Resolve an import path. Returns (Either String Expr, Bool) where the Bool
@@ -483,4 +493,6 @@ findURLImports = go
     go (Thunk b)           = go b
     go (ListLit es)        = concatMap go es
     go (RecordUpdate e bs) = go e ++ concatMap (go . bindBody) bs
+    go (Quote b)           = go b
+    go (Splice b)          = go b
     go _                   = []

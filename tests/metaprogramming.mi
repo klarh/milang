@@ -1,0 +1,51 @@
+-- Metaprogramming: quote (#) and splice ($)
+
+-- Quote produces AST records
+q_int = #42
+q_var = #x
+q_op = #(1 + 2)
+
+-- Quote preserves syntax (doesn't evaluate)
+q_op_tag = q_op._0  -- first field access: the "op" field value is "+"
+
+-- Splice converts AST records back to code and evaluates
+r1 = $#42
+r2 = $#(1 + 2)
+
+-- Manual AST construction + splice
+ast = Op {op = "*"; left = Int {val = 6}; right = Int {val = 7}}
+r3 = $ast
+
+-- Macro function: double an expression
+double_ast expr = Op {op = "+"; left = expr; right = expr}
+r4 = $(double_ast #5)
+
+-- Macro: negate
+negate_ast expr = Op {op = "-"; left = Int {val = 0}; right = expr}
+r5 = $(negate_ast #42)
+
+-- Macro: build an if-expression
+make_if cond then_val else_val = App {
+  fn = App {
+    fn = App {
+      fn = Var {name = "if"};
+      arg = cond
+    };
+    arg = then_val
+  };
+  arg = else_val
+}
+r6 = $(make_if #(1 == 1) #100 #200)
+r7 = $(make_if #(1 == 2) #100 #200)
+
+-- Macro: swap binary operator arguments
+swap_op ast = ast ->
+  Op {op = op; left = l; right = r} = Op {op = op; left = r; right = l}
+  _ = ast
+r8 = $(swap_op #(10 - 3))
+
+-- Raw values in AST records (no need to quote literals used directly)
+r9 = $(Op {op = "+"; left = 10; right = 20})
+
+-- Nested macros
+r10 = $(double_ast (negate_ast #7))

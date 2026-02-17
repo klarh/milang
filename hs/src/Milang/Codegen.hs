@@ -215,6 +215,9 @@ exprToC st (CFunction hdr cname retTy paramTys) = do
   nativeCode <- cfunctionToC st (T.unpack cname) retTy paramTys
   pure $ "mi_expr_val(" ++ nativeCode ++ ")"
 
+exprToC _ (Quote _) = error "Quote (#) not resolved at compile time — this is a compiler bug"
+exprToC _ (Splice _) = error "Splice ($) not resolved at compile time — this is a compiler bug"
+
 -- | Escape a string for C
 cStringLit :: String -> String
 cStringLit s = "\"" ++ concatMap esc s ++ "\""

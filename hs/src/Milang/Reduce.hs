@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module Milang.Reduce (reduce, Env, emptyEnv, warnings, Warning(..)) where
 
 import Data.Text (Text)
@@ -80,6 +81,15 @@ reduce env (Case scrut alts) =
        else reduceCase env scrut' alts
 
 reduce _ e@(CFunction {}) = e  -- C FFI: irreducible
+
+reduce env (Quote body) =
+  quoteExpr body  -- quote captures the syntax, not the value
+
+reduce env (Splice body) =
+  let body' = reduce env body
+  in case unquoteExpr body' of
+       Just expr -> reduce env expr
+       Nothing   -> Splice body'  -- residual: can't splice non-AST value
 
 reduce env (Thunk body) = Thunk body  -- thunks stay deferred; forced on demand
 
@@ -253,6 +263,8 @@ exprFreeVars (Thunk body)     = exprFreeVars body
 exprFreeVars (ListLit es)     = Set.unions (map exprFreeVars es)
 exprFreeVars (RecordUpdate e bs) =
   Set.union (exprFreeVars e) (Set.unions (map (exprFreeVars . bindBody) bs))
+exprFreeVars (Quote _)          = Set.empty  -- quoted code has no free vars
+exprFreeVars (Splice e)         = exprFreeVars e
 
 -- | Generate a fresh name by appending primes
 freshName :: Text -> Set.Set Text -> Text
@@ -287,6 +299,8 @@ substExpr _ _ e@(CFunction {}) = e
 substExpr n e (Thunk body) = Thunk (substExpr n e body)
 substExpr n e (ListLit es) = ListLit (map (substExpr n e) es)
 substExpr n e (RecordUpdate ex bs) = RecordUpdate (substExpr n e ex) (map (substBind n e) bs)
+substExpr _ _ e@(Quote _) = e  -- don't substitute inside quotes
+substExpr n e (Splice ex) = Splice (substExpr n e ex)
 
 substBind :: Text -> Expr -> Binding -> Binding
 substBind n e b = b { bindBody = substExpr n e (bindBody b) }
@@ -294,6 +308,200 @@ substBind n e b = b { bindBody = substExpr n e (bindBody b) }
 substAlt :: Text -> Expr -> Alt -> Alt
 substAlt n e a = a { altBody = substExpr n e (altBody a)
                    , altGuard = fmap (substExpr n e) (altGuard a) }
+
+-- ── Quote/Unquote (Metaprogramming) ───────────────────────────────
+
+-- | Helper to build a binding with no source position
+mkBind :: Text -> Expr -> Binding
+mkBind n e = Binding n False [] e Nothing
+
+-- | Convert an expression to its AST record representation
+quoteExpr :: Expr -> Expr
+quoteExpr (IntLit n)    = Record "Int"   [mkBind "val" (IntLit n)]
+quoteExpr (FloatLit d)  = Record "Float" [mkBind "val" (FloatLit d)]
+quoteExpr (StringLit s) = Record "Str"   [mkBind "val" (StringLit s)]
+quoteExpr (Name n)      = Record "Var"   [mkBind "name" (StringLit n)]
+quoteExpr (App f x)     = Record "App"   [mkBind "fn" (quoteExpr f),
+                                           mkBind "arg" (quoteExpr x)]
+quoteExpr (BinOp op l r) = Record "Op"   [mkBind "op" (StringLit op),
+                                           mkBind "left" (quoteExpr l),
+                                           mkBind "right" (quoteExpr r)]
+quoteExpr (Lam p b)     = Record "Fn"    [mkBind "param" (StringLit p),
+                                           mkBind "body" (quoteExpr b)]
+quoteExpr (Record tag bs) = Record "Rec" [mkBind "tag" (StringLit tag),
+                                           mkBind "fields" (quoteBindings bs)]
+quoteExpr (Case s alts) = Record "Match" [mkBind "expr" (quoteExpr s),
+                                           mkBind "alts" (ListLit (map quoteAlt alts))]
+quoteExpr (Namespace bs) = Record "Let"  [mkBind "bindings" (quoteBindings bs)]
+quoteExpr (With body bs) = Record "With" [mkBind "body" (quoteExpr body),
+                                           mkBind "bindings" (quoteBindings bs)]
+quoteExpr (ListLit es)  = Record "List"  [mkBind "elems" (ListLit (map quoteExpr es))]
+quoteExpr (Thunk e)     = Record "Thunk" [mkBind "body" (quoteExpr e)]
+quoteExpr (FieldAccess e f) = Record "Access" [mkBind "expr" (quoteExpr e),
+                                                mkBind "field" (StringLit f)]
+quoteExpr (RecordUpdate e bs) = Record "Update" [mkBind "expr" (quoteExpr e),
+                                                   mkBind "fields" (quoteBindings bs)]
+quoteExpr (Quote e)     = Record "Quote"  [mkBind "body" (quoteExpr e)]
+quoteExpr (Splice e)    = Record "Splice" [mkBind "body" (quoteExpr e)]
+quoteExpr (CFunction {}) = Record "CFunc" []
+
+quoteBindings :: [Binding] -> Expr
+quoteBindings bs = ListLit [Record "Field" [mkBind "name" (StringLit (bindName b)),
+                                             mkBind "val" (quoteExpr (bindBody b))]
+                           | b <- bs]
+
+quoteAlt :: Alt -> Expr
+quoteAlt (Alt pat guard body) =
+  Record "MAlt" [mkBind "pat" (quotePat pat),
+                  mkBind "guard" (maybe (IntLit 0) quoteExpr guard),
+                  mkBind "body" (quoteExpr body)]
+
+quotePat :: Pat -> Expr
+quotePat (PVar v)      = Record "PVar"  [mkBind "name" (StringLit v)]
+quotePat (PLit e)      = Record "PLit"  [mkBind "val" (quoteExpr e)]
+quotePat (PRec t fs)   = Record "PRec"  [mkBind "tag" (StringLit t),
+                                          mkBind "fields" (ListLit [Record "PField"
+                                            [mkBind "name" (StringLit f),
+                                             mkBind "pat" (quotePat p)]
+                                           | (f,p) <- fs])]
+quotePat (PList ps mr) = Record "PList" [mkBind "pats" (ListLit (map quotePat ps)),
+                                          mkBind "rest" (maybe (IntLit 0) (StringLit) mr)]
+quotePat PWild         = Record "PWild" []
+
+-- | Convert an AST record representation back to an expression
+unquoteExpr :: Expr -> Maybe Expr
+unquoteExpr (Record "Int" bs)    = IntLit <$> getIntField "val" bs
+unquoteExpr (Record "Float" bs)  = FloatLit <$> getFloatField "val" bs
+unquoteExpr (Record "Str" bs)    = StringLit <$> getStrField "val" bs
+unquoteExpr (Record "Var" bs)    = Name <$> getStrField "name" bs
+unquoteExpr (Record "App" bs)    = do
+  fn  <- getField "fn" bs >>= unquoteExpr
+  arg <- getField "arg" bs >>= unquoteExpr
+  Just (App fn arg)
+unquoteExpr (Record "Op" bs)     = do
+  op    <- getStrField "op" bs
+  left  <- getField "left" bs >>= unquoteExpr
+  right <- getField "right" bs >>= unquoteExpr
+  Just (BinOp op left right)
+unquoteExpr (Record "Fn" bs)     = do
+  param <- getStrField "param" bs
+  body  <- getField "body" bs >>= unquoteExpr
+  Just (Lam param body)
+unquoteExpr (Record "Rec" bs)    = do
+  tag    <- getStrField "tag" bs
+  fields <- getField "fields" bs >>= unquoteBindings
+  Just (Record tag fields)
+unquoteExpr (Record "Match" bs)  = do
+  expr <- getField "expr" bs >>= unquoteExpr
+  altsE <- getField "alts" bs
+  case altsE of
+    ListLit es -> do
+      alts <- mapM unquoteAlt es
+      Just (Case expr alts)
+    _ -> Nothing
+unquoteExpr (Record "Let" bs)    = do
+  bindsE <- getField "bindings" bs >>= unquoteBindings
+  Just (Namespace bindsE)
+unquoteExpr (Record "With" bs)   = do
+  body   <- getField "body" bs >>= unquoteExpr
+  bindsE <- getField "bindings" bs >>= unquoteBindings
+  Just (With body bindsE)
+unquoteExpr (Record "List" bs)   = do
+  elemsE <- getField "elems" bs
+  case elemsE of
+    ListLit es -> ListLit <$> mapM unquoteExpr es
+    _ -> Nothing
+unquoteExpr (Record "Thunk" bs)  = Thunk <$> (getField "body" bs >>= unquoteExpr)
+unquoteExpr (Record "Access" bs) = do
+  expr  <- getField "expr" bs >>= unquoteExpr
+  field <- getStrField "field" bs
+  Just (FieldAccess expr field)
+unquoteExpr (Record "Update" bs) = do
+  expr   <- getField "expr" bs >>= unquoteExpr
+  fields <- getField "fields" bs >>= unquoteBindings
+  Just (RecordUpdate expr fields)
+unquoteExpr (Record "Quote" bs)  = Quote <$> (getField "body" bs >>= unquoteExpr)
+unquoteExpr (Record "Splice" bs) = Splice <$> (getField "body" bs >>= unquoteExpr)
+-- Raw values pass through: allows mixing AST records with concrete values
+unquoteExpr e@(IntLit _)    = Just e
+unquoteExpr e@(FloatLit _)  = Just e
+unquoteExpr e@(StringLit _) = Just e
+unquoteExpr e@(Name _)      = Just e
+unquoteExpr e@(ListLit _)   = Just e
+unquoteExpr _ = Nothing
+
+unquoteBindings :: Expr -> Maybe [Binding]
+unquoteBindings (ListLit es) = mapM unquoteField es
+  where
+    unquoteField (Record "Field" bs) = do
+      name <- getStrField "name" bs
+      val  <- getField "val" bs >>= unquoteExpr
+      Just (Binding name False [] val Nothing)
+    unquoteField _ = Nothing
+unquoteBindings _ = Nothing
+
+unquoteAlt :: Expr -> Maybe Alt
+unquoteAlt (Record "MAlt" bs) = do
+  patE  <- getField "pat" bs
+  pat   <- unquotePat patE
+  guardE <- getField "guard" bs
+  let guard = case guardE of
+        IntLit 0 -> Nothing
+        _        -> unquoteExpr guardE >>= Just
+  body  <- getField "body" bs >>= unquoteExpr
+  Just (Alt pat guard body)
+unquoteAlt _ = Nothing
+
+unquotePat :: Expr -> Maybe Pat
+unquotePat (Record "PVar" bs)  = PVar <$> getStrField "name" bs
+unquotePat (Record "PLit" bs)  = PLit <$> (getField "val" bs >>= unquoteExpr)
+unquotePat (Record "PRec" bs)  = do
+  tag <- getStrField "tag" bs
+  flds <- getField "fields" bs
+  case flds of
+    ListLit es -> do
+      pfs <- mapM (\e -> case e of
+        Record "PField" fbs -> do
+          name <- getStrField "name" fbs
+          pat  <- getField "pat" fbs >>= unquotePat
+          Just (name, pat)
+        _ -> Nothing) es
+      Just (PRec tag pfs)
+    _ -> Nothing
+unquotePat (Record "PList" bs) = do
+  patsE <- getField "pats" bs
+  pats <- case patsE of
+    ListLit es -> mapM unquotePat es
+    _ -> Nothing
+  restE <- getField "rest" bs
+  let rest = case restE of
+        IntLit 0   -> Nothing
+        StringLit s -> Just s
+        _ -> Nothing
+  Just (PList pats rest)
+unquotePat (Record "PWild" _) = Just PWild
+unquotePat _ = Nothing
+
+-- | Field extraction helpers for unquote
+getField :: Text -> [Binding] -> Maybe Expr
+getField name bs = case [bindBody b | b <- bs, bindName b == name] of
+  (v:_) -> Just v
+  []    -> Nothing
+
+getIntField :: Text -> [Binding] -> Maybe Integer
+getIntField name bs = getField name bs >>= \case
+  IntLit n -> Just n
+  _        -> Nothing
+
+getFloatField :: Text -> [Binding] -> Maybe Double
+getFloatField name bs = getField name bs >>= \case
+  FloatLit d -> Just d
+  _          -> Nothing
+
+getStrField :: Text -> [Binding] -> Maybe Text
+getStrField name bs = getField name bs >>= \case
+  StringLit s -> Just s
+  _           -> Nothing
 
 -- ── Field access reduction ────────────────────────────────────────
 
@@ -431,6 +639,8 @@ warnExpr (Namespace bs) = concatMap warnBinding bs
 warnExpr (Thunk e) = warnExpr e
 warnExpr (ListLit es) = concatMap warnExpr es
 warnExpr (RecordUpdate e bs) = warnExpr e ++ concatMap warnBinding bs
+warnExpr (Quote _) = []
+warnExpr (Splice e) = warnExpr e
 warnExpr _ = []
 
 warnAlt :: Alt -> [Warning]

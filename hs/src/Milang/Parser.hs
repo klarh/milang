@@ -283,7 +283,7 @@ opInfo _    = (50,  LeftAssoc)
 -- Parse an operator token (but not = or := or -> or .)
 pOperator :: Parser Text
 pOperator = try $ lexeme $ do
-  op <- some (oneOf ("+-*/^<>=!&|@#$%?" :: String))
+  op <- some (oneOf ("+-*/^<>=!&|@%?" :: String))
   let t = T.pack op
   -- Don't consume binding operators or match arrow
   if t == "=" || t == ":=" || t == "->"
@@ -338,6 +338,8 @@ pAtom = choice
   [ pParens
   , pListLit
   , pThunk
+  , pQuote
+  , pSplice
   , pStringLit
   , try pFloatLit
   , pIntLit
@@ -353,6 +355,16 @@ pThunk :: Parser Expr
 pThunk = do
   _ <- symbol "~"
   Thunk <$> pAtomDot
+
+pQuote :: Parser Expr
+pQuote = do
+  _ <- char '#'
+  Quote <$> pAtomDot
+
+pSplice :: Parser Expr
+pSplice = do
+  _ <- char '$'
+  Splice <$> pAtomDot
 
 pListLit :: Parser Expr
 pListLit = do

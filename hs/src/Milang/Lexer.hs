@@ -84,7 +84,7 @@ upperIdentifier = lexeme $ do
 -- | Parse an operator (sequence of operator chars)
 operator :: Parser Text
 operator = lexeme $ do
-  op <- some (oneOf ("+-*/^<>=!&|@#$%~?." :: String))
+  op <- some (oneOf ("+-*/^<>=!&|@%~?." :: String))
   pure $ T.pack op
 
 -- | Integer literal
