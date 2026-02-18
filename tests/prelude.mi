@@ -20,7 +20,7 @@ has_2 = contains [1, 2, 3] 2    /* expect: 1 */
 has_9 = contains [1, 2, 3] 9    /* expect: 0 */
 
 /* range */
-range_test = range 1 5           /* expect: [1, 2, 3, 4, 5] */
+range_test = range 1 6           /* expect: [1, 2, 3, 4, 5] */
 range_empty = range 5 1          /* expect: [] */
 
 /* zip */

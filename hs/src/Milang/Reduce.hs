@@ -22,7 +22,6 @@ isResidual :: Expr -> Bool
 isResidual (IntLit _)    = False
 isResidual (FloatLit _)  = False
 isResidual (StringLit _) = False
-isResidual (ListLit _)   = False
 isResidual (Record _ _)  = False
 isResidual _             = True
 
@@ -50,9 +49,18 @@ reduce env (App f x) =
   in reduceApp f' x'
 
 reduce env (Lam p b) =
-  -- Reduce under lambda with param shadowing any outer binding
-  let env' = Map.delete p env
-  in Lam p (reduce env' b)
+  -- Check if any env value has p as a free variable (capture risk)
+  let envFVs = Set.unions (map exprFreeVars (Map.elems env))
+  in if p `Set.member` envFVs
+     then -- Alpha-rename the lambda parameter to avoid capture
+       let allNames = Set.unions [envFVs, exprFreeVars b, Map.keysSet env]
+           fresh = freshName p allNames
+           b' = substExpr p (Name fresh) b
+           env' = Map.delete fresh env
+       in Lam fresh (reduce env' b')
+     else
+       let env' = Map.delete p env
+       in Lam p (reduce env' b)
 
 reduce env (With body bindings) =
   let env' = evalBindings env bindings
@@ -93,7 +101,7 @@ reduce env (Splice body) =
 
 reduce env (Thunk body) = Thunk (applyEnv env body)  -- defer evaluation but capture bindings
 
-reduce env (ListLit es) = ListLit (map (reduce env) es)
+reduce env (ListLit es) = listToCons (map (reduce env) es)
 
 reduce env (RecordUpdate e bs) =
   let e' = reduce env e
@@ -200,15 +208,6 @@ reduceBinOp "==" (StringLit a) (StringLit b) = boolToExpr (a == b)
 reduceBinOp "/=" (StringLit a) (StringLit b) = boolToExpr (a /= b)
 reduceBinOp "==" (FloatLit a) (FloatLit b) = boolToExpr (a == b)
 reduceBinOp "/=" (FloatLit a) (FloatLit b) = boolToExpr (a /= b)
-reduceBinOp "==" (ListLit as) (ListLit bs) = boolToExpr (exprEq as bs)
-  where exprEq [] [] = True
-        exprEq (x:xs) (y:ys) = reduceBinOp "==" x y == IntLit 1 && exprEq xs ys
-        exprEq _ _ = False
-reduceBinOp "/=" a@(ListLit _) b@(ListLit _) =
-  case reduceBinOp "==" a b of
-    IntLit 1 -> IntLit 0
-    IntLit 0 -> IntLit 1
-    other    -> BinOp "/=" a b
 reduceBinOp "==" (Record t1 bs1) (Record t2 bs2) =
   boolToExpr (t1 == t2 && length bs1 == length bs2 &&
     all (\(b1, b2) -> bindName b1 == bindName b2 &&
@@ -221,6 +220,7 @@ reduceBinOp "/=" a@(Record _ _) b@(Record _ _) =
 
 -- String concatenation
 reduceBinOp "+" (StringLit a) (StringLit b) = StringLit (a <> b)
+reduceBinOp "++" (StringLit a) (StringLit b) = StringLit (a <> b)
 
 -- Residual: can't reduce
 reduceBinOp op l r = BinOp op l r
@@ -258,9 +258,9 @@ reduceApp (Name n) arg
     Record n [Binding "_0" False [] arg Nothing]
 -- Record introspection builtins
 reduceApp (Name "fields") (Record _ bs) =
-  ListLit [bindBody b | b <- bs]
+  listToCons [bindBody b | b <- bs]
 reduceApp (Name "fieldNames") (Record _ bs) =
-  ListLit [StringLit (bindName b) | b <- bs]
+  listToCons [StringLit (bindName b) | b <- bs]
 reduceApp (Name "tag") (Record t _) = StringLit t
 -- getField record "name" → field value
 reduceApp (App (Name "getField") (Record _ bs)) (StringLit name) =
@@ -336,6 +336,11 @@ substExpr n e (BinOp op l r) = BinOp op (substExpr n e l) (substExpr n e r)
 substExpr n e (App f x) = App (substExpr n e f) (substExpr n e x)
 substExpr n e (Lam p b)
   | p == n    = Lam p b  -- shadowed
+  | p `Set.member` exprFreeVars e =
+    -- Alpha-rename to avoid capture
+    let fresh = freshName p (Set.unions [exprFreeVars e, exprFreeVars b, Set.singleton n])
+        b' = substExpr p (Name fresh) b
+    in Lam fresh (substExpr n e b')
   | otherwise = Lam p (substExpr n e b)
 substExpr n e (With body bs) =
   let shadowed = n `elem` map bindName bs
@@ -373,6 +378,21 @@ substAlt n e a = a { altBody = substExpr n e (altBody a)
 mkBind :: Text -> Expr -> Binding
 mkBind n e = Binding n False [] e Nothing
 
+-- | Convert a list of expressions to a cons-cell chain: Cons(head, Cons(..., Nil))
+listToCons :: [Expr] -> Expr
+listToCons []     = Record "Nil" []
+listToCons (x:xs) = Record "Cons" [mkBind "head" x, mkBind "tail" (listToCons xs)]
+
+-- | Detect a cons-cell chain and convert back to a flat list (for quoting etc.)
+consToList :: Expr -> Maybe [Expr]
+consToList (Record "Nil" []) = Just []
+consToList (Record "Cons" bs) = do
+  h <- lookup "head" [(bindName b, bindBody b) | b <- bs]
+  t <- lookup "tail" [(bindName b, bindBody b) | b <- bs]
+  rest <- consToList t
+  Just (h : rest)
+consToList _ = Nothing
+
 -- | Convert an expression to its AST record representation
 quoteExpr :: Expr -> Expr
 quoteExpr (IntLit n)    = Record "Int"   [mkBind "val" (IntLit n)]
@@ -389,11 +409,11 @@ quoteExpr (Lam p b)     = Record "Fn"    [mkBind "param" (StringLit p),
 quoteExpr (Record tag bs) = Record "Rec" [mkBind "tag" (StringLit tag),
                                            mkBind "fields" (quoteBindings bs)]
 quoteExpr (Case s alts) = Record "Match" [mkBind "expr" (quoteExpr s),
-                                           mkBind "alts" (ListLit (map quoteAlt alts))]
+                                           mkBind "alts" (listToCons (map quoteAlt alts))]
 quoteExpr (Namespace bs) = Record "Let"  [mkBind "bindings" (quoteBindings bs)]
 quoteExpr (With body bs) = Record "With" [mkBind "body" (quoteExpr body),
                                            mkBind "bindings" (quoteBindings bs)]
-quoteExpr (ListLit es)  = Record "List"  [mkBind "elems" (ListLit (map quoteExpr es))]
+quoteExpr (ListLit es)  = Record "List"  [mkBind "elems" (listToCons (map quoteExpr es))]
 quoteExpr (Thunk e)     = Record "Thunk" [mkBind "body" (quoteExpr e)]
 quoteExpr (FieldAccess e f) = Record "Access" [mkBind "expr" (quoteExpr e),
                                                 mkBind "field" (StringLit f)]
@@ -404,7 +424,7 @@ quoteExpr (Splice e)    = Record "Splice" [mkBind "body" (quoteExpr e)]
 quoteExpr (CFunction {}) = Record "CFunc" []
 
 quoteBindings :: [Binding] -> Expr
-quoteBindings bs = ListLit [Record "Field" [mkBind "name" (StringLit (bindName b)),
+quoteBindings bs = listToCons [Record "Field" [mkBind "name" (StringLit (bindName b)),
                                              mkBind "val" (quoteExpr (bindBody b))]
                            | b <- bs]
 
@@ -418,11 +438,11 @@ quotePat :: Pat -> Expr
 quotePat (PVar v)      = Record "PVar"  [mkBind "name" (StringLit v)]
 quotePat (PLit e)      = Record "PLit"  [mkBind "val" (quoteExpr e)]
 quotePat (PRec t fs)   = Record "PRec"  [mkBind "tag" (StringLit t),
-                                          mkBind "fields" (ListLit [Record "PField"
+                                          mkBind "fields" (listToCons [Record "PField"
                                             [mkBind "name" (StringLit f),
                                              mkBind "pat" (quotePat p)]
                                            | (f,p) <- fs])]
-quotePat (PList ps mr) = Record "PList" [mkBind "pats" (ListLit (map quotePat ps)),
+quotePat (PList ps mr) = Record "PList" [mkBind "pats" (listToCons (map quotePat ps)),
                                           mkBind "rest" (maybe (IntLit 0) (StringLit) mr)]
 quotePat PWild         = Record "PWild" []
 
@@ -452,11 +472,11 @@ unquoteExpr (Record "Rec" bs)    = do
 unquoteExpr (Record "Match" bs)  = do
   expr <- getField "expr" bs >>= unquoteExpr
   altsE <- getField "alts" bs
-  case altsE of
-    ListLit es -> do
+  case consToList altsE of
+    Just es -> do
       alts <- mapM unquoteAlt es
       Just (Case expr alts)
-    _ -> Nothing
+    Nothing -> Nothing
 unquoteExpr (Record "Let" bs)    = do
   bindsE <- getField "bindings" bs >>= unquoteBindings
   Just (Namespace bindsE)
@@ -466,9 +486,9 @@ unquoteExpr (Record "With" bs)   = do
   Just (With body bindsE)
 unquoteExpr (Record "List" bs)   = do
   elemsE <- getField "elems" bs
-  case elemsE of
-    ListLit es -> ListLit <$> mapM unquoteExpr es
-    _ -> Nothing
+  case consToList elemsE of
+    Just es -> listToCons <$> mapM unquoteExpr es
+    Nothing -> Nothing
 unquoteExpr (Record "Thunk" bs)  = Thunk <$> (getField "body" bs >>= unquoteExpr)
 unquoteExpr (Record "Access" bs) = do
   expr  <- getField "expr" bs >>= unquoteExpr
@@ -485,18 +505,21 @@ unquoteExpr e@(IntLit _)    = Just e
 unquoteExpr e@(FloatLit _)  = Just e
 unquoteExpr e@(StringLit _) = Just e
 unquoteExpr e@(Name _)      = Just e
-unquoteExpr e@(ListLit _)   = Just e
+unquoteExpr e@(ListLit _)   = Just e  -- unreduced list literal passes through
 unquoteExpr _ = Nothing
 
 unquoteBindings :: Expr -> Maybe [Binding]
-unquoteBindings (ListLit es) = mapM unquoteField es
+unquoteBindings expr = case consToList expr of
+  Just es -> mapM unquoteField es
+  Nothing -> case expr of
+    ListLit es -> mapM unquoteField es  -- fallback for unreduced
+    _ -> Nothing
   where
     unquoteField (Record "Field" bs) = do
       name <- getStrField "name" bs
       val  <- getField "val" bs >>= unquoteExpr
       Just (Binding name False [] val Nothing)
     unquoteField _ = Nothing
-unquoteBindings _ = Nothing
 
 unquoteAlt :: Expr -> Maybe Alt
 unquoteAlt (Record "MAlt" bs) = do
@@ -516,21 +539,25 @@ unquotePat (Record "PLit" bs)  = PLit <$> (getField "val" bs >>= unquoteExpr)
 unquotePat (Record "PRec" bs)  = do
   tag <- getStrField "tag" bs
   flds <- getField "fields" bs
-  case flds of
-    ListLit es -> do
-      pfs <- mapM (\e -> case e of
+  let tryList es = mapM (\e -> case e of
         Record "PField" fbs -> do
           name <- getStrField "name" fbs
           pat  <- getField "pat" fbs >>= unquotePat
           Just (name, pat)
         _ -> Nothing) es
-      Just (PRec tag pfs)
-    _ -> Nothing
+  pfs <- case consToList flds of
+    Just es -> tryList es
+    Nothing -> case flds of
+      ListLit es -> tryList es
+      _ -> Nothing
+  Just (PRec tag pfs)
 unquotePat (Record "PList" bs) = do
   patsE <- getField "pats" bs
-  pats <- case patsE of
-    ListLit es -> mapM unquotePat es
-    _ -> Nothing
+  pats <- case consToList patsE of
+    Just es -> mapM unquotePat es
+    Nothing -> case patsE of
+      ListLit es -> mapM unquotePat es
+      _ -> Nothing
   restE <- getField "rest" bs
   let rest = case restE of
         IntLit 0   -> Nothing
@@ -620,26 +647,21 @@ matchPat (PLit (StringLit a)) (StringLit b)
   | otherwise = Nothing
 matchPat (PRec tag fields) (Record rtag bs)
   | tag == rtag = matchFields fields bs
-matchPat (PList pats mrest) (ListLit es)
-  | isNothing mrest && length pats /= length es = Nothing  -- exact match: wrong length
-  | isJust mrest && length es < length pats = Nothing      -- spread: too few elements
-  | otherwise = do
-      let (headEs, tailEs) = splitAt (length pats) es
-      binds <- matchListElems pats headEs
-      restBinds <- case mrest of
-        Nothing   -> Just []
-        Just name -> Just [(name, ListLit tailEs)]
-      Just (binds ++ restBinds)
+matchPat (PList pats mrest) expr = matchConsList pats mrest expr
 matchPat _ _ = Nothing  -- can't match at compile time → residual
 
--- Match list elements pairwise
-matchListElems :: [Pat] -> [Expr] -> Maybe [(Text, Expr)]
-matchListElems [] [] = Just []
-matchListElems (p:ps) (e:es) = do
-  binds1 <- matchPat p e
-  binds2 <- matchListElems ps es
+-- Match a PList pattern against a cons-cell chain (Cons/Nil records)
+matchConsList :: [Pat] -> Maybe Text -> Expr -> Maybe [(Text, Expr)]
+matchConsList [] Nothing (Record "Nil" []) = Just []  -- exact: [] matches Nil
+matchConsList [] Nothing _ = Nothing                   -- exact: non-empty → fail
+matchConsList [] (Just name) expr = Just [(name, expr)] -- spread: bind rest
+matchConsList (p:ps) mrest (Record "Cons" bs) = do
+  h <- lookup "head" [(bindName b, bindBody b) | b <- bs]
+  t <- lookup "tail" [(bindName b, bindBody b) | b <- bs]
+  binds1 <- matchPat p h
+  binds2 <- matchConsList ps mrest t
   Just (binds1 ++ binds2)
-matchListElems _ _ = Nothing
+matchConsList _ _ _ = Nothing  -- too few elements or not a list
 
 matchFields :: [(Text, Pat)] -> [Binding] -> Maybe [(Text, Expr)]
 matchFields [] _ = Just []
