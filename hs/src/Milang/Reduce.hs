@@ -172,6 +172,10 @@ reduceBind env b =
 -- ── Binary operator reduction ─────────────────────────────────────
 
 reduceBinOp :: Text -> Expr -> Expr -> Expr
+-- Cons operator: h : t → Record "Cons" [head=h, tail=t]
+reduceBinOp ":" h t =
+  Record "Cons" [ Binding "head" False [] h Nothing
+                , Binding "tail" False [] t Nothing ]
 -- Int × Int
 reduceBinOp "+"  (IntLit a) (IntLit b) = IntLit (a + b)
 reduceBinOp "-"  (IntLit a) (IntLit b) = IntLit (a - b)

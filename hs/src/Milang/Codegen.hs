@@ -888,6 +888,8 @@ emitPreamble h = hPutStr h $ unlines
   , ""
   , "// ── Arithmetic ──"
   , "static MiVal mi_binop(const char *op, MiVal a, MiVal b) {"
+  , "  // Cons operator: h : t → Cons h t"
+  , "  if (strcmp(op, \":\") == 0) return mi_cons(a, b);"
   , "  // Structural equality for all types"
   , "  if (strcmp(op, \"==\") == 0) return mi_int(mi_vals_equal(a, b));"
   , "  if (strcmp(op, \"/=\") == 0) return mi_int(!mi_vals_equal(a, b));"

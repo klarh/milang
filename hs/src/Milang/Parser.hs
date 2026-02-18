@@ -274,9 +274,11 @@ opInfo "||" = (15,  RightAssoc)
 opInfo "&&" = (20,  RightAssoc)
 opInfo ">>" = (10,  LeftAssoc)
 opInfo "<<" = (10,  RightAssoc)
+opInfo ":"  = (25,  RightAssoc)
 opInfo "**" = (150, RightAssoc)
 opInfo "*"  = (100, LeftAssoc)
 opInfo "/"  = (100, LeftAssoc)
+opInfo "++" = (40,  RightAssoc)
 opInfo "+"  = (50,  LeftAssoc)
 opInfo "-"  = (50,  LeftAssoc)
 opInfo "==" = (30,  LeftAssoc)
@@ -290,7 +292,7 @@ opInfo _    = (50,  LeftAssoc)
 -- Parse an operator token (but not = or := or -> or .)
 pOperator :: Parser Text
 pOperator = try $ lexeme $ do
-  op <- some (oneOf ("+-*/^<>=!&|@%?" :: String))
+  op <- some (oneOf ("+-*/^<>=!&|@%?:" :: String))
   let t = T.pack op
   -- Don't consume binding operators or match arrow
   if t == "=" || t == ":=" || t == "->"
