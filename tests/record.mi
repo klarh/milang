@@ -1,3 +1,7 @@
 p = Point {x = 3; y = 4}
 q = Point {x = 10; y = 20}
 sum = p.x + q.y
+
+/* Anonymous records (no tag) */
+anon = {a = 1; b = 2}
+anonSum = anon.a + anon.b + sum

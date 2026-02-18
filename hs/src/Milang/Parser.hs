@@ -225,7 +225,13 @@ pBindingAt ref = do
         Just alts -> Case body alts
         Nothing   -> body
   mWith <- optional (try pBraceWith)
-  let body'' = maybe body' (With body') mWith
+  let body'' = case mWith of
+        Nothing -> body'
+        Just bs
+          -- Bare {name=expr; ...} without a preceding expression → anonymous record
+          | IntLit 0 <- body', all isNamedBinding bs -> Record "" bs
+          -- Normal With block: expr { bindings }
+          | otherwise -> With body' bs
   children <- pIndentedChildren ref body''
   endOff <- getOffset
   srcText <- captureSource startOff endOff
@@ -320,6 +326,10 @@ splitLastExpr bs fallback =
   in if "_stmt_" `T.isPrefixOf` bindName lastB
      then (initBs, bindBody lastB)
      else (bs, fallback)
+
+-- | Check if a binding has a real name (not an auto-generated _stmt_ name)
+isNamedBinding :: Binding -> Bool
+isNamedBinding b = not ("_stmt_" `T.isPrefixOf` bindName b)
 
 -- Parse -> (signals a match scope follows)
 pMatchArrow :: Parser [Alt]
