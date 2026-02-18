@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Milang.Parser (parseProgram, parseExpr) where
+module Milang.Parser (parseProgram, parseExpr, parseBinding) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -26,6 +26,9 @@ parseProgram = parse (scn *> pProgram <* eof)
 
 parseExpr :: String -> Text -> Either (ParseErrorBundle Text Void) Expr
 parseExpr = parse (sc *> pExpr <* eof)
+
+parseBinding :: String -> Text -> Either (ParseErrorBundle Text Void) Binding
+parseBinding = parse (sc *> pBindingAt pos1 <* eof)
 
 -- ── Whitespace handling ───────────────────────────────────────────
 
@@ -258,6 +261,8 @@ pInfixRest minPrec left = do
                  | op == "|>" = App right left
                  | op == ">>" = Lam "_c" (App right (App left (Name "_c")))
                  | op == "<<" = Lam "_c" (App left (App right (Name "_c")))
+                 | op == "&&" = App (App (App (Name "if") left) (Thunk right)) (Thunk (IntLit 0))
+                 | op == "||" = App (App (App (Name "if") left) (Thunk (IntLit 1))) (Thunk right)
                  | otherwise  = BinOp op left right
            pInfixRest minPrec result
 
@@ -265,6 +270,8 @@ data Assoc = LeftAssoc | RightAssoc deriving (Eq)
 
 opInfo :: Text -> (Int, Assoc)
 opInfo "|>" = (5,   LeftAssoc)
+opInfo "||" = (15,  RightAssoc)
+opInfo "&&" = (20,  RightAssoc)
 opInfo ">>" = (10,  LeftAssoc)
 opInfo "<<" = (10,  RightAssoc)
 opInfo "**" = (150, RightAssoc)

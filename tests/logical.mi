@@ -1,0 +1,34 @@
+/* Logical operators test */
+
+/* not */
+not_0 = not 0      /* expect: 1 */
+not_1 = not 1      /* expect: 0 */
+not_42 = not 42    /* expect: 0 */
+
+/* && (short-circuit) */
+and_tt = 1 && 1    /* expect: 1 */
+and_tf = 1 && 0    /* expect: 0 */
+and_ft = 0 && 1    /* expect: 0 */
+and_ff = 0 && 0    /* expect: 0 */
+
+/* || (short-circuit) */
+or_tt = 1 || 1     /* expect: 1 */
+or_tf = 1 || 0     /* expect: 1 */
+or_ft = 0 || 1     /* expect: 1 */
+or_ff = 0 || 0     /* expect: 0 */
+
+/* combined */
+complex1 = (1 && 1) || 0       /* expect: 1 */
+complex2 = 0 || (1 && 1)       /* expect: 1 */
+complex3 = not (0 || 0)        /* expect: 1 */
+complex4 = not (1 && 0)        /* expect: 1 */
+
+/* with comparison */
+cmp1 = (3 > 2) && (4 > 1)      /* expect: 1 */
+cmp2 = (3 > 2) && (4 < 1)      /* expect: 0 */
+cmp3 = (3 < 2) || (4 > 1)      /* expect: 1 */
+
+/* short-circuit proof: if && didn't short-circuit, the 2nd arg would crash */
+/* We test by using a valid expression on the right that only makes sense when evaluated */
+sc_and = 0 && (1 / 0)  /* expect: 0 — right side never forced */
+sc_or = 1 || (1 / 0)   /* expect: 1 — right side never forced */

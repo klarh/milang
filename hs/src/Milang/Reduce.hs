@@ -91,7 +91,7 @@ reduce env (Splice body) =
        Just expr -> reduce env expr
        Nothing   -> Splice body'  -- residual: can't splice non-AST value
 
-reduce env (Thunk body) = Thunk body  -- thunks stay deferred; forced on demand
+reduce env (Thunk body) = Thunk (applyEnv env body)  -- defer evaluation but capture bindings
 
 reduce env (ListLit es) = ListLit (map (reduce env) es)
 
@@ -195,6 +195,30 @@ reduceBinOp ">"  (IntLit a) (IntLit b) = boolToExpr (a > b)
 reduceBinOp "<=" (IntLit a) (IntLit b) = boolToExpr (a <= b)
 reduceBinOp ">=" (IntLit a) (IntLit b) = boolToExpr (a >= b)
 
+-- Structural equality for strings, floats, lists, records
+reduceBinOp "==" (StringLit a) (StringLit b) = boolToExpr (a == b)
+reduceBinOp "/=" (StringLit a) (StringLit b) = boolToExpr (a /= b)
+reduceBinOp "==" (FloatLit a) (FloatLit b) = boolToExpr (a == b)
+reduceBinOp "/=" (FloatLit a) (FloatLit b) = boolToExpr (a /= b)
+reduceBinOp "==" (ListLit as) (ListLit bs) = boolToExpr (exprEq as bs)
+  where exprEq [] [] = True
+        exprEq (x:xs) (y:ys) = reduceBinOp "==" x y == IntLit 1 && exprEq xs ys
+        exprEq _ _ = False
+reduceBinOp "/=" a@(ListLit _) b@(ListLit _) =
+  case reduceBinOp "==" a b of
+    IntLit 1 -> IntLit 0
+    IntLit 0 -> IntLit 1
+    other    -> BinOp "/=" a b
+reduceBinOp "==" (Record t1 bs1) (Record t2 bs2) =
+  boolToExpr (t1 == t2 && length bs1 == length bs2 &&
+    all (\(b1, b2) -> bindName b1 == bindName b2 &&
+      reduceBinOp "==" (bindBody b1) (bindBody b2) == IntLit 1) (zip bs1 bs2))
+reduceBinOp "/=" a@(Record _ _) b@(Record _ _) =
+  case reduceBinOp "==" a b of
+    IntLit 1 -> IntLit 0
+    IntLit 0 -> IntLit 1
+    other    -> BinOp "/=" a b
+
 -- String concatenation
 reduceBinOp "+" (StringLit a) (StringLit b) = StringLit (a <> b)
 
@@ -208,6 +232,9 @@ boolToExpr False = IntLit 0
 -- ── Application reduction ─────────────────────────────────────────
 
 reduceApp :: Expr -> Expr -> Expr
+-- Built-in `not`: not 0 → 1, not nonzero → 0
+reduceApp (Name "not") (IntLit 0) = IntLit 1
+reduceApp (Name "not") (IntLit _) = IntLit 0
 -- Built-in `if`: if cond ~then ~else
 -- Fully applied: App (App (App (Name "if") cond) thenExpr) elseExpr
 reduceApp (App (App (Name "if") cond) thenExpr) elseExpr =
@@ -331,6 +358,10 @@ substExpr n e (Splice ex) = Splice (substExpr n e ex)
 
 substBind :: Text -> Expr -> Binding -> Binding
 substBind n e b = b { bindBody = substExpr n e (bindBody b) }
+
+-- | Apply all environment bindings as substitutions (without reducing)
+applyEnv :: Env -> Expr -> Expr
+applyEnv env body = Map.foldlWithKey' (\acc n e -> substExpr n e acc) body env
 
 substAlt :: Text -> Expr -> Alt -> Alt
 substAlt n e a = a { altBody = substExpr n e (altBody a)

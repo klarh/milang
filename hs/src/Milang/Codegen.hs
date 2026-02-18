@@ -3,6 +3,7 @@ module Milang.Codegen (codegen) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Set as Set
 import Data.IORef
 import Data.List (nub, intercalate)
 import Milang.Syntax
@@ -28,10 +29,10 @@ addTopDef :: CGState -> String -> IO ()
 addTopDef st s = modifyIORef (cgTopDefs st) (s :)
 
 -- | Generate C code from a (partially reduced) Expr
-codegen :: Handle -> Expr -> IO ()
-codegen h expr = do
+codegen :: Handle -> Set.Set Text -> Expr -> IO ()
+codegen h hidden expr = do
   st <- newCGState
-  mainCode <- captureIO st expr
+  mainCode <- captureIO st hidden expr
   emitPreamble h
   incs <- readIORef (cgIncludes st)
   mapM_ (hPutStrLn h) (nub incs)
@@ -42,8 +43,8 @@ codegen h expr = do
   hPutStr h mainCode
 
 -- | Build main()
-captureIO :: CGState -> Expr -> IO String
-captureIO st expr = do
+captureIO :: CGState -> Set.Set Text -> Expr -> IO String
+captureIO st hidden expr = do
   ref <- newIORef ""
   let emit s = modifyIORef ref (++ s)
   let emitBuiltins = do
@@ -70,6 +71,7 @@ captureIO st expr = do
         emit "  mi_env_set(_env, \"toInt\", mi_native(mi_builtin_toInt));\n"
         emit "  mi_env_set(_env, \"toFloat\", mi_native(mi_builtin_toFloat));\n"
         emit "  mi_env_set(_env, \"abs\", mi_native(mi_builtin_abs));\n"
+        emit "  mi_env_set(_env, \"not\", mi_native(mi_builtin_not));\n"
         emit "  mi_env_set(_env, \"min\", mi_native(mi_builtin_min));\n"
         emit "  mi_env_set(_env, \"max\", mi_native(mi_builtin_max));\n"
         emit "  mi_env_set(_env, \"fields\", mi_native(mi_builtin_fields));\n"
@@ -96,10 +98,12 @@ captureIO st expr = do
           emit "  MiVal _world = mi_build_world(argc, argv);\n"
           emit "  mi_apply(mi_env_get(_env, \"main\"), _world);\n"
         else do
-          -- Script mode: print all bindings
+          -- Script mode: print all user bindings (skip prelude)
           mapM_ (\b -> do
             let name = T.unpack (bindName b)
-            emit $ "  printf(\"" ++ name ++ " = \"); mi_print_val(mi_env_get(_env, \"" ++ name ++ "\")); printf(\"\\n\");\n"
+            if Set.member (bindName b) hidden
+              then pure ()
+              else emit $ "  printf(\"" ++ name ++ " = \"); mi_print_val(mi_env_get(_env, \"" ++ name ++ "\")); printf(\"\\n\");\n"
             ) bs
       emit "  return 0;\n}\n"
     _ -> do
@@ -885,8 +889,35 @@ emitPreamble h = hPutStr h $ unlines
   , "  return 0;"
   , "}"
   , ""
+  , "// ── Structural equality ──"
+  , "static int mi_vals_equal(MiVal a, MiVal b);"
+  , "static int mi_vals_equal(MiVal a, MiVal b) {"
+  , "  if (a.type != b.type) return 0;"
+  , "  switch (a.type) {"
+  , "    case MI_INT: return a.as.i == b.as.i;"
+  , "    case MI_FLOAT: return a.as.f == b.as.f;"
+  , "    case MI_STRING: return a.as.str.len == b.as.str.len && memcmp(a.as.str.data, b.as.str.data, a.as.str.len) == 0;"
+  , "    case MI_LIST:"
+  , "      if (a.as.list.len != b.as.list.len) return 0;"
+  , "      for (int i = 0; i < a.as.list.len; i++)"
+  , "        if (!mi_vals_equal(a.as.list.items[i], b.as.list.items[i])) return 0;"
+  , "      return 1;"
+  , "    case MI_RECORD:"
+  , "      if (strcmp(a.as.rec.tag, b.as.rec.tag) != 0 || a.as.rec.nfields != b.as.rec.nfields) return 0;"
+  , "      for (int i = 0; i < a.as.rec.nfields; i++) {"
+  , "        if (strcmp(a.as.rec.names[i], b.as.rec.names[i]) != 0) return 0;"
+  , "        if (!mi_vals_equal(a.as.rec.fields[i], b.as.rec.fields[i])) return 0;"
+  , "      }"
+  , "      return 1;"
+  , "    default: return 0;"
+  , "  }"
+  , "}"
+  , ""
   , "// ── Arithmetic ──"
   , "static MiVal mi_binop(const char *op, MiVal a, MiVal b) {"
+  , "  // Structural equality for all types"
+  , "  if (strcmp(op, \"==\") == 0) return mi_int(mi_vals_equal(a, b));"
+  , "  if (strcmp(op, \"/=\") == 0) return mi_int(!mi_vals_equal(a, b));"
   , "  if (strcmp(op, \"+\") == 0 && a.type == MI_STRING && b.type == MI_STRING) {"
   , "    int la = a.as.str.len, lb = b.as.str.len;"
   , "    char *r = mi_alloc(la + lb + 1); memcpy(r, a.as.str.data, la); memcpy(r+la, b.as.str.data, lb); r[la+lb] = '\\0';"
@@ -894,8 +925,6 @@ emitPreamble h = hPutStr h $ unlines
   , "  }"
   , "  if (a.type == MI_STRING && b.type == MI_STRING) {"
   , "    int cmp = strcmp(a.as.str.data, b.as.str.data);"
-  , "    if (strcmp(op, \"==\") == 0) return mi_int(cmp == 0);"
-  , "    if (strcmp(op, \"/=\") == 0) return mi_int(cmp != 0);"
   , "    if (strcmp(op, \"<\") == 0) return mi_int(cmp < 0);"
   , "    if (strcmp(op, \">\") == 0) return mi_int(cmp > 0);"
   , "    if (strcmp(op, \"<=\") == 0) return mi_int(cmp <= 0);"
@@ -908,8 +937,6 @@ emitPreamble h = hPutStr h $ unlines
   , "    if (strcmp(op, \"*\") == 0) return mi_float(fa * fb);"
   , "    if (strcmp(op, \"/\") == 0) return mi_float(fa / fb);"
   , "    if (strcmp(op, \"**\") == 0) return mi_float(pow(fa, fb));"
-  , "    if (strcmp(op, \"==\") == 0) return mi_int(fa == fb);"
-  , "    if (strcmp(op, \"/=\") == 0) return mi_int(fa != fb);"
   , "    if (strcmp(op, \"<\") == 0) return mi_int(fa < fb);"
   , "    if (strcmp(op, \">\") == 0) return mi_int(fa > fb);"
   , "    if (strcmp(op, \"<=\") == 0) return mi_int(fa <= fb);"
@@ -921,8 +948,6 @@ emitPreamble h = hPutStr h $ unlines
   , "  if (strcmp(op, \"*\") == 0) return mi_int(ia * ib);"
   , "  if (strcmp(op, \"/\") == 0) { if (ib==0) { fprintf(stderr,\"division by zero\\n\"); exit(1); } return mi_int(ia / ib); }"
   , "  if (strcmp(op, \"**\") == 0) { int64_t r=1; for(int64_t e=ib;e>0;e--) r*=ia; return mi_int(r); }"
-  , "  if (strcmp(op, \"==\") == 0) return mi_int(ia == ib);"
-  , "  if (strcmp(op, \"/=\") == 0) return mi_int(ia != ib);"
   , "  if (strcmp(op, \"<\") == 0) return mi_int(ia < ib);"
   , "  if (strcmp(op, \">\") == 0) return mi_int(ia > ib);"
   , "  if (strcmp(op, \"<=\") == 0) return mi_int(ia <= ib);"
@@ -1266,8 +1291,17 @@ emitPreamble h = hPutStr h $ unlines
   , "struct mi_slice_env2 { MiVal str; int start; };"
   , "static MiVal mi_builtin_slice3(MiVal end_val, void *env) {"
   , "  struct mi_slice_env2 *e = (struct mi_slice_env2 *)env;"
-  , "  int s = e->start, n = e->str.as.str.len;"
+  , "  int s = e->start;"
   , "  int end = (int)end_val.as.i;"
+  , "  if (e->str.type == MI_LIST) {"
+  , "    int n = e->str.as.list.len;"
+  , "    if (s < 0) s = 0; if (end > n) end = n; if (s > end) s = end;"
+  , "    int rlen = end - s;"
+  , "    MiVal *items = mi_alloc(rlen * sizeof(MiVal));"
+  , "    for (int i = 0; i < rlen; i++) items[i] = e->str.as.list.items[s + i];"
+  , "    return mi_list(items, rlen);"
+  , "  }"
+  , "  int n = e->str.as.str.len;"
   , "  if (s < 0) s = 0; if (end > n) end = n; if (s > end) s = end;"
   , "  return mi_stringn(e->str.as.str.data + s, end - s);"
   , "}"
@@ -1451,6 +1485,14 @@ emitPreamble h = hPutStr h $ unlines
   , "  if (v.type == MI_INT) return mi_int(v.as.i < 0 ? -v.as.i : v.as.i);"
   , "  if (v.type == MI_FLOAT) return mi_float(v.as.f < 0 ? -v.as.f : v.as.f);"
   , "  fprintf(stderr, \"abs: unsupported type\\n\"); exit(1);"
+  , "}"
+  , ""
+  , "// not v → 0 if truthy, 1 if falsy"
+  , "static MiVal mi_builtin_not(MiVal v, void *env) {"
+  , "  (void)env;"
+  , "  v = mi_force(v, NULL);"
+  , "  if (v.type == MI_INT) return mi_int(v.as.i == 0 ? 1 : 0);"
+  , "  return mi_int(0);"
   , "}"
   , ""
   , "// min a b → smaller value (dispatches on type)"

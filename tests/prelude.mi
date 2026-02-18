@@ -1,0 +1,43 @@
+/* Standard prelude tests */
+
+/* identity and const */
+id_test = id 42          /* expect: 42 */
+const_test = const 1 2   /* expect: 1 */
+flip_test = flip (\a b -> a - b) 1 5 /* expect: 4 */
+
+/* aggregation */
+sum_test = sum [1, 2, 3, 4, 5]      /* expect: 15 */
+product_test = product [1, 2, 3, 4]  /* expect: 24 */
+
+/* predicates */
+any_true = any (\x -> x > 3) [1, 2, 5]   /* expect: 1 */
+any_false = any (\x -> x > 10) [1, 2, 5]  /* expect: 0 */
+all_true = all (\x -> x > 0) [1, 2, 3]    /* expect: 1 */
+all_false = all (\x -> x > 2) [1, 2, 3]   /* expect: 0 */
+
+/* contains */
+has_2 = contains [1, 2, 3] 2    /* expect: 1 */
+has_9 = contains [1, 2, 3] 9    /* expect: 0 */
+
+/* range */
+range_test = range 1 5           /* expect: [1, 2, 3, 4, 5] */
+range_empty = range 5 1          /* expect: [] */
+
+/* zip */
+zip_test = zip [1, 2, 3] [10, 20, 30]  /* expect: [[1, 10], [2, 20], [3, 30]] */
+
+/* list accessors */
+head_test = head [10, 20, 30]    /* expect: 10 */
+tail_test = tail [10, 20, 30]    /* expect: [20, 30] */
+last_test = last [10, 20, 30]    /* expect: 30 */
+init_test = init [10, 20, 30]    /* expect: [10, 20] */
+
+/* reverse */
+rev_test = reverse [1, 2, 3]    /* expect: [3, 2, 1] */
+
+/* take and drop */
+take_test = take 2 [1, 2, 3, 4, 5]  /* expect: [1, 2] */
+drop_test = drop 2 [1, 2, 3, 4, 5]  /* expect: [3, 4, 5] */
+
+/* enumerate */
+enum_test = enumerate ["a", "b", "c"]  /* expect: [[0, a], [1, b], [2, c]] */
