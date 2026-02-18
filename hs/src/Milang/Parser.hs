@@ -384,7 +384,7 @@ pPrec minPrec = do
 pInfixRest :: Int -> Expr -> Parser Expr
 pInfixRest minPrec left = do
   let tbl = unsafePerformIO (readIORef globalOpTable)
-  -- Try backslash continuation before checking for operator
+  -- Allow continuation: backslash + newline
   _ <- many (try $ char '\\' *> newline *> sc)
   -- Try backtick infix: a `div` b → div a b
   mBacktick <- optional (try $ lookAhead pBacktickOp)
@@ -396,7 +396,7 @@ pInfixRest minPrec left = do
         then pure left
         else do
           _ <- pBacktickOp  -- consume
-          _ <- many (try $ char '\\' *> newline *> sc)
+          scn  -- allow newline after operator
           right <- pPrec (bPrec + 1)
           let result = App (App (Name name) left) right
           pInfixRest minPrec result
@@ -410,8 +410,7 @@ pInfixRest minPrec left = do
              then pure left
              else do
                _ <- pOperator  -- consume the operator
-               -- Allow continuation after operator too
-               _ <- many (try $ char '\\' *> newline *> sc)
+               scn  -- allow newline after operator
                let nextPrec = if assoc == RightAssoc then prec else prec + 1
                right <- pPrec nextPrec
                let result
@@ -529,12 +528,14 @@ pAtom = choice
 pParens :: Parser Expr
 pParens = do
   _ <- symbol "("
+  scn  -- allow newline after (
   -- Try operator-as-function: (+), (<=>), etc.
-  mop <- optional (try (pOperator <* symbol ")"))
+  mop <- optional (try (pOperator <* scn <* symbol ")"))
   case mop of
     Just op -> pure $ Name op
     Nothing -> do
       e <- pExpr
+      scn  -- allow newline before )
       _ <- symbol ")"
       pure e
 
@@ -556,7 +557,9 @@ pSplice = do
 pListLit :: Parser Expr
 pListLit = do
   _ <- symbol "["
-  es <- pExpr `sepEndBy` symbol ","
+  scn  -- allow newline after [
+  es <- pExpr `sepEndBy` (symbol "," *> scn)
+  scn  -- allow newline before ]
   _ <- symbol "]"
   pure $ ListLit es
 

@@ -1,0 +1,16 @@
+xs = [
+  10,
+  20,
+  30
+]
+
+result = (
+  1 + 2 +
+  3 + 4
+)
+
+piped = (xs |>
+  map (\x -> x * 2) |>
+  fold (+) 0)
+
+main = result + piped
