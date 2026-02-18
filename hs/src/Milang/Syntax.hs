@@ -60,6 +60,7 @@ data Binding = Binding
   , bindParams :: ![Text]  -- f x y = ... → params = [x, y]
   , bindBody :: Expr
   , bindPos :: !(Maybe SrcPos)  -- source location of this binding
+  , bindType :: !(Maybe Expr)   -- optional type annotation from ::
   } deriving (Show, Eq)
 
 -- | Pattern for case expressions / destructuring
@@ -114,9 +115,13 @@ prettyBindings :: Int -> [Binding] -> String
 prettyBindings i = concatMap (\b -> replicate i ' ' ++ prettyBinding i b ++ "\n")
 
 prettyBinding :: Int -> Binding -> String
-prettyBinding i (Binding n lz ps body _) =
-  T.unpack n ++ concatMap ((" " ++) . T.unpack) ps ++
-  (if lz then " := " else " = ") ++ prettyExpr i body
+prettyBinding i (Binding n lz ps body _ mty) =
+  let typeStr = case mty of
+        Just t  -> T.unpack n ++ " :: " ++ prettyExpr i t ++ "\n" ++ replicate i ' '
+        Nothing -> ""
+  in typeStr ++
+     T.unpack n ++ concatMap ((" " ++) . T.unpack) ps ++
+     (if lz then " := " else " = ") ++ prettyExpr i body
 
 prettyAlt :: Int -> Alt -> String
 prettyAlt i (Alt p mg b) =

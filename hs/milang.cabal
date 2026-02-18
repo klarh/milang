@@ -16,6 +16,7 @@ executable milang
                   , Milang.Reduce
                   , Milang.Codegen
                   , Milang.Prelude
+                  , Milang.TypeCheck
   hs-source-dirs:   src
   default-language:  Haskell2010
   ghc-options:       -Wall -O2 -dynamic

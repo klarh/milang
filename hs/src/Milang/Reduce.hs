@@ -174,8 +174,8 @@ reduceBind env b =
 reduceBinOp :: Text -> Expr -> Expr -> Expr
 -- Cons operator: h : t → Record "Cons" [head=h, tail=t]
 reduceBinOp ":" h t =
-  Record "Cons" [ Binding "head" False [] h Nothing
-                , Binding "tail" False [] t Nothing ]
+  Record "Cons" [ Binding "head" False [] h Nothing Nothing
+                , Binding "tail" False [] t Nothing Nothing ]
 -- Int × Int
 reduceBinOp "+"  (IntLit a) (IntLit b) = IntLit (a + b)
 reduceBinOp "-"  (IntLit a) (IntLit b) = IntLit (a - b)
@@ -259,7 +259,7 @@ reduceApp (Lam p body) arg =
 -- Uppercase constructor application: Just 5 → Just {_0 = 5}
 reduceApp (Name n) arg
   | not (T.null n) && isUpper (T.head n) =
-    Record n [Binding "_0" False [] arg Nothing]
+    Record n [Binding "_0" False [] arg Nothing Nothing]
 -- Record introspection builtins
 reduceApp (Name "fields") (Record _ bs) =
   listToCons [bindBody b | b <- bs]
@@ -275,13 +275,13 @@ reduceApp (App (Name "getField") (Record _ bs)) (StringLit name) =
 reduceApp (App (App (Name "setField") (Record t bs)) (StringLit name)) val =
   let updated = map (\b -> if bindName b == name then b { bindBody = val } else b) bs
       exists = any (\b -> bindName b == name) bs
-      result = if exists then updated else bs ++ [Binding name False [] val Nothing]
+      result = if exists then updated else bs ++ [Binding name False [] val Nothing Nothing]
   in Record t result
 -- Positional record extension: (Pair {_0=1}) 2 → Pair {_0=1, _1=2}
 reduceApp (Record tag bs) arg
   | isPositionalRecord bs =
     let nextIdx = "_" <> T.pack (show (length bs))
-    in Record tag (bs ++ [Binding nextIdx False [] arg Nothing])
+    in Record tag (bs ++ [Binding nextIdx False [] arg Nothing Nothing])
 -- Residual
 reduceApp f x = App f x
 
@@ -380,7 +380,7 @@ substAlt n e a = a { altBody = substExpr n e (altBody a)
 
 -- | Helper to build a binding with no source position
 mkBind :: Text -> Expr -> Binding
-mkBind n e = Binding n False [] e Nothing
+mkBind n e = Binding n False [] e Nothing Nothing
 
 -- | Convert a list of expressions to a cons-cell chain: Cons(head, Cons(..., Nil))
 listToCons :: [Expr] -> Expr
@@ -522,7 +522,7 @@ unquoteBindings expr = case consToList expr of
     unquoteField (Record "Field" bs) = do
       name <- getStrField "name" bs
       val  <- getField "val" bs >>= unquoteExpr
-      Just (Binding name False [] val Nothing)
+      Just (Binding name False [] val Nothing Nothing)
     unquoteField _ = Nothing
 
 unquoteAlt :: Expr -> Maybe Alt

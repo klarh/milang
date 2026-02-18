@@ -18,6 +18,7 @@ import Milang.Reduce (reduce, emptyEnv, warnings, Warning(..))
 import Milang.Syntax (prettySrcPos)
 import Milang.Codegen (codegen)
 import Milang.Prelude (preludeBindings)
+import Milang.TypeCheck (typeCheck, TypeError(..))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 
@@ -78,6 +79,11 @@ loadAndReduce file = do
       let reduced = reduce emptyEnv astWithPrelude
       let ws = warnings reduced
       mapM_ (printWarning file) ws
+      -- Type check: report errors as warnings
+      let typeErrs = case reduced of
+            Namespace bs -> typeCheck bs
+            _            -> []
+      mapM_ (printTypeError file) typeErrs
       pure $ Right (reduced, li)
 
 -- | Prepend prelude bindings to the user's top-level namespace
@@ -91,6 +97,13 @@ printWarning _file (Warning mpos msg) =
               Just pos -> prettySrcPos pos
               Nothing  -> _file
   in hPutStrLn stderr $ "warning: " ++ loc ++ ": " ++ msg
+
+printTypeError :: FilePath -> TypeError -> IO ()
+printTypeError _file te =
+  let loc = case tePos te of
+              Just pos -> prettySrcPos pos
+              Nothing  -> _file
+  in hPutStrLn stderr $ "type error: " ++ loc ++ ": " ++ T.unpack (teName te) ++ ": " ++ T.unpack (teMessage te)
 
 -- | dump: show parsed AST (before import resolution)
 cmdDump :: FilePath -> IO ()
@@ -316,7 +329,7 @@ replEval env input =
       -- Try as expression
       case parseExpr "<repl>" input of
         Right expr -> do
-          let b = Binding "_it" False [] expr Nothing
+          let b = Binding "_it" False [] expr Nothing Nothing
           let envNoIt = filter (\x -> bindName x /= "_it") env
           let newEnv = envNoIt ++ [b]
           let ast = Namespace newEnv

@@ -41,10 +41,26 @@ scn = L.space space1 (L.skipLineComment "--") (L.skipBlockCommentNested "/*" "*/
 pProgram :: Parser Expr
 pProgram = do
   bss <- many (pTopBindings <* skipNewlines)
-  pure $ Namespace (concat bss)
+  pure $ Namespace (mergeTypeAnnotations (concat bss))
 
 skipNewlines :: Parser ()
 skipNewlines = scn
+
+-- | Merge type annotations (::) with their value bindings (=).
+-- A type-only binding (bindType = Just t, body = IntLit 0) followed by
+-- a value binding with the same name gets merged into one binding.
+mergeTypeAnnotations :: [Binding] -> [Binding]
+mergeTypeAnnotations [] = []
+mergeTypeAnnotations [b] = [b]
+mergeTypeAnnotations (b1 : b2 : rest)
+  | isTypeOnly b1 && bindName b1 == bindName b2 && not (isTypeOnly b2) =
+    -- Merge: attach b1's type to b2
+    b2 { bindType = bindType b1 } : mergeTypeAnnotations rest
+  | otherwise = b1 : mergeTypeAnnotations (b2 : rest)
+  where
+    isTypeOnly b = case (bindType b, bindBody b) of
+      (Just _, IntLit 0) -> True
+      _                  -> False
 
 -- ── Bindings ──────────────────────────────────────────────────────
 
@@ -56,9 +72,11 @@ pTopBindings = do
   pBindingsAt pos
 
 -- Parse binding(s) at a given indent level.
--- Tries destructuring ({a; b} = expr) first, then falls back to normal binding.
+-- Tries type annotation (::) first, then destructuring, then normal binding.
 pBindingsAt :: Pos -> Parser [Binding]
-pBindingsAt ref = try (pDestructBinding ref) <|> (pure <$> pBindingAt ref)
+pBindingsAt ref = try (pure <$> pTypeBindingAt ref)
+             <|> try (pDestructBinding ref)
+             <|> (pure <$> pBindingAt ref)
 
 -- Parse a destructuring binding: {field1; field2 = alias; ...} = expr
 -- Desugars to: _tmp_N = expr; field1 = _tmp_N.field1; alias = _tmp_N.field2; ...
@@ -72,9 +90,9 @@ pDestructBinding _ref = do
   _ <- symbol "="
   body <- pExpr
   let tmpName = T.pack ("_destruct_" ++ show off)
-      tmpBind = Binding tmpName False [] body (Just pos)
+      tmpBind = Binding tmpName False [] body (Just pos) Nothing
       fieldBinds = map (\(localName, fieldName) ->
-        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos)
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing
         ) fields
   pure (tmpBind : fieldBinds)
 
@@ -87,6 +105,16 @@ pDestructField = do
   pure $ case mField of
     Just field -> (name, field)   -- {myA = a} means bind myA from field a
     Nothing    -> (name, name)    -- {a} means bind a from field a
+
+-- Parse a type annotation: name :: typeExpr
+-- In type context, {x = Num; y = Num} is allowed as an anonymous record type.
+pTypeBindingAt :: Pos -> Parser Binding
+pTypeBindingAt _ref = do
+  pos <- grabPos
+  name <- pBindingName
+  _ <- symbol "::"
+  typeExpr <- try pAnonRecord <|> pExpr
+  pure $ Binding name False [] (IntLit 0) (Just pos) (Just typeExpr)
 
 -- Parse a binding given its indent level
 pBindingAt :: Pos -> Parser Binding
@@ -103,7 +131,7 @@ pBindingAt ref = do
   mWith <- optional (try pBraceWith)
   let body'' = maybe body' (With body') mWith
   children <- pIndentedChildren ref body''
-  pure $ Binding name lazy params children (Just pos)
+  pure $ Binding name lazy params children (Just pos) Nothing
 
 -- Name on the LHS of a binding: lowercase or uppercase (for module aliases)
 -- Uppercase binding must be followed by = or := (not {, which would be a record)
@@ -120,7 +148,7 @@ pBindingName = try $ do
   -- If uppercase and next char is '{', this isn't a binding — fail
   if isUpper (T.head n)
     then do
-      _ <- lookAhead (try pIdentifier <|> try (symbol "=" *> pure "") <|> try (symbol ":=" *> pure ""))
+      _ <- lookAhead (try pIdentifier <|> try (symbol "::" *> pure "") <|> try (symbol "=" *> pure "") <|> try (symbol ":=" *> pure ""))
       pure n
     else pure n
 
@@ -169,7 +197,7 @@ pBareExpr = do
   off <- getOffset
   e <- pExpr
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding name False [] e (Just pos)]
+  pure [Binding name False [] e (Just pos) Nothing]
 
 -- Split bindings: if the last item is an auto-generated statement binding,
 -- use its body as the With result; otherwise use the original body.
@@ -294,8 +322,8 @@ pOperator :: Parser Text
 pOperator = try $ lexeme $ do
   op <- some (oneOf ("+-*/^<>=!&|@%?:" :: String))
   let t = T.pack op
-  -- Don't consume binding operators or match arrow
-  if t == "=" || t == ":=" || t == "->"
+  -- Don't consume binding operators, match arrow, or type annotation
+  if t == "=" || t == ":=" || t == "->" || t == "::"
     then fail "reserved operator"
     else pure t
 
@@ -382,6 +410,15 @@ pListLit = do
   _ <- symbol "]"
   pure $ ListLit es
 
+-- | Parse an anonymous record literal: {x = 1; y = 2}
+-- Distinguished from union decl by having lowercase first field name.
+pAnonRecord :: Parser Expr
+pAnonRecord = do
+  _ <- symbol "{"
+  bs <- pBraceBindings
+  _ <- symbol "}"
+  pure $ Record "" bs
+
 -- | Parse a union/enum declaration: {Just _; None; Pair _ _}
 -- Produces a Namespace of constructor bindings.
 pUnionDecl :: Parser Expr
@@ -415,11 +452,11 @@ pConstructorField = symbol "_" <|> lexeme (do
 
 -- Convert a constructor declaration to a binding
 ctorToBinding :: (Text, [Text]) -> Binding
-ctorToBinding (name, []) = Binding name False [] (Record name []) Nothing
+ctorToBinding (name, []) = Binding name False [] (Record name []) Nothing Nothing
 ctorToBinding (name, params) =
-  let fields = [Binding p False [] (Name p) Nothing | p <- params]
+  let fields = [Binding p False [] (Name p) Nothing Nothing | p <- params]
       body = foldr (\p b -> Lam p b) (Record name fields) params
-  in Binding name False [] body Nothing
+  in Binding name False [] body Nothing Nothing
 
 pBraceBindings :: Parser [Binding]
 pBraceBindings = concat <$> (pBraceBindingOrDestruct `sepEndBy` pSep)
@@ -436,7 +473,7 @@ pBraceBareExpr = do
   off <- getOffset
   e <- pExpr
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding name False [] e (Just pos)]
+  pure [Binding name False [] e (Just pos) Nothing]
 
 pBraceDestruct :: Parser [Binding]
 pBraceDestruct = do
@@ -449,9 +486,9 @@ pBraceDestruct = do
   _ <- symbol "="
   body <- pExpr
   let tmpName = T.pack ("_destruct_" ++ show off)
-      tmpBind = Binding tmpName False [] body (Just pos)
+      tmpBind = Binding tmpName False [] body (Just pos) Nothing
       fieldBinds = map (\(localName, fieldName) ->
-        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos)
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing
         ) fields
   pure (tmpBind : fieldBinds)
 
@@ -470,7 +507,7 @@ pBraceBinding = do
   body <- pExpr
   mWith <- optional (try pBraceWith)
   let body' = maybe body (With body) mWith
-  pure $ Binding name lazy params body' (Just pos)
+  pure $ Binding name lazy params body' (Just pos) Nothing
 
 pSep :: Parser ()
 pSep = void (symbol ";") <|> void (some (lexeme newline))

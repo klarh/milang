@@ -200,8 +200,8 @@ exprToC st (Thunk body) = do
 exprToC st (ListLit es) = exprToC st (listLitToCons es)
   where
     listLitToCons []     = Record "Nil" []
-    listLitToCons (x:xs) = Record "Cons" [Binding "head" False [] x Nothing,
-                                           Binding "tail" False [] (listLitToCons xs) Nothing]
+    listLitToCons (x:xs) = Record "Cons" [Binding "head" False [] x Nothing Nothing,
+                                           Binding "tail" False [] (listLitToCons xs) Nothing Nothing]
 
 exprToC st (RecordUpdate base updates) = do
   baseCode <- exprToC st base
