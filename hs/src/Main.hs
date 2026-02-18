@@ -4,10 +4,10 @@ module Main where
 import System.Environment (getArgs)
 import Data.List (nub)
 import System.Exit (exitFailure, ExitCode(..))
-import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..), isEOF)
+import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (callProcess, readProcessWithExitCode)
-import System.Directory (removeFile, getCurrentDirectory, doesFileExist)
-import System.FilePath (replaceExtension)
+import System.Directory (removeFile, getCurrentDirectory, doesFileExist, getXdgDirectory, XdgDirectory(..), createDirectoryIfMissing)
+import System.FilePath (replaceExtension, (</>))
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
@@ -21,6 +21,9 @@ import Milang.Prelude (preludeBindings)
 import Milang.TypeCheck (typeCheck, TypeError(..))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+
+import System.Console.Haskeline
+import Control.Monad.IO.Class (liftIO)
 
 -- | Names defined by the standard prelude (hidden from script output)
 preludeNames :: Set.Set T.Text
@@ -213,65 +216,63 @@ cmdPin file = do
           trimmed = T.dropWhile (== ' ') rest
       in not (T.null trimmed) && T.head trimmed == '{'
 
--- | REPL: interactive read-eval-print loop
+-- | REPL: interactive read-eval-print loop with haskeline
 cmdRepl :: IO ()
 cmdRepl = do
   hSetBuffering stdout LineBuffering
+  dataDir <- getXdgDirectory XdgData "milang"
+  createDirectoryIfMissing True dataDir
+  let histFile = dataDir </> "history"
+  let settings = defaultSettings { historyFile = Just histFile }
   putStrLn "milang repl — type expressions or bindings, :q to quit"
-  replLoop preludeBindings
+  putStrLn "  End a line with \\ to continue on next line. Ctrl-D to exit."
+  runInputT settings (replLoop preludeBindings)
 
-replLoop :: [Binding] -> IO ()
+replLoop :: [Binding] -> InputT IO ()
 replLoop env = do
-  input <- readInput "λ> "
-  case input of
-    Nothing -> putStrLn ""  -- EOF
-    Just txt
-      | txt == ":q" || txt == ":quit" -> pure ()
-      | T.null txt -> replLoop env
-      | otherwise -> do
-          (env', printNames) <- replEval env txt
-          case printNames of
-            Nothing -> replLoop env
-            Just names -> do
-              replPrint env' names
-              replLoop env'
+  minput <- getInputLine "λ> "
+  case minput of
+    Nothing -> outputStrLn ""  -- EOF / Ctrl-D
+    Just line -> do
+      let txt = T.strip (T.pack line)
+      if txt == ":q" || txt == ":quit" then pure ()
+      else if T.null txt then replLoop env
+      else do
+        -- Check if input needs continuation (unclosed delimiters, trailing \ etc.)
+        full <- readContinuation (T.pack line)
+        evalAndLoop env full
 
--- | Read possibly multi-line input. Continue reading if line ends with \
---   or has unclosed delimiters, or ends with -> or ,
-readInput :: String -> IO (Maybe T.Text)
-readInput prompt = readLines prompt T.empty False
+-- | Read continuation lines for auto-detected incomplete input
+readContinuation :: T.Text -> InputT IO T.Text
+readContinuation soFar
+  | T.isSuffixOf "\\" soFar = do
+      let base = T.init soFar
+      more <- getInputLine ".. "
+      case more of
+        Nothing -> pure (T.strip base)
+        Just line -> readContinuation (base <> "\n" <> T.pack line)
+  | isIncomplete soFar = do
+      more <- getInputLine ".. "
+      case more of
+        Nothing -> pure (T.strip soFar)
+        Just line ->
+          let full = soFar <> "\n" <> T.pack line
+          in if T.null (T.strip (T.pack line))
+             then pure (T.strip full)  -- blank line ends block
+             else readContinuation full
+  | otherwise = pure (T.strip soFar)
 
-readLines :: String -> T.Text -> Bool -> IO (Maybe T.Text)
-readLines prompt acc inBlock = do
-  putStr prompt
-  hFlush stdout
-  eof <- isEOF
-  if eof then pure (if T.null acc then Nothing else Just (T.strip acc))
-  else do
-    line <- getLine
-    let txt = T.pack line
-    -- Empty line ends a multi-line block
-    if T.null (T.strip txt) && not (T.null acc)
-      then pure (Just (T.strip acc))
-      else if T.isSuffixOf "\\" txt
-        then do
-          let base = T.init txt
-          let soFar = if T.null acc then base else acc <> "\n" <> base
-          readLines ".. " soFar True
-        else do
-          let soFar = if T.null acc then txt else acc <> "\n" <> txt
-          if isIncomplete soFar
-            then readLines ".. " soFar True
-            else if inBlock && isContinuationLine txt
-              then readLines ".. " soFar True
-              else pure (Just (T.strip soFar))
-
--- | Check if a line looks like a continuation (starts with | for guards, or is indented)
-isContinuationLine :: T.Text -> Bool
-isContinuationLine t = case T.uncons t of
-  Just (' ', _) -> True
-  Just ('|', _) -> True
-  _ -> False
+-- | Evaluate input and continue the loop
+evalAndLoop :: [Binding] -> T.Text -> InputT IO ()
+evalAndLoop env txt
+  | T.null txt = replLoop env
+  | otherwise = do
+      (env', printNames) <- liftIO $ replEval env txt
+      case printNames of
+        Nothing -> replLoop env
+        Just names -> do
+          liftIO $ replPrint env' names
+          replLoop env'
 
 -- | Check if text has unclosed delimiters or ends with continuation tokens
 isIncomplete :: T.Text -> Bool
@@ -302,17 +303,24 @@ hasUnclosedDelims t = go 0 0 0 (T.unpack t)
 replEval :: [Binding] -> T.Text -> IO ([Binding], Maybe [T.Text])
 replEval env input =
   case parseProgram "<repl>" input of
-    Right (Namespace [b]) | bindName b /= "_stmt" && not ("_stmt_" `T.isPrefixOf` bindName b) -> do
-      -- Single named binding
+    Right (Namespace [b]) | isTypeOnly b -> do
+      -- Type-only binding (x :: Num): store it, don't print
       let envClean = filter (\x -> bindName x /= bindName b) env
       let newEnv = envClean ++ [b]
+      putStrLn $ "  " ++ T.unpack (bindName b) ++ " :: <type>"
+      pure (newEnv, Nothing)
+    Right (Namespace [b]) | isNamedBinding b -> do
+      -- Single named binding: merge with pending type annotation if present
+      let merged = mergeWithPendingType env b
+      let envClean = filter (\x -> bindName x /= bindName merged) env
+      let newEnv = envClean ++ [merged]
       let ast = Namespace newEnv
       let reduced = reduce emptyEnv ast
       let ws = warnings reduced
       mapM_ (printWarning "<repl>") ws
       case reduced of
-        Namespace bs -> pure (bs, Just [bindName b])
-        _ -> pure (newEnv, Just [bindName b])
+        Namespace bs -> pure (bs, Just [bindName merged])
+        _ -> pure (newEnv, Just [bindName merged])
     Right (Namespace bs) | length bs > 1, all isNamedBinding bs -> do
       -- Multiple bindings
       let names = map bindName bs
@@ -339,11 +347,19 @@ replEval env input =
           case reduced of
             Namespace bs -> pure (bs, Just ["_it"])
             _ -> pure (newEnv, Just ["_it"])
-        Left err -> do
+        Left _err -> do
           hPutStrLn stderr "parse error"
           pure (env, Nothing)
   where
     isNamedBinding b = not ("_stmt" `T.isPrefixOf` bindName b)
+    isTypeOnly b = case (bindType b, bindBody b) of
+      (Just _, IntLit 0) | null (bindParams b) -> True
+      _                                        -> False
+    -- Merge a value binding with a pending type-only binding in env
+    mergeWithPendingType envBindings valBind =
+      case filter (\x -> bindName x == bindName valBind && isTypeOnly x) envBindings of
+        (typeBind:_) -> valBind { bindType = bindType typeBind }
+        []           -> valBind
 
 -- | Print specific bindings by compiling and running
 replPrint :: [Binding] -> [T.Text] -> IO ()
