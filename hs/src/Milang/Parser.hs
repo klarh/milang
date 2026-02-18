@@ -676,7 +676,7 @@ pSep :: Parser ()
 pSep = void (symbol ";") <|> void (some (lexeme newline))
 
 skipBraceWhitespace :: Parser ()
-skipBraceWhitespace = void $ many (char ' ' <|> char '\t' <|> newline)
+skipBraceWhitespace = scn
 
 pStringLit :: Parser Expr
 pStringLit = lexeme $ do
