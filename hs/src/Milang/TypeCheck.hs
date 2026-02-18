@@ -5,6 +5,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import Milang.Syntax
+import qualified Milang.Reduce as R
 
 -- | Type representation
 data MiType
@@ -33,24 +34,72 @@ type TypeEnv = Map.Map Text MiType
 -- Returns a list of type errors (empty = all good).
 typeCheck :: [Binding] -> [TypeError]
 typeCheck bindings =
-  let -- First pass: collect all :: annotations
-      typeEnv = collectTypes bindings
+  let -- Build a type-domain reducer env from :: annotations
+      typeReduceEnv = collectTypeEnv bindings
+      -- First pass: reduce and collect type annotations
+      typeEnv = collectTypes typeReduceEnv bindings
       -- Second pass: check each annotated binding
   in concatMap (checkBinding typeEnv) bindings
 
--- | Collect type annotations into an environment
-collectTypes :: [Binding] -> TypeEnv
-collectTypes = foldl go Map.empty
+-- | Build a reducer environment from type-domain bindings.
+-- Type aliases like `Point :: {x = Num; y = Num}` become
+-- reducible expressions in the type domain.
+-- Free lowercase names in type expressions become lambda parameters,
+-- enabling type-level functions: `Pair :: {fst = a; snd = b}` becomes
+-- `\a -> \b -> {fst = a; snd = b}` in the type reducer env.
+collectTypeEnv :: [Binding] -> R.Env
+collectTypeEnv = foldl go R.emptyEnv
   where
     go env b = case bindType b of
-      Just tyExpr -> Map.insert (bindName b) (exprToTypeWith env tyExpr) env
-      Nothing     -> env
+      Just tyExpr ->
+        let freeVars = freeTypeVars tyExpr
+            wrapped = foldr Lam tyExpr freeVars
+        in Map.insert (bindName b) wrapped env
+      Nothing -> env
+
+-- | Find free lowercase names in a type expression (these are type variables).
+-- Returns them in order of first occurrence (stable for lambda wrapping).
+freeTypeVars :: Expr -> [Text]
+freeTypeVars = go []
+  where
+    go seen (Name n)
+      | n `elem` ["Num", "Str", "Float"] = []
+      | not (T.null n) && isLower (T.head n) && n `notElem` seen = [n]
+      | otherwise = []
+      where isLower c = c >= 'a' && c <= 'z'
+    go seen (BinOp _ l r) =
+      let lv = go seen l
+      in lv ++ go (seen ++ lv) r
+    go seen (Record _ fields) = goBindings seen fields
+    go seen (Namespace fields) = goBindings seen fields
+    go seen (App f x) =
+      let fv = go seen f
+      in fv ++ go (seen ++ fv) x
+    go seen (Lam p body) = go (seen ++ [p]) body
+    go _ _ = []
+
+    goBindings seen [] = []
+    goBindings seen (b:bs) =
+      let bv = go seen (bindBody b)
+      in bv ++ goBindings (seen ++ bv) bs
+
+-- | Collect type annotations into an environment, reducing type expressions
+collectTypes :: R.Env -> [Binding] -> TypeEnv
+collectTypes reduceEnv = foldl go Map.empty
+  where
+    go env b = case bindType b of
+      Just tyExpr ->
+        let reduced = R.reduce reduceEnv tyExpr
+        in Map.insert (bindName b) (exprToTypeWith env reduced) env
+      Nothing -> env
 
 -- | Convert a type expression (milang Expr) to a MiType.
--- Type expressions are regular milang expressions used in the type domain:
+-- Type expressions are regular milang expressions that have been reduced
+-- in the type domain. Handles:
 --   Num, Str, Float         → primitive types
 --   a : b                   → function type (BinOp ":")
---   {x = Num; y = Str}      → record type
+--   {x = Num; y = Str}      → record type (Record or anonymous)
+--   App f x                 → type application (reduced if possible)
 --   lowercase name           → type variable
 exprToType :: Expr -> MiType
 exprToType = exprToTypeWith Map.empty
@@ -71,19 +120,80 @@ exprToTypeWith env (Record tag fields) =
 -- Anonymous record from parser (tag = "")
 exprToTypeWith env (Namespace bindings) =
   TRecord "" [(bindName b, exprToTypeWith env (bindBody b)) | b <- bindings]
+-- Lam in type position: represents a type-level function (keep as TAny for now,
+-- these get applied via the reducer before reaching here)
+exprToTypeWith _ (Lam _ _) = TAny
+-- App that wasn't fully reduced — try to interpret anyway
+exprToTypeWith env (App f x) =
+  case exprToTypeWith env f of
+    TFun _ ret -> ret  -- function type applied → return type
+    _          -> TAny
 exprToTypeWith _ _ = TAny
 
--- | Check a single binding against its type annotation
+-- | Check a single binding against its type annotation and for operand errors
 checkBinding :: TypeEnv -> Binding -> [TypeError]
-checkBinding typeEnv b = case bindType b of
-  Nothing -> []  -- no annotation, nothing to check
-  Just tyExpr ->
-    -- Skip type-only bindings (:: with no value body)
-    case bindBody b of
-      IntLit 0 | null (bindParams b) -> []
-      _ ->
-        let expectedType = exprToTypeWith typeEnv tyExpr
-        in checkExprAgainst typeEnv (bindPos b) (bindName b) expectedType (bindBody b)
+checkBinding typeEnv b =
+  let annotErrs = case bindType b of
+        Nothing -> []
+        Just tyExpr ->
+          case bindBody b of
+            IntLit 0 | null (bindParams b) -> []
+            _ -> let expectedType = exprToTypeWith typeEnv tyExpr
+                 in checkExprAgainst typeEnv (bindPos b) (bindName b) expectedType (bindBody b)
+      -- Also check for operand type errors in the body (even without annotation)
+      operandErrs = checkOperands typeEnv (bindPos b) (bindName b) (bindBody b)
+  in annotErrs ++ operandErrs
+
+-- | Walk an expression and report operand type mismatches.
+-- E.g. "hello" * 3 → Str used with arithmetic operator
+checkOperands :: TypeEnv -> Maybe SrcPos -> Text -> Expr -> [TypeError]
+checkOperands env pos name = go
+  where
+    go (BinOp op l r)
+      | op `elem` ["-", "*", "/", "^", "%"] =
+        let lt = inferExpr env l
+            rt = inferExpr env r
+            errs = checkNumericOp op lt rt
+        in errs ++ go l ++ go r
+      | op == "++" =
+        let lt = inferExpr env l
+            rt = inferExpr env r
+            errs = checkStringOp "++" lt rt
+        in errs ++ go l ++ go r
+      | op `elem` ["<", ">", "<=", ">="] =
+        let lt = inferExpr env l
+            rt = inferExpr env r
+            errs = checkNumericOp op lt rt
+        in errs ++ go l ++ go r
+      | otherwise = go l ++ go r
+    go (App f x) = go f ++ go x
+    go (Lam _ body) = go body
+    go (With body bs) = go body ++ concatMap (go . bindBody) bs
+    go (Case _ alts) = concatMap (\(Alt _ _ body) -> go body) alts
+    go (Record _ bs) = concatMap (go . bindBody) bs
+    go (Thunk e) = go e
+    go _ = []
+
+    checkNumericOp op lt rt
+      | lt == TStr = [mkOpErr op "Str" "numeric"]
+      | rt == TStr = [mkOpErr op "Str" "numeric"]
+      | lt == TRecord "" [] || rt == TRecord "" [] = []
+      | otherwise = []  -- Num, Float, TAny, TVar all OK
+
+    checkStringOp op lt rt
+      | lt == TNum = [mkOpErr op "Num" "Str"]
+      | lt == TFloat = [mkOpErr op "Float" "Str"]
+      | rt == TNum = [mkOpErr op "Num" "Str"]
+      | rt == TFloat = [mkOpErr op "Float" "Str"]
+      | otherwise = []
+
+    mkOpErr op actual expected = TypeError
+      { tePos = pos
+      , teName = name
+      , teExpected = TAny
+      , teActual = TAny
+      , teMessage = "operator " <> op <> ": " <> actual <> " used where " <> expected <> " expected"
+      }
 
 -- | Bidirectional check: push expected type into expression.
 -- Pushes function types into nested lambdas, binding param types in env.
