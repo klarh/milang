@@ -1,0 +1,27 @@
+/* User-defined operators and parse-domain features */
+
+/* Define a custom comparison operator */
+(<=>) a b = if (a == b) ~0 ~(if (a > b) ~1 ~(0 - 1))
+
+/* Set its precedence via parse domain */
+(<=>) :! {prec = 30; assoc = Left}
+
+/* Operator-as-function: wrap in parens */
+add = (+)
+result = add 3 4
+
+/* Backtick infix */
+div a b = a / b
+quotient = 10 `div` 2
+
+/* Use the custom operator */
+cmp1 = 5 <=> 3
+cmp2 = 3 <=> 3
+cmp3 = 1 <=> 5
+
+/* Fold with operator-as-function */
+total = fold (+) 0 [1, 2, 3, 4, 5]
+
+main = result + quotient + total + cmp1 + cmp2 + (0 - cmp3)
+
+/* expected: 29 */

@@ -9,6 +9,12 @@ import Data.List (nub, intercalate)
 import Milang.Syntax
 import System.IO (Handle, hPutStr, hPutStrLn)
 
+-- | Operators handled by the C runtime's mi_binop
+isBuiltinOp :: Text -> Bool
+isBuiltinOp op = op `elem`
+  [ "+", "-", "*", "/", "**", "<", ">", "<=", ">=", "==", "/="
+  , "++", ":", "&&", "||" ]
+
 -- | Codegen state
 data CGState = CGState
   { cgNextId   :: IORef Int
@@ -153,10 +159,17 @@ exprToC _ (FloatLit d) = pure $ "mi_expr_float(" ++ show d ++ ")"
 exprToC _ (StringLit s) = pure $ "mi_expr_string(" ++ cStringLit (T.unpack s) ++ ")"
 exprToC _ (Name n) = pure $ "mi_expr_name(\"" ++ T.unpack n ++ "\")"
 
-exprToC st (BinOp op l r) = do
-  lc <- exprToC st l
-  rc <- exprToC st r
-  pure $ "mi_expr_binop(\"" ++ T.unpack op ++ "\", " ++ lc ++ ", " ++ rc ++ ")"
+exprToC st (BinOp op l r)
+  -- User-defined operators: emit as function application
+  | not (isBuiltinOp op) = do
+    fc <- exprToC st (Name op)
+    lc <- exprToC st l
+    rc <- exprToC st r
+    pure $ "mi_expr_app(mi_expr_app(" ++ fc ++ ", " ++ lc ++ "), " ++ rc ++ ")"
+  | otherwise = do
+    lc <- exprToC st l
+    rc <- exprToC st r
+    pure $ "mi_expr_binop(\"" ++ T.unpack op ++ "\", " ++ lc ++ ", " ++ rc ++ ")"
 
 exprToC st (App f x) = do
   fc <- exprToC st f
@@ -200,8 +213,8 @@ exprToC st (Thunk body) = do
 exprToC st (ListLit es) = exprToC st (listLitToCons es)
   where
     listLitToCons []     = Record "Nil" []
-    listLitToCons (x:xs) = Record "Cons" [Binding "head" False [] x Nothing Nothing,
-                                           Binding "tail" False [] (listLitToCons xs) Nothing Nothing]
+    listLitToCons (x:xs) = Record "Cons" [Binding "head" False [] x Nothing Nothing Nothing,
+                                           Binding "tail" False [] (listLitToCons xs) Nothing Nothing Nothing]
 
 exprToC st (RecordUpdate base updates) = do
   baseCode <- exprToC st base

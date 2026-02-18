@@ -329,7 +329,7 @@ replEval env input =
       -- Try as expression
       case parseExpr "<repl>" input of
         Right expr -> do
-          let b = Binding "_it" False [] expr Nothing Nothing
+          let b = Binding "_it" False [] expr Nothing Nothing Nothing
           let envNoIt = filter (\x -> bindName x /= "_it") env
           let newEnv = envNoIt ++ [b]
           let ast = Namespace newEnv

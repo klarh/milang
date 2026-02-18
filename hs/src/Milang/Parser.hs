@@ -5,6 +5,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Char (isUpper, isDigit)
 import Data.Void (Void)
+import Data.Maybe (mapMaybe)
+import qualified Data.Map.Strict as Map
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import System.IO.Unsafe (unsafePerformIO)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
@@ -13,7 +17,25 @@ import Control.Monad (void)
 import Milang.Syntax
 import Milang.Lexer (Parser, sc, lexeme, symbol)
 
--- | Capture current source position as SrcPos
+-- | Operator associativity
+data Assoc = LeftAssoc | RightAssoc deriving (Eq, Show)
+
+-- | User-defined operator table
+type OpTable = Map.Map Text (Int, Assoc)
+
+-- | Global operator table, set before parsing by parseProgram.
+-- Uses unsafePerformIO to avoid threading state through every parser.
+{-# NOINLINE globalOpTable #-}
+globalOpTable :: IORef OpTable
+globalOpTable = unsafePerformIO (newIORef Map.empty)
+
+-- | Capture source text between two offsets
+captureSource :: Int -> Int -> Parser (Maybe Text)
+captureSource startOff endOff = do
+  st <- getParserState
+  let input = pstateInput (statePosState st)
+      srcText = T.take (endOff - startOff) (T.drop startOff input)
+  pure $ Just (T.stripEnd srcText)
 grabPos :: Parser SrcPos
 grabPos = do
   sp <- getSourcePos
@@ -22,13 +44,71 @@ grabPos = do
 -- ── Entry points ──────────────────────────────────────────────────
 
 parseProgram :: String -> Text -> Either (ParseErrorBundle Text Void) Expr
-parseProgram = parse (scn *> pProgram <* eof)
+parseProgram name src =
+  let opTable = scanParseDecls src
+  in unsafePerformIO (writeIORef globalOpTable opTable) `seq`
+     runParser (scn *> pProgram <* eof) name src
 
 parseExpr :: String -> Text -> Either (ParseErrorBundle Text Void) Expr
-parseExpr = parse (sc *> pExpr <* eof)
+parseExpr = runParser (sc *> pExpr <* eof)
 
 parseBinding :: String -> Text -> Either (ParseErrorBundle Text Void) Binding
-parseBinding = parse (sc *> pBindingAt pos1 <* eof)
+parseBinding = runParser (sc *> pBindingAt pos1 <* eof)
+
+-- | Pre-scan source text for :! parse-domain declarations.
+-- Looks for lines like: (op) :! {prec = N; assoc = Left}
+-- Returns an operator table for use during parsing.
+scanParseDecls :: Text -> OpTable
+scanParseDecls src = Map.fromList $ mapMaybe scanLine (T.lines src)
+  where
+    scanLine line =
+      let stripped = T.strip line
+      in case T.stripPrefix "(" stripped of
+           Just rest -> case T.breakOn ")" rest of
+             (op, afterOp) | not (T.null op) && not (T.null afterOp) ->
+               let afterClose = T.strip (T.drop 1 afterOp)
+               in case T.stripPrefix ":!" afterClose of
+                    Just declBody -> parseOpDecl op (T.strip declBody)
+                    Nothing -> Nothing
+             _ -> Nothing
+           Nothing -> Nothing
+
+    parseOpDecl :: Text -> Text -> Maybe (Text, (Int, Assoc))
+    parseOpDecl op body =
+      let prec = extractField "prec" body >>= readInt
+          assoc = extractField "assoc" body >>= readAssoc
+      in case (prec, assoc) of
+           (Just p, Just a) -> Just (op, (p, a))
+           (Just p, Nothing) -> Just (op, (p, LeftAssoc))
+           (Nothing, Just a) -> Just (op, (50, a))
+           _                 -> Nothing
+
+    extractField :: Text -> Text -> Maybe Text
+    extractField key txt =
+      case T.breakOn (key <> " = ") txt of
+        (_, rest) | not (T.null rest) ->
+          let afterEq = T.drop (T.length key + 3) rest
+              val = T.takeWhile (\c -> c /= ';' && c /= '}' && c /= '\n') afterEq
+          in Just (T.strip val)
+        _ -> case T.breakOn (key <> "=") txt of
+          (_, rest2) | not (T.null rest2) ->
+            let afterEq2 = T.drop (T.length key + 1) rest2
+                val2 = T.takeWhile (\c -> c /= ';' && c /= '}' && c /= '\n') afterEq2
+            in Just (T.strip val2)
+          _ -> Nothing
+
+    readInt :: Text -> Maybe Int
+    readInt t = case reads (T.unpack t) of
+      [(n, _)] -> Just n
+      _        -> Nothing
+
+    readAssoc :: Text -> Maybe Assoc
+    readAssoc t
+      | T.isPrefixOf "Right" t = Just RightAssoc
+      | T.isPrefixOf "Left" t  = Just LeftAssoc
+      | T.isPrefixOf "right" t = Just RightAssoc
+      | T.isPrefixOf "left" t  = Just LeftAssoc
+      | otherwise = Nothing
 
 -- ── Whitespace handling ───────────────────────────────────────────
 
@@ -75,8 +155,23 @@ pTopBindings = do
 -- Tries type annotation (::) first, then destructuring, then normal binding.
 pBindingsAt :: Pos -> Parser [Binding]
 pBindingsAt ref = try (pure <$> pTypeBindingAt ref)
+             <|> try (pParseDomainBinding ref)
              <|> try (pDestructBinding ref)
              <|> (pure <$> pBindingAt ref)
+
+-- Parse a parse-domain binding: (op) :! {prec = N; assoc = Left/Right}
+-- These are consumed by scanParseDecls pre-scan; here we just skip them.
+pParseDomainBinding :: Pos -> Parser [Binding]
+pParseDomainBinding _ref = do
+  _ <- symbol "("
+  _op <- pOperator
+  _ <- symbol ")"
+  _ <- symbol ":!"
+  -- Parse the body as a brace-delimited record: {prec = N; assoc = Left/Right}
+  _ <- symbol "{"
+  _ <- pBraceBindings
+  _ <- symbol "}"
+  pure []  -- no binding emitted; info already in op table via scanParseDecls
 
 -- Parse a destructuring binding: {field1; field2 = alias; ...} = expr
 -- Desugars to: _tmp_N = expr; field1 = _tmp_N.field1; alias = _tmp_N.field2; ...
@@ -90,9 +185,9 @@ pDestructBinding _ref = do
   _ <- symbol "="
   body <- pExpr
   let tmpName = T.pack ("_destruct_" ++ show off)
-      tmpBind = Binding tmpName False [] body (Just pos) Nothing
+      tmpBind = Binding tmpName False [] body (Just pos) Nothing Nothing
       fieldBinds = map (\(localName, fieldName) ->
-        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing Nothing
         ) fields
   pure (tmpBind : fieldBinds)
 
@@ -114,11 +209,12 @@ pTypeBindingAt _ref = do
   name <- pBindingName
   _ <- symbol "::"
   typeExpr <- try pAnonRecord <|> pExpr
-  pure $ Binding name False [] (IntLit 0) (Just pos) (Just typeExpr)
+  pure $ Binding name False [] (IntLit 0) (Just pos) (Just typeExpr) Nothing
 
 -- Parse a binding given its indent level
 pBindingAt :: Pos -> Parser Binding
 pBindingAt ref = do
+  startOff <- getOffset
   pos <- grabPos
   name <- pBindingName
   params <- many (try pIdentifier)
@@ -131,13 +227,28 @@ pBindingAt ref = do
   mWith <- optional (try pBraceWith)
   let body'' = maybe body' (With body') mWith
   children <- pIndentedChildren ref body''
-  pure $ Binding name lazy params children (Just pos) Nothing
+  endOff <- getOffset
+  srcText <- captureSource startOff endOff
+  pure $ Binding name lazy params children (Just pos) Nothing srcText
 
 -- Name on the LHS of a binding: lowercase or uppercase (for module aliases)
 -- Uppercase binding must be followed by = or := (not {, which would be a record)
 -- Positional names (_0, _1, ...) are reserved and cannot be used as field names
 pBindingName :: Parser Text
-pBindingName = try $ do
+pBindingName = try pOpBindingName <|> try pRegularBindingName
+
+-- Parse an operator in parens as a binding name: (+), (<=>), etc.
+pOpBindingName :: Parser Text
+pOpBindingName = try $ do
+  _ <- symbol "("
+  op <- pOperator
+  _ <- symbol ")"
+  -- Must be followed by params or = / := / ::
+  _ <- lookAhead (try pIdentifier <|> try (symbol "::" *> pure "") <|> try (symbol "=" *> pure "") <|> try (symbol ":=" *> pure ""))
+  pure op
+
+pRegularBindingName :: Parser Text
+pRegularBindingName = try $ do
   n <- pAnyIdentifier
   -- Reject positional field names (_0, _1, ...)
   case T.uncons n of
@@ -197,7 +308,7 @@ pBareExpr = do
   off <- getOffset
   e <- pExpr
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding name False [] e (Just pos) Nothing]
+  pure [Binding name False [] e (Just pos) Nothing Nothing]
 
 -- Split bindings: if the last item is an auto-generated statement binding,
 -- use its body as the With result; otherwise use the original body.
@@ -254,6 +365,8 @@ pBraceWith = do
   _ <- symbol "}"
   pure bs
 
+-- | User-defined operator table — now in Lexer module, re-imported
+
 -- ── Expressions ───────────────────────────────────────────────────
 
 pExpr :: Parser Expr
@@ -270,31 +383,59 @@ pPrec minPrec = do
 
 pInfixRest :: Int -> Expr -> Parser Expr
 pInfixRest minPrec left = do
+  let tbl = unsafePerformIO (readIORef globalOpTable)
   -- Try backslash continuation before checking for operator
   _ <- many (try $ char '\\' *> newline *> sc)
-  mop <- optional (try $ lookAhead pOperator)
-  case mop of
-    Nothing -> pure left
-    Just op ->
-      let (prec, assoc) = opInfo op
-      in if prec < minPrec
-         then pure left
-         else do
-           _ <- pOperator  -- consume the operator
-           -- Allow continuation after operator too
-           _ <- many (try $ char '\\' *> newline *> sc)
-           let nextPrec = if assoc == RightAssoc then prec else prec + 1
-           right <- pPrec nextPrec
-           let result
-                 | op == "|>" = App right left
-                 | op == ">>" = Lam "_c" (App right (App left (Name "_c")))
-                 | op == "<<" = Lam "_c" (App left (App right (Name "_c")))
-                 | op == "&&" = App (App (App (Name "if") left) (Thunk right)) (Thunk (IntLit 0))
-                 | op == "||" = App (App (App (Name "if") left) (Thunk (IntLit 1))) (Thunk right)
-                 | otherwise  = BinOp op left right
-           pInfixRest minPrec result
+  -- Try backtick infix: a `div` b → div a b
+  mBacktick <- optional (try $ lookAhead pBacktickOp)
+  case mBacktick of
+    Just name -> do
+      -- Backtick operators use user table or default precedence 50, left-associative
+      let (bPrec, _) = opInfoWith tbl name
+      if bPrec < minPrec
+        then pure left
+        else do
+          _ <- pBacktickOp  -- consume
+          _ <- many (try $ char '\\' *> newline *> sc)
+          right <- pPrec (bPrec + 1)
+          let result = App (App (Name name) left) right
+          pInfixRest minPrec result
+    Nothing -> do
+      mop <- optional (try $ lookAhead pOperator)
+      case mop of
+        Nothing -> pure left
+        Just op ->
+          let (prec, assoc) = opInfoWith tbl op
+          in if prec < minPrec
+             then pure left
+             else do
+               _ <- pOperator  -- consume the operator
+               -- Allow continuation after operator too
+               _ <- many (try $ char '\\' *> newline *> sc)
+               let nextPrec = if assoc == RightAssoc then prec else prec + 1
+               right <- pPrec nextPrec
+               let result
+                     | op == "|>" = App right left
+                     | op == ">>" = Lam "_c" (App right (App left (Name "_c")))
+                     | op == "<<" = Lam "_c" (App left (App right (Name "_c")))
+                     | op == "&&" = App (App (App (Name "if") left) (Thunk right)) (Thunk (IntLit 0))
+                     | op == "||" = App (App (App (Name "if") left) (Thunk (IntLit 1))) (Thunk right)
+                     | otherwise  = BinOp op left right
+               pInfixRest minPrec result
 
-data Assoc = LeftAssoc | RightAssoc deriving (Eq)
+-- Parse a backtick-quoted identifier: `name`
+pBacktickOp :: Parser Text
+pBacktickOp = try $ lexeme $ do
+  _ <- char '`'
+  name <- some (alphaNumChar <|> char '_' <|> char '\'')
+  _ <- char '`'
+  pure $ T.pack name
+
+-- | Look up operator info: user table overrides built-in defaults
+opInfoWith :: OpTable -> Text -> (Int, Assoc)
+opInfoWith tbl op = case Map.lookup op tbl of
+  Just info -> info
+  Nothing   -> opInfo op
 
 opInfo :: Text -> (Int, Assoc)
 opInfo "|>" = (5,   LeftAssoc)
@@ -323,7 +464,7 @@ pOperator = try $ lexeme $ do
   op <- some (oneOf ("+-*/^<>=!&|@%?:" :: String))
   let t = T.pack op
   -- Don't consume binding operators, match arrow, or type annotation
-  if t == "=" || t == ":=" || t == "->" || t == "::"
+  if t == "=" || t == ":=" || t == "->" || t == "::" || t == ":!"
     then fail "reserved operator"
     else pure t
 
@@ -386,7 +527,16 @@ pAtom = choice
   ]
 
 pParens :: Parser Expr
-pParens = between (symbol "(") (symbol ")") pExpr
+pParens = do
+  _ <- symbol "("
+  -- Try operator-as-function: (+), (<=>), etc.
+  mop <- optional (try (pOperator <* symbol ")"))
+  case mop of
+    Just op -> pure $ Name op
+    Nothing -> do
+      e <- pExpr
+      _ <- symbol ")"
+      pure e
 
 pThunk :: Parser Expr
 pThunk = do
@@ -452,11 +602,11 @@ pConstructorField = symbol "_" <|> lexeme (do
 
 -- Convert a constructor declaration to a binding
 ctorToBinding :: (Text, [Text]) -> Binding
-ctorToBinding (name, []) = Binding name False [] (Record name []) Nothing Nothing
+ctorToBinding (name, []) = Binding name False [] (Record name []) Nothing Nothing Nothing
 ctorToBinding (name, params) =
-  let fields = [Binding p False [] (Name p) Nothing Nothing | p <- params]
+  let fields = [Binding p False [] (Name p) Nothing Nothing Nothing | p <- params]
       body = foldr (\p b -> Lam p b) (Record name fields) params
-  in Binding name False [] body Nothing Nothing
+  in Binding name False [] body Nothing Nothing Nothing
 
 pBraceBindings :: Parser [Binding]
 pBraceBindings = concat <$> (pBraceBindingOrDestruct `sepEndBy` pSep)
@@ -473,7 +623,7 @@ pBraceBareExpr = do
   off <- getOffset
   e <- pExpr
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding name False [] e (Just pos) Nothing]
+  pure [Binding name False [] e (Just pos) Nothing Nothing]
 
 pBraceDestruct :: Parser [Binding]
 pBraceDestruct = do
@@ -486,9 +636,9 @@ pBraceDestruct = do
   _ <- symbol "="
   body <- pExpr
   let tmpName = T.pack ("_destruct_" ++ show off)
-      tmpBind = Binding tmpName False [] body (Just pos) Nothing
+      tmpBind = Binding tmpName False [] body (Just pos) Nothing Nothing
       fieldBinds = map (\(localName, fieldName) ->
-        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing Nothing
         ) fields
   pure (tmpBind : fieldBinds)
 
@@ -507,7 +657,7 @@ pBraceBinding = do
   body <- pExpr
   mWith <- optional (try pBraceWith)
   let body' = maybe body (With body) mWith
-  pure $ Binding name lazy params body' (Just pos) Nothing
+  pure $ Binding name lazy params body' (Just pos) Nothing Nothing
 
 pSep :: Parser ()
 pSep = void (symbol ";") <|> void (some (lexeme newline))

@@ -61,6 +61,7 @@ data Binding = Binding
   , bindBody :: Expr
   , bindPos :: !(Maybe SrcPos)  -- source location of this binding
   , bindType :: !(Maybe Expr)   -- optional type annotation from ::
+  , bindSource :: !(Maybe Text) -- original source text of this binding
   } deriving (Show, Eq)
 
 -- | Pattern for case expressions / destructuring
@@ -115,7 +116,7 @@ prettyBindings :: Int -> [Binding] -> String
 prettyBindings i = concatMap (\b -> replicate i ' ' ++ prettyBinding i b ++ "\n")
 
 prettyBinding :: Int -> Binding -> String
-prettyBinding i (Binding n lz ps body _ mty) =
+prettyBinding i (Binding n lz ps body _ mty _) =
   let typeStr = case mty of
         Just t  -> T.unpack n ++ " :: " ++ prettyExpr i t ++ "\n" ++ replicate i ' '
         Nothing -> ""
