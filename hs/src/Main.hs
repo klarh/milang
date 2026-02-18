@@ -8,11 +8,13 @@ import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetB
 import System.Process (callProcess, readProcessWithExitCode)
 import System.Directory (removeFile, getCurrentDirectory, doesFileExist, getXdgDirectory, XdgDirectory(..), createDirectoryIfMissing)
 import System.FilePath (replaceExtension, (</>))
+import System.IO.Temp (withSystemTempDirectory)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 import Milang.Syntax (prettyExpr, Expr(..), Binding(..))
 import Milang.Parser (parseProgram, parseExpr, parseBinding)
+import Text.Megaparsec (errorBundlePretty)
 import Milang.Import (resolveImports, resolveAndPin, findURLImports, LinkInfo(..))
 import Milang.Reduce (reduce, emptyEnv, warnings, Warning(..))
 import Milang.Syntax (prettySrcPos)
@@ -60,7 +62,7 @@ loadAndParseRaw :: FilePath -> IO (Either String Milang.Syntax.Expr)
 loadAndParseRaw file = do
   src <- TIO.readFile file
   case parseProgram file src of
-    Left err  -> pure $ Left (show err)
+    Left err  -> pure $ Left (errorBundlePretty err)
     Right ast -> pure $ Right ast
 
 -- | Parse + resolve imports
@@ -143,10 +145,10 @@ cmdRun file = do
   result <- loadAndReduce file
   case result of
     Left err       -> hPutStrLn stderr err >> exitFailure
-    Right (ast, li) -> do
+    Right (ast, li) -> withSystemTempDirectory "milang" $ \tmpDir -> do
       cwd <- getCurrentDirectory
-      let cFile  = "/tmp/milang_out.c"
-          binFile = "/tmp/milang_out"
+      let cFile  = tmpDir </> "out.c"
+          binFile = tmpDir </> "out"
           extraFlags = nub (linkFlags li)
           extraSrcs  = nub (linkSources li)
           gccArgs = ["-O2", "-o", binFile, cFile, "-I" ++ cwd]
@@ -158,10 +160,8 @@ cmdRun file = do
           hPutStrLn stderr "gcc compilation failed:"
           hPutStrLn stderr cerr
           exitFailure
-        ExitSuccess -> do
+        ExitSuccess ->
           callProcess binFile []
-          removeFile cFile
-          removeFile binFile
 
 -- | pin: fetch URL imports, print sha256 hashes, rewrite file with hashes
 cmdPin :: FilePath -> IO ()
@@ -347,8 +347,8 @@ replEval env input =
           case reduced of
             Namespace bs -> pure (bs, Just ["_it"])
             _ -> pure (newEnv, Just ["_it"])
-        Left _err -> do
-          hPutStrLn stderr "parse error"
+        Left err -> do
+          hPutStrLn stderr (errorBundlePretty err)
           pure (env, Nothing)
   where
     isNamedBinding b = not ("_stmt" `T.isPrefixOf` bindName b)
@@ -363,11 +363,11 @@ replEval env input =
 
 -- | Print specific bindings by compiling and running
 replPrint :: [Binding] -> [T.Text] -> IO ()
-replPrint env names = do
+replPrint env names = withSystemTempDirectory "milang-repl" $ \tmpDir -> do
   let ast = Namespace env
   let hidden = Set.fromList (map bindName env) `Set.difference` Set.fromList names
-  let cFile = "/tmp/milang_repl.c"
-      binFile = "/tmp/milang_repl"
+  let cFile = tmpDir </> "repl.c"
+      binFile = tmpDir </> "repl"
   withFile cFile WriteMode (\h -> codegen h hidden ast)
   (ec, _out, cerr) <- readProcessWithExitCode "gcc" ["-O2", "-o", binFile, cFile, "-lm"] ""
   case ec of
@@ -378,17 +378,12 @@ replPrint env names = do
         ExitFailure _ -> hPutStrLn stderr $ "runtime error: " ++ err2
         ExitSuccess -> do
           let output = out2
-          -- Strip "name = " prefix for single expressions
           case names of
             ["_it"] -> case stripPrefix "_it = " output of
                          Just rest -> putStr rest
                          Nothing   -> putStr output
             _ -> putStr output
-  mapM_ safeRemove [cFile, binFile]
   where
-    safeRemove f = do
-      exists <- doesFileExist f
-      if exists then removeFile f else pure ()
     stripPrefix prefix str =
       if prefix `isPrefixOf` str then Just (drop (length prefix) str)
       else Nothing

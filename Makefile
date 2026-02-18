@@ -10,14 +10,16 @@ clean:
 
 test: all
 	@echo "=== Running tests ==="
-	@PASS=0; FAIL=0; \
-	for f in tests/*.mi; do \
-		if timeout 15 ./milang run "$$f" >/dev/null 2>&1; then \
-			PASS=$$((PASS+1)); \
+	@TMPDIR=$$(mktemp -d); \
+	ls tests/*.mi | xargs -P $$(nproc) -I{} sh -c \
+		'if timeout 15 ./milang run "{}" >/dev/null 2>&1; then \
+			touch "$$0/pass_$$(basename {})"; \
 		else \
-			echo "FAIL: $$f"; \
-			FAIL=$$((FAIL+1)); \
-		fi; \
-	done; \
+			touch "$$0/fail_$$(basename {})"; \
+			echo "FAIL: {}"; \
+		fi' "$$TMPDIR"; \
+	PASS=$$(ls "$$TMPDIR"/pass_* 2>/dev/null | wc -l); \
+	FAIL=$$(ls "$$TMPDIR"/fail_* 2>/dev/null | wc -l); \
+	rm -rf "$$TMPDIR"; \
 	echo "Passed: $$PASS, Failed: $$FAIL"; \
 	[ $$FAIL -eq 0 ]

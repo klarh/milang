@@ -2,8 +2,10 @@
 module Milang.Lexer
   ( Parser
   , sc
+  , scn
   , lexeme
   , symbol
+  , symbolN
   , identifier
   , operator
   , intLiteral
@@ -56,9 +58,14 @@ scn = L.space space1 lineComment blockComment
 lexeme :: Parser a -> Parser a
 lexeme = L.lexeme sc
 
--- | Parse a specific string and consume trailing whitespace
+-- | Parse a specific string and consume trailing whitespace (not newlines)
 symbol :: Text -> Parser Text
 symbol = L.symbol sc
+
+-- | Parse a specific string and consume trailing whitespace INCLUDING newlines
+-- Use inside delimiters (parens, brackets, braces) for multi-line expressions
+symbolN :: Text -> Parser Text
+symbolN = L.symbol scn
 
 -- | Parse a line continuation (backslash + newline + optional space)
 lineContinuation :: Parser ()

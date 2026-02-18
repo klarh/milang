@@ -16,6 +16,7 @@ import System.IO (hPutStrLn, stderr)
 
 import Milang.Syntax
 import Milang.Parser (parseProgram)
+import Text.Megaparsec (errorBundlePretty)
 import Milang.CHeader (parseCHeader, CFunSig(..))
 import Milang.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
 
@@ -202,7 +203,7 @@ resolveURLImport ctx url expectedHash = do
           -- Parse file to find sub-import URLs (before resolution replaces them)
           src <- TIO.readFile localPath
           case parseProgram localPath src of
-            Left err -> pure $ Left (show err)
+            Left err -> pure $ Left (errorBundlePretty err)
             Right parsedAST -> do
               let baseDir = urlDirName url
                   subURLs = collectImportURLs baseDir parsedAST
@@ -297,7 +298,7 @@ parseOwnBindings :: FilePath -> IO (Either String Expr)
 parseOwnBindings path = do
   src <- TIO.readFile path
   case parseProgram path src of
-    Left err -> pure $ Left (show err)
+    Left err -> pure $ Left (errorBundlePretty err)
     Right ast -> pure $ Right (extractOwnBindings ast)
 
 -- | Extract non-import bindings from a Namespace
@@ -377,7 +378,7 @@ loadFile :: ResCtx -> FilePath -> Maybe String -> IO (Either String Expr)
 loadFile ctx path originDir = do
   src <- TIO.readFile path
   case parseProgram path src of
-    Left err -> pure $ Left (show err)
+    Left err -> pure $ Left (errorBundlePretty err)
     Right ast -> do
       modifyIORef (rcInProgress ctx) (Set.insert path)
       let dir = case originDir of
