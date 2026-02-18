@@ -17,6 +17,19 @@ mkPoint :: Num : Num : Point
 mkPoint x y = Point {x = x; y = y}
   Point = {x = 0; y = 0}
 
+/* Case inference — all alts should return same type */
+classify :: Num : Str
+classify x = x ->
+  0 = "zero"
+  1 = "one"
+  _ = "other"
+
+/* With bindings — local scope type inference */
+compute :: Num : Num
+compute x = result
+  doubled = x * 2
+  result = doubled + 1
+
 /* Unannotated functions work fine too */
 triple x = x * 3
 
@@ -24,3 +37,4 @@ triple x = x * 3
 main = result
   p = mkPoint 3 4
   result = add (double p.x) (triple p.y)
+/* expect: 26 */

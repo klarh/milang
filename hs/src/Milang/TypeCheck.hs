@@ -85,9 +85,10 @@ checkBinding typeEnv b = case bindType b of
         let expectedType = exprToTypeWith typeEnv tyExpr
         in checkExprAgainst typeEnv (bindPos b) (bindName b) expectedType (bindBody b)
 
--- | Bidirectional check: push expected type into expression
+-- | Bidirectional check: push expected type into expression.
+-- Pushes function types into nested lambdas, binding param types in env.
 checkExprAgainst :: TypeEnv -> Maybe SrcPos -> Text -> MiType -> Expr -> [TypeError]
--- For lambdas with function type annotation, push arg type into param and check body
+-- For lambdas with function type, push arg type into param and check body
 checkExprAgainst env pos name (TFun argTy retTy) (Lam p body) =
   let env' = Map.insert p argTy env
   in checkExprAgainst env' pos name retTy body
@@ -136,14 +137,12 @@ inferExpr env (BinOp op l r)
   | otherwise = TAny
 inferExpr env (App f x) =
   case inferExpr env f of
-    TFun argTy ret ->
-      -- If function expects a specific type, we could check arg here too
-      -- For now just return the result type
-      case ret of
-        TFun _ _ -> ret  -- partially applied
-        _        -> ret
+    TFun _argTy ret -> ret
     _ -> TAny
-inferExpr _ (Lam _ _) = TAny
+inferExpr env (Lam p body) =
+  -- Can't infer arg type without annotation; infer body with param as TAny
+  let env' = Map.insert p TAny env
+  in TFun TAny (inferExpr env' body)
 inferExpr env (Record tag fields) =
   TRecord tag [(bindName b, inferExpr env (bindBody b)) | b <- fields]
 inferExpr env (FieldAccess e field) =
@@ -163,11 +162,18 @@ inferExpr env (With e bs) =
     addLocal acc b = case bindType b of
       Just tyExpr -> Map.insert (bindName b) (exprToTypeWith acc tyExpr) acc
       Nothing     -> Map.insert (bindName b) (inferExpr acc (bindBody b)) acc
-inferExpr env (Case _ alts) =
-  -- Infer from first alternative's body (all should agree)
-  case alts of
-    (Alt _ _ body : _) -> inferExpr env body
-    []                  -> TAny
+inferExpr env (Case scrutinee alts) =
+  -- Infer type from all alternatives; use first non-TAny
+  let altTypes = [inferExpr (extendWithPat env pat) body | Alt pat _ body <- alts]
+      concreteTypes = filter (/= TAny) altTypes
+  in case concreteTypes of
+       (t:_) -> t
+       []    -> TAny
+  where
+    extendWithPat e (PRec _ fields) =
+      foldl (\acc (n, _) -> Map.insert n TAny acc) e fields
+    extendWithPat e (PVar n) = Map.insert n (inferExpr env scrutinee) e
+    extendWithPat e _ = e
 inferExpr env (ListLit es) =
   -- Infer element type from first element
   case es of
@@ -176,40 +182,42 @@ inferExpr env (ListLit es) =
 inferExpr _ _ = TAny
 
 -- | Check structural compatibility between expected and actual types.
--- Type variables in expected type match anything.
+-- Type variables in expected type match anything, with consistency checking.
 -- TAny in either position is always compatible.
 checkCompat :: Maybe SrcPos -> Text -> MiType -> MiType -> [TypeError]
-checkCompat pos name expected actual = go Map.empty expected actual
+checkCompat pos name expected actual =
+  case go Map.empty expected actual of
+    (_, errs) -> errs
   where
-    go _ TAny _ = []
-    go _ _ TAny = []
+    go subst TAny _ = (subst, [])
+    go subst _ TAny = (subst, [])
     go subst (TVar v) act =
       case Map.lookup v subst of
-        Just prev -> go subst prev act  -- check consistency
-        Nothing   -> []  -- first occurrence, always matches
-    go _ _ (TVar _) = []  -- actual is a type var (from polymorphic function), compatible
-    go _ TNum TNum = []
-    go _ TFloat TFloat = []
-    go _ TStr TStr = []
-    go _ TNum TFloat = []  -- allow float where num expected (numeric compat)
-    go _ TFloat TNum = []
+        Just prev -> go subst prev act  -- check consistency with previous binding
+        Nothing   -> (Map.insert v act subst, [])  -- bind type var
+    go subst _ (TVar _) = (subst, [])  -- actual is a type var, compatible
+    go subst TNum TNum = (subst, [])
+    go subst TFloat TFloat = (subst, [])
+    go subst TStr TStr = (subst, [])
+    go subst TNum TFloat = (subst, [])  -- numeric compatibility
+    go subst TFloat TNum = (subst, [])
     go subst (TFun ea er) (TFun aa ar) =
-      go subst ea aa ++ go subst er ar
+      let (subst', errs1) = go subst ea aa
+          (subst'', errs2) = go subst' er ar
+      in (subst'', errs1 ++ errs2)
     go subst (TRecord etag efields) (TRecord atag afields)
       | etag /= "" && atag /= "" && etag /= atag =
-        [mkErr ("tag mismatch: expected " <> etag <> ", got " <> atag)]
+        (subst, [mkErr ("tag mismatch: expected " <> etag <> ", got " <> atag)])
       | otherwise =
-        -- Check that all expected fields exist with compatible types
-        concatMap (checkField subst afields) efields
-    go _ exp' act' =
+        foldl (\(s, errs) (ename, etype) ->
+          case lookup ename afields of
+            Just atype -> let (s', e') = go s etype atype in (s', errs ++ e')
+            Nothing    -> (s, errs ++ [mkErr ("missing field: " <> ename)])
+          ) (subst, []) efields
+    go subst exp' act' =
       if exp' == act'
-        then []
-        else [mkErr ("expected " <> prettyType exp' <> ", got " <> prettyType act')]
-
-    checkField subst actualFields (ename, etype) =
-      case lookup ename actualFields of
-        Just atype -> go subst etype atype
-        Nothing    -> [mkErr ("missing field: " <> ename)]
+        then (subst, [])
+        else (subst, [mkErr ("expected " <> prettyType exp' <> ", got " <> prettyType act')])
 
     mkErr msg = TypeError
       { tePos = pos
