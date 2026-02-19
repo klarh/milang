@@ -33,8 +33,27 @@ compute x = result
 /* Unannotated functions work fine too */
 triple x = x * 3
 
+/* Union / ADT types */
+Shape = {Circle radius; Rect width height}
+
+area :: Shape : Num
+area s = s -> Circle = 3 * s.radius * s.radius; Rect = s.width * s.height
+
+/* Prelude list functions with type annotations */
+mySum :: List : Num
+mySum lst = fold (+) 0 lst
+
+/* Polymorphic function types */
+apply :: (a : b) : a : b
+apply f x = f x
+
 /* Test everything works */
 main = result
   p = mkPoint 3 4
-  result = add (double p.x) (triple p.y)
-/* expect: 26 */
+  r1 = add (double p.x) (triple p.y)
+  r2 = area (Circle 5)
+  r3 = area (Rect 3 4)
+  r4 = mySum [10, 20, 30]
+  r5 = apply double 7
+  result = r1 + r2 + r3 + r4 + r5
+/* expect: 18 + 75 + 12 + 60 + 14 = 179 */

@@ -1,0 +1,35 @@
+/* Type error detection test — verifies type checker catches mistakes */
+
+/* Wrong argument type to annotated function */
+double :: Num : Num
+double x = x * 2
+bad1 := double "hello"
+
+/* Wrong argument to ADT-typed function */
+Shape = {Circle radius; Rect width height}
+area :: Shape : Num
+area s = s -> Circle = 3 * s.radius * s.radius; Rect = s.width * s.height
+bad2 := area "not a shape"
+
+/* Prelude function type violations */
+bad3 := fold 42 0 [1,2,3]
+bad4 := map "not_fn" [1,2,3]
+bad5 := head 99
+bad6 := tail "x"
+
+/* Operand type errors */
+bad7 := "hello" * 3
+bad8 := "world" - 1
+
+/* Record field type mismatch */
+Point :: {x = Num; y = Num}
+p :: Point
+p = {x = "wrong"; y = 3}
+
+/* Valid code — no errors expected here */
+ok1 = double 5
+ok2 = area (Circle 10)
+ok3 = fold (+) 0 [1,2,3]
+ok4 = head [1,2,3]
+ok5 = map (\x -> x * 2) [1,2,3]
+main = ok1

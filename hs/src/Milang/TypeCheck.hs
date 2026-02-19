@@ -39,13 +39,26 @@ typeCheck bindings =
       -- Check each binding
   in concatMap (checkBinding typeEnv) bindings
 
+-- | Built-in type environment for native functions (len, slice, etc.)
+builtinTypes :: TypeEnv
+builtinTypes = Map.fromList
+  [ ("len",        TFun TAny TNum)          -- works on strings and lists
+  , ("strlen",     TFun TStr TNum)
+  , ("slice",      TFun TAny (TFun TNum (TFun TNum TAny)))
+  , ("fields",     TFun TAny (TUnion "List" ["Nil", "Cons"]))
+  , ("fieldNames", TFun TAny (TUnion "List" ["Nil", "Cons"]))
+  , ("tag",        TFun TAny TStr)
+  , ("getField",   TFun TAny (TFun TStr TAny))
+  , ("setField",   TFun TAny (TFun TStr (TFun TAny TAny)))
+  ]
+
 -- | Collect type annotations into an environment.
 -- Type expressions are interpreted directly (not reduced, to avoid : → cons).
 -- Type aliases are resolved via the typeEnv built incrementally.
 -- All type aliases are structural (untagged) — tags are runtime concepts.
 -- Union declarations (e.g. List = {Nil; Cons head tail}) auto-generate TUnion entries.
 collectTypes :: [Binding] -> TypeEnv
-collectTypes = foldl go Map.empty
+collectTypes = foldl go builtinTypes
   where
     go env b = case bindType b of
       Just tyExpr ->
