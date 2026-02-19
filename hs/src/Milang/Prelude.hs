@@ -62,6 +62,8 @@ preludeSrc = T.unlines
   , "join sep lst = lst -> Nil = \"\"; Cons = if (null lst.tail) ~lst.head ~(lst.head ++ sep ++ join sep lst.tail)"
   , "abs :: Num : Num"
   , "abs x = if (x < 0) ~(0 - x) ~x"
+  , "neg :: Num : Num"
+  , "neg x = 0 - x"
   , "min :: Num : Num : Num"
   , "min a b = if (a < b) ~a ~b"
   , "max :: Num : Num : Num"
