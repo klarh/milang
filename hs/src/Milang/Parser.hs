@@ -410,7 +410,7 @@ pInfixRest ml minPrec left = do
         then pure left
         else do
           _ <- pBacktickOp  -- consume
-          scn  -- allow newline after operator
+          if ml then scn else sc  -- newline after operator only inside delimiters
           right <- pPrec ml (bPrec + 1)
           let result = App (App (Name name) left) right
           pInfixRest ml minPrec result
@@ -424,7 +424,7 @@ pInfixRest ml minPrec left = do
              then pure left
              else do
                _ <- pOperator  -- consume the operator
-               scn  -- allow newline after operator
+               if ml then scn else sc  -- newline after operator only inside delimiters
                let nextPrec = if assoc == RightAssoc then prec else prec + 1
                right <- pPrec ml nextPrec
                let result
@@ -485,33 +485,17 @@ pOperator = try $ lexeme $ do
 -- Field access (.) binds tighter than application
 pApp :: Bool -> Parser Expr
 pApp ml = do
-  startCol <- unPos . sourceColumn <$> getSourcePos
   f <- pAtomDot
-  args <- many (try (pAppArg ml startCol))
+  args <- many (try (pAppArg ml))
   pure $ foldl App f args
 
 -- | Parse a function argument, with optional multiline continuation.
 -- In multiline mode (inside delimiters): freely eat newlines between atoms.
--- In normal mode: eat newlines only if the next line is deeper-indented,
--- or at the same column if the next token is unambiguously an argument.
-pAppArg :: Bool -> Int -> Parser Expr
-pAppArg ml startCol
+-- In normal mode: atoms must be on the same line (no indentation continuation).
+pAppArg :: Bool -> Parser Expr
+pAppArg ml
   | ml = (scn *> pAtomDot) <|> pAtomDot
-  | otherwise = try pAtomDot <|> do
-      _ <- try $ do
-        _ <- lookAhead (some (char '\n' <|> char ' ' <|> char '\t'))
-        scn
-        col <- unPos . sourceColumn <$> getSourcePos
-        if col > startCol
-          then pure ()
-          else if col == startCol
-            then do
-              c <- lookAhead anySingle
-              if c `elem` ['~', '(', '[', '"', '\\', '#', '$']
-                then pure ()
-                else fail "not a continuation"
-            else fail "not a continuation line"
-      pAtomDot
+  | otherwise = pAtomDot
 
 -- An atom possibly followed by .field chains
 pAtomDot :: Parser Expr

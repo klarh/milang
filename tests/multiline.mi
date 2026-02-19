@@ -13,13 +13,12 @@ piped = (xs |>
   map (\x -> x * 2) |>
   fold (+) 0)
 
--- Multi-line function application (if with args on next lines)
-classify x =
-  if (x > 0)
-    ~"positive"
-    ~(if (x == 0)
-      ~"zero"
-      ~"negative")
+-- Multi-line function application requires parens
+classify x = (if (x > 0)
+  ~"positive"
+  ~(if (x == 0)
+    ~"zero"
+    ~"negative"))
 
 -- Match arrows inside brace blocks
 transform val = result {
