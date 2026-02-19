@@ -85,7 +85,6 @@ loadAndReduce file = do
       let preTypeErrs = case astWithPrelude of
             Namespace bs -> typeCheck bs
             _            -> []
-      mapM_ (printTypeError file) (filterPrelude preTypeErrs)
       let reduced = reduce emptyEnv astWithPrelude
       let ws = warnings reduced
       mapM_ (printWarning file) ws
@@ -93,7 +92,9 @@ loadAndReduce file = do
       let postTypeErrs = case reduced of
             Namespace bs -> typeCheck bs
             _            -> []
-      mapM_ (printTypeError file) (filterPrelude postTypeErrs)
+      -- Deduplicate: combine both passes, keep unique error messages
+      let allErrs = dedup (filterPrelude preTypeErrs ++ filterPrelude postTypeErrs)
+      mapM_ (printTypeError file) allErrs
       pure $ Right (reduced, li)
 
 -- | Filter out type errors originating from prelude definitions
@@ -103,6 +104,17 @@ filterPrelude = filter (not . isPrelude)
     isPrelude te = case tePos te of
       Just pos -> "<prelude>" `isPrefixOf` srcFile pos
       Nothing  -> False
+
+-- | Deduplicate type errors by (name, message) pair
+dedup :: [TypeError] -> [TypeError]
+dedup = go Set.empty
+  where
+    go _ [] = []
+    go seen (te:tes) =
+      let key = (teName te, teMessage te)
+      in if Set.member key seen
+         then go seen tes
+         else te : go (Set.insert key seen) tes
 
 -- | Prepend prelude bindings to the user's top-level namespace
 injectPrelude :: Expr -> Expr

@@ -13,6 +13,7 @@ data MiType
   | TStr                             -- string type
   | TFun MiType MiType               -- function type: a -> b
   | TRecord Text [(Text, MiType)]    -- tagged record with field types
+  | TUnion Text [Text]               -- union type: name + constructor tags
   | TVar Text                        -- type variable (for polymorphism)
   | TAny                             -- unconstrained / unknown
   deriving (Show, Eq)
@@ -42,18 +43,32 @@ typeCheck bindings =
 -- Type expressions are interpreted directly (not reduced, to avoid : → cons).
 -- Type aliases are resolved via the typeEnv built incrementally.
 -- All type aliases are structural (untagged) — tags are runtime concepts.
+-- Union declarations (e.g. List = {Nil; Cons head tail}) auto-generate TUnion entries.
 collectTypes :: [Binding] -> TypeEnv
 collectTypes = foldl go Map.empty
   where
     go env b = case bindType b of
       Just tyExpr ->
         Map.insert (bindName b) (exprToTypeWith env tyExpr) env
-      Nothing ->
-        -- Infer type from body (for non-annotated bindings)
-        let bodyType = inferBodyType env b
-        in case bodyType of
-             TAny -> env  -- don't pollute env with unknown types
-             _    -> Map.insert (bindName b) bodyType env
+      Nothing -> case detectUnion b of
+        Just (uname, tags) ->
+          Map.insert uname (TUnion uname tags) env
+        Nothing ->
+          -- Infer type from body (for non-annotated bindings)
+          let bodyType = inferBodyType env b
+          in case bodyType of
+               TAny -> env  -- don't pollute env with unknown types
+               _    -> Map.insert (bindName b) bodyType env
+
+-- | Detect if a binding is a union declaration (Namespace of all-uppercase ctors)
+detectUnion :: Binding -> Maybe (Text, [Text])
+detectUnion b = case bindBody b of
+  Namespace ctors
+    | not (null ctors)
+    , all (\c -> let n = bindName c in not (T.null n) && isUpper' (T.head n)) ctors ->
+      Just (bindName b, map bindName ctors)
+  _ -> Nothing
+  where isUpper' c = c >= 'A' && c <= 'Z'
 
 -- | Infer a binding's type from its body and parameters
 inferBodyType :: TypeEnv -> Binding -> MiType
@@ -300,6 +315,12 @@ checkCompat pos name expected actual =
       let (subst', errs1) = go subst ea aa
           (subst'', errs2) = go subst' er ar
       in (subst'', errs1 ++ errs2)
+    -- Union type expected: actual must be a record with matching tag
+    go subst (TUnion _ tags) (TRecord atag _)
+      | atag `elem` tags = (subst, [])
+      | otherwise = (subst, [mkErr ("expected one of " <> T.intercalate "/" tags <> ", got " <> (if T.null atag then "(untagged)" else atag))])
+    go subst (TUnion n1 _) (TUnion n2 _)
+      | n1 == n2 = (subst, [])
     go subst (TRecord etag efields) (TRecord atag afields)
       | etag /= "" && etag /= atag =
         (subst, [mkErr ("tag mismatch: expected " <> etag <> ", got " <> (if T.null atag then "(untagged)" else atag))])
@@ -330,6 +351,7 @@ prettyType TStr = "Str"
 prettyType (TVar v) = v
 prettyType TAny = "?"
 prettyType (TFun a b) = prettyType a <> " : " <> prettyType b
+prettyType (TUnion name _tags) = name
 prettyType (TRecord tag fields) =
   let t = if T.null tag then "" else tag <> " "
       fs = T.intercalate "; " [n <> " = " <> prettyType ty | (n, ty) <- fields]
