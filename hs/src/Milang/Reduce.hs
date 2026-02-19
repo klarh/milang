@@ -297,18 +297,6 @@ reduceBinOp "/=" a@(Record _ _) b@(Record _ _) =
 
 -- String concatenation
 reduceBinOp "+" (StringLit a) (StringLit b) = StringLit (a <> b)
-reduceBinOp "++" (StringLit a) (StringLit b) = StringLit (a <> b)
-
--- Pipe forward: x |> f → f x
-reduceBinOp "|>" l r = App r l
--- Forward composition: f >> g → \c -> g (f c)
-reduceBinOp ">>" l r = Lam "_c" (App r (App l (Name "_c")))
--- Backward composition: f << g → \c -> f (g c)
-reduceBinOp "<<" l r = Lam "_c" (App l (App r (Name "_c")))
--- Short-circuit and: a && b → if a ~b ~0
-reduceBinOp "&&" l r = App (App (App (Name "if") l) (Thunk r)) (Thunk (IntLit 0))
--- Short-circuit or: a || b → if a ~1 ~b
-reduceBinOp "||" l r = App (App (App (Name "if") l) (Thunk (IntLit 1))) (Thunk r)
 
 -- Record merge: base <- overlay (override/add fields from overlay into base)
 reduceBinOp "<-" (Record tag fields) (Record _ overlayBs) =

@@ -59,7 +59,7 @@ preludeSrc = T.unlines
   , "enumerate :: List : List"
   , "enumerate lst = zip (range 0 (len lst)) lst"
   , "join :: Str : List : Str"
-  , "join sep lst = lst -> Nil = \"\"; Cons = if (null lst.tail) ~lst.head ~(lst.head ++ sep ++ join sep lst.tail)"
+  , "join sep lst = lst -> Nil = \"\"; Cons = if (null lst.tail) ~lst.head ~(lst.head + sep + join sep lst.tail)"
   , "abs :: Num : Num"
   , "abs x = if (x < 0) ~(0 - x) ~x"
   , "neg :: Num : Num"
@@ -71,6 +71,11 @@ preludeSrc = T.unlines
   , "not :: Num : Num"
   , "not x = if x ~0 ~1"
   , "(<-) base overlay = fold (\\acc pair -> setField acc (head pair) (head (tail pair))) base (zip (fieldNames overlay) (fields overlay))"
+  , "(|>) x f = f x"
+  , "(>>) f g x = g (f x)"
+  , "(<<) f g x = f (g x)"
+  , "(&&) a b = if a ~b ~0"
+  , "(||) a b = if a ~1 ~b"
   ]
 
 -- | Parse the prelude source into bindings.

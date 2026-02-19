@@ -144,11 +144,6 @@ checkOperands env pos name = go
             rt = inferExpr env r
             errs = checkNumericOp op lt rt
         in errs ++ go l ++ go r
-      | op == "++" =
-        let lt = inferExpr env l
-            rt = inferExpr env r
-            errs = checkStringOp "++" lt rt
-        in errs ++ go l ++ go r
       | op `elem` ["<", ">", "<=", ">="] =
         let lt = inferExpr env l
             rt = inferExpr env r
@@ -174,13 +169,6 @@ checkOperands env pos name = go
       | rt == TStr = [mkOpErr op "Str" "numeric"]
       | lt == TRecord "" [] || rt == TRecord "" [] = []
       | otherwise = []  -- Num, Float, TAny, TVar all OK
-
-    checkStringOp op lt rt
-      | lt == TNum = [mkOpErr op "Num" "Str"]
-      | lt == TFloat = [mkOpErr op "Float" "Str"]
-      | rt == TNum = [mkOpErr op "Num" "Str"]
-      | rt == TFloat = [mkOpErr op "Float" "Str"]
-      | otherwise = []
 
     mkOpErr op actual expected = TypeError
       { tePos = pos
@@ -229,16 +217,9 @@ inferExpr env (BinOp op l r)
          (_, TFloat) -> TFloat
          _           -> TNum
   | op `elem` ["==", "/=", "<", ">", "<=", ">="] = TNum
-  | op == "++" = TStr
   | op == ":" =
     let ht = inferExpr env l
     in TRecord "Cons" [("head", ht), ("tail", TAny)]
-  | op `elem` ["&&", "||"] = TNum
-  | op == "|>" =
-    -- pipe: x |> f  =  f x
-    case inferExpr env r of
-      TFun _ ret -> ret
-      _          -> TAny
   | otherwise = TAny
 inferExpr env (App f x) =
   case inferExpr env f of

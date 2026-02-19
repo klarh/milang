@@ -13,7 +13,7 @@ import System.IO (Handle, hPutStr, hPutStrLn)
 isBuiltinOp :: Text -> Bool
 isBuiltinOp op = op `elem`
   [ "+", "-", "*", "/", "%", "**", "<", ">", "<=", ">=", "==", "/="
-  , "++", ":" ]
+  , ":" ]
 
 -- | Codegen state
 data CGState = CGState
@@ -892,7 +892,7 @@ emitPreamble h = hPutStr h $ unlines
   , "  // Structural equality for all types"
   , "  if (strcmp(op, \"==\") == 0) return mi_int(mi_vals_equal(a, b));"
   , "  if (strcmp(op, \"/=\") == 0) return mi_int(!mi_vals_equal(a, b));"
-  , "  if ((strcmp(op, \"+\") == 0 || strcmp(op, \"++\") == 0) && a.type == MI_STRING && b.type == MI_STRING) {"
+  , "  if (strcmp(op, \"+\") == 0 && a.type == MI_STRING && b.type == MI_STRING) {"
   , "    int la = a.as.str.len, lb = b.as.str.len;"
   , "    char *r = mi_alloc(la + lb + 1); memcpy(r, a.as.str.data, la); memcpy(r+la, b.as.str.data, lb); r[la+lb] = '\\0';"
   , "    MiVal v; v.type = MI_STRING; v.as.str.data = r; v.as.str.len = la + lb; return v;"
