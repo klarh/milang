@@ -380,19 +380,23 @@ pBraceWith = do
 -- ── Expressions ───────────────────────────────────────────────────
 
 pExpr :: Parser Expr
-pExpr = pInfix
+pExpr = pInfix False
+
+-- | Expression parser that eats newlines between atoms (for inside delimiters)
+pExprML :: Parser Expr
+pExprML = pInfix True
 
 -- Infix operators with precedence climbing
-pInfix :: Parser Expr
-pInfix = pPrec 0
+pInfix :: Bool -> Parser Expr
+pInfix ml = pPrec ml 0
 
-pPrec :: Int -> Parser Expr
-pPrec minPrec = do
-  left <- pApp
-  pInfixRest minPrec left
+pPrec :: Bool -> Int -> Parser Expr
+pPrec ml minPrec = do
+  left <- pApp ml
+  pInfixRest ml minPrec left
 
-pInfixRest :: Int -> Expr -> Parser Expr
-pInfixRest minPrec left = do
+pInfixRest :: Bool -> Int -> Expr -> Parser Expr
+pInfixRest ml minPrec left = do
   let tbl = unsafePerformIO (readIORef globalOpTable)
   -- Allow continuation: backslash + newline
   _ <- many (try $ char '\\' *> newline *> sc)
@@ -407,9 +411,9 @@ pInfixRest minPrec left = do
         else do
           _ <- pBacktickOp  -- consume
           scn  -- allow newline after operator
-          right <- pPrec (bPrec + 1)
+          right <- pPrec ml (bPrec + 1)
           let result = App (App (Name name) left) right
-          pInfixRest minPrec result
+          pInfixRest ml minPrec result
     Nothing -> do
       mop <- optional (try $ lookAhead pOperator)
       case mop of
@@ -422,7 +426,7 @@ pInfixRest minPrec left = do
                _ <- pOperator  -- consume the operator
                scn  -- allow newline after operator
                let nextPrec = if assoc == RightAssoc then prec else prec + 1
-               right <- pPrec nextPrec
+               right <- pPrec ml nextPrec
                let result
                      | op == "|>" = App right left
                      | op == ">>" = Lam "_c" (App right (App left (Name "_c")))
@@ -430,7 +434,7 @@ pInfixRest minPrec left = do
                      | op == "&&" = App (App (App (Name "if") left) (Thunk right)) (Thunk (IntLit 0))
                      | op == "||" = App (App (App (Name "if") left) (Thunk (IntLit 1))) (Thunk right)
                      | otherwise  = BinOp op left right
-               pInfixRest minPrec result
+               pInfixRest ml minPrec result
 
 -- Parse a backtick-quoted identifier: `name`
 pBacktickOp :: Parser Text
@@ -479,11 +483,35 @@ pOperator = try $ lexeme $ do
 
 -- Function application by juxtaposition
 -- Field access (.) binds tighter than application
-pApp :: Parser Expr
-pApp = do
+pApp :: Bool -> Parser Expr
+pApp ml = do
+  startCol <- unPos . sourceColumn <$> getSourcePos
   f <- pAtomDot
-  args <- many (try pAtomDot)
+  args <- many (try (pAppArg ml startCol))
   pure $ foldl App f args
+
+-- | Parse a function argument, with optional multiline continuation.
+-- In multiline mode (inside delimiters): freely eat newlines between atoms.
+-- In normal mode: eat newlines only if the next line is deeper-indented,
+-- or at the same column if the next token is unambiguously an argument.
+pAppArg :: Bool -> Int -> Parser Expr
+pAppArg ml startCol
+  | ml = (scn *> pAtomDot) <|> pAtomDot
+  | otherwise = try pAtomDot <|> do
+      _ <- try $ do
+        _ <- lookAhead (some (char '\n' <|> char ' ' <|> char '\t'))
+        scn
+        col <- unPos . sourceColumn <$> getSourcePos
+        if col > startCol
+          then pure ()
+          else if col == startCol
+            then do
+              c <- lookAhead anySingle
+              if c `elem` ['~', '(', '[', '"', '\\', '#', '$']
+                then pure ()
+                else fail "not a continuation"
+            else fail "not a continuation line"
+      pAtomDot
 
 -- An atom possibly followed by .field chains
 pAtomDot :: Parser Expr
@@ -544,7 +572,7 @@ pParens = do
   case mop of
     Just op -> pure $ Name op
     Nothing -> do
-      e <- pExpr
+      e <- pExprML
       scn  -- allow newline before )
       _ <- symbol ")"
       pure e
@@ -568,7 +596,7 @@ pListLit :: Parser Expr
 pListLit = do
   _ <- symbol "["
   scn  -- allow newline after [
-  es <- pExpr `sepEndBy` (symbol "," *> scn)
+  es <- pExprML `sepEndBy` (symbol "," *> scn)
   scn  -- allow newline before ]
   _ <- symbol "]"
   pure $ ListLit es
@@ -659,6 +687,7 @@ pBraceBinding :: Parser Binding
 pBraceBinding = do
   skipBraceWhitespace
   pos <- grabPos
+  ref <- L.indentLevel
   name <- pIdentifier
   -- Reject positional field names (_0, _1, ...)
   case T.uncons name of
@@ -668,9 +697,28 @@ pBraceBinding = do
   params <- many (try pIdentifier)
   lazy <- pBindOp
   body <- pExpr
+  -- Handle match arrows: name = expr -> pattern = body
+  mMatch <- optional (try pMatchArrow)
+  let body' = case mMatch of
+        Just alts -> Case body alts
+        Nothing   -> body
   mWith <- optional (try pBraceWith)
-  let body' = maybe body (With body) mWith
-  pure $ Binding name lazy params body' (Just pos) Nothing Nothing
+  let body'' = maybe body' (With body') mWith
+  -- Handle indented children (match alts or sub-bindings on deeper lines)
+  body''' <- case body'' of
+    Case scrut existingAlts -> do
+      alts <- many $ try $ do
+        skipNewlines
+        _ <- L.indentGuard sc GT ref
+        pMatchAlt
+      pure $ Case scrut (existingAlts ++ alts)
+    _ -> do
+      children <- pIndentedStatements ref
+      if null children then pure body''
+      else
+        let (stmts, result) = splitLastExpr children body''
+        in pure $ With result stmts
+  pure $ Binding name lazy params body''' (Just pos) Nothing Nothing
 
 pSep :: Parser ()
 pSep = void (symbol ";") <|> void (some (lexeme newline))

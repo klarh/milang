@@ -13,4 +13,25 @@ piped = (xs |>
   map (\x -> x * 2) |>
   fold (+) 0)
 
-main = result + piped
+-- Multi-line function application (if with args on next lines)
+classify x =
+  if (x > 0)
+    ~"positive"
+    ~(if (x == 0)
+      ~"zero"
+      ~"negative")
+
+-- Match arrows inside brace blocks
+transform val = result {
+  result = val ->
+    0 = "zero"
+    _ = "other"
+}
+
+main world =
+  world.io.println (toString (result + piped))
+  world.io.println (classify 5)
+  world.io.println (classify 0)
+  world.io.println (classify (0 - 3))
+  world.io.println (transform 0)
+  world.io.println (transform 42)
