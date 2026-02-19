@@ -2,7 +2,7 @@
 module Main where
 
 import System.Environment (getArgs)
-import Data.List (nub)
+import Data.List (nub, isPrefixOf)
 import System.Exit (exitFailure, ExitCode(..))
 import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (callProcess, readProcessWithExitCode)
@@ -12,7 +12,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
-import Milang.Syntax (prettyExpr, Expr(..), Binding(..))
+import Milang.Syntax (prettyExpr, Expr(..), Binding(..), SrcPos(..))
 import Milang.Parser (parseProgram, parseExpr, parseBinding)
 import Text.Megaparsec (errorBundlePretty)
 import Milang.Import (resolveImports, resolveAndPin, findURLImports, LinkInfo(..))
@@ -81,15 +81,28 @@ loadAndReduce file = do
     Left err  -> pure $ Left err
     Right (ast, li) -> do
       let astWithPrelude = injectPrelude ast
+      -- Type check pre-reduction (catches call-site argument mismatches)
+      let preTypeErrs = case astWithPrelude of
+            Namespace bs -> typeCheck bs
+            _            -> []
+      mapM_ (printTypeError file) (filterPrelude preTypeErrs)
       let reduced = reduce emptyEnv astWithPrelude
       let ws = warnings reduced
       mapM_ (printWarning file) ws
-      -- Type check: report errors as warnings
-      let typeErrs = case reduced of
+      -- Type check post-reduction (catches residual type issues)
+      let postTypeErrs = case reduced of
             Namespace bs -> typeCheck bs
             _            -> []
-      mapM_ (printTypeError file) typeErrs
+      mapM_ (printTypeError file) (filterPrelude postTypeErrs)
       pure $ Right (reduced, li)
+
+-- | Filter out type errors originating from prelude definitions
+filterPrelude :: [TypeError] -> [TypeError]
+filterPrelude = filter (not . isPrelude)
+  where
+    isPrelude te = case tePos te of
+      Just pos -> "<prelude>" `isPrefixOf` srcFile pos
+      Nothing  -> False
 
 -- | Prepend prelude bindings to the user's top-level namespace
 injectPrelude :: Expr -> Expr

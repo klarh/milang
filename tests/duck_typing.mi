@@ -1,0 +1,27 @@
+/* Structural duck typing: untagged types match any record with the right fields */
+
+/* Untagged type — accepts any record with x field */
+HasX :: {x = Num}
+getX :: HasX : Num
+getX r = r.x
+
+/* Tagged type annotation (explicit in record literal) */
+Point :: {x = Num; y = Num}
+mkPoint :: Num : Num : Point
+mkPoint x y = Point {x = x; y = y}
+
+/* 3D point — has extra z field */
+p3d = Point3D {x = 1; y = 2; z = 3}
+
+/* getX accepts any record with x, regardless of tag */
+test1 = getX (mkPoint 10 20)
+test2 = getX p3d
+test3 = getX ({x = 99; other = "hello"})
+
+/* Record merge preserves fields for duck typing */
+defaults = {x = 0; y = 0}
+custom = defaults <- {x = 42}
+test4 = getX custom
+
+main = test1 + test2 + test3 + test4
+/* 10 + 1 + 99 + 42 = 152 */

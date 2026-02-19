@@ -208,7 +208,7 @@ pTypeBindingAt _ref = do
   pos <- grabPos
   name <- pBindingName
   _ <- symbol "::"
-  typeExpr <- try pAnonRecord <|> pExpr
+  typeExpr <- pExpr
   pure $ Binding name False [] (IntLit 0) (Just pos) (Just typeExpr) Nothing
 
 -- Parse a binding given its indent level

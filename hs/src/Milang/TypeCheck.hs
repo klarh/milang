@@ -5,7 +5,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import Milang.Syntax
-import qualified Milang.Reduce as R
 
 -- | Type representation
 data MiType
@@ -34,64 +33,34 @@ type TypeEnv = Map.Map Text MiType
 -- Returns a list of type errors (empty = all good).
 typeCheck :: [Binding] -> [TypeError]
 typeCheck bindings =
-  let -- Build a type-domain reducer env from :: annotations
-      typeReduceEnv = collectTypeEnv bindings
-      -- First pass: reduce and collect type annotations
-      typeEnv = collectTypes typeReduceEnv bindings
-      -- Second pass: check each annotated binding
+  let -- Collect type annotations (resolved via typeEnv, not reducer)
+      typeEnv = collectTypes bindings
+      -- Check each binding
   in concatMap (checkBinding typeEnv) bindings
 
--- | Build a reducer environment from type-domain bindings.
--- Type aliases like `Point :: {x = Num; y = Num}` become
--- reducible expressions in the type domain.
--- Free lowercase names in type expressions become lambda parameters,
--- enabling type-level functions: `Pair :: {fst = a; snd = b}` becomes
--- `\a -> \b -> {fst = a; snd = b}` in the type reducer env.
-collectTypeEnv :: [Binding] -> R.Env
-collectTypeEnv = foldl go R.emptyEnv
+-- | Collect type annotations into an environment.
+-- Type expressions are interpreted directly (not reduced, to avoid : → cons).
+-- Type aliases are resolved via the typeEnv built incrementally.
+-- All type aliases are structural (untagged) — tags are runtime concepts.
+collectTypes :: [Binding] -> TypeEnv
+collectTypes = foldl go Map.empty
   where
     go env b = case bindType b of
       Just tyExpr ->
-        let freeVars = freeTypeVars tyExpr
-            wrapped = foldr Lam tyExpr freeVars
-        in Map.insert (bindName b) wrapped env
-      Nothing -> env
+        Map.insert (bindName b) (exprToTypeWith env tyExpr) env
+      Nothing ->
+        -- Infer type from body (for non-annotated bindings)
+        let bodyType = inferBodyType env b
+        in case bodyType of
+             TAny -> env  -- don't pollute env with unknown types
+             _    -> Map.insert (bindName b) bodyType env
 
--- | Find free lowercase names in a type expression (these are type variables).
--- Returns them in order of first occurrence (stable for lambda wrapping).
-freeTypeVars :: Expr -> [Text]
-freeTypeVars = go []
-  where
-    go seen (Name n)
-      | n `elem` ["Num", "Str", "Float"] = []
-      | not (T.null n) && isLower (T.head n) && n `notElem` seen = [n]
-      | otherwise = []
-      where isLower c = c >= 'a' && c <= 'z'
-    go seen (BinOp _ l r) =
-      let lv = go seen l
-      in lv ++ go (seen ++ lv) r
-    go seen (Record _ fields) = goBindings seen fields
-    go seen (Namespace fields) = goBindings seen fields
-    go seen (App f x) =
-      let fv = go seen f
-      in fv ++ go (seen ++ fv) x
-    go seen (Lam p body) = go (seen ++ [p]) body
-    go _ _ = []
-
-    goBindings seen [] = []
-    goBindings seen (b:bs) =
-      let bv = go seen (bindBody b)
-      in bv ++ goBindings (seen ++ bv) bs
-
--- | Collect type annotations into an environment, reducing type expressions
-collectTypes :: R.Env -> [Binding] -> TypeEnv
-collectTypes reduceEnv = foldl go Map.empty
-  where
-    go env b = case bindType b of
-      Just tyExpr ->
-        let reduced = R.reduce reduceEnv tyExpr
-        in Map.insert (bindName b) (exprToTypeWith env reduced) env
-      Nothing -> env
+-- | Infer a binding's type from its body and parameters
+inferBodyType :: TypeEnv -> Binding -> MiType
+inferBodyType env b =
+  let bodyTy = inferExpr env (bindBody b)
+      -- Wrap in function types for each parameter
+  in foldr (\_ ty -> TFun TAny ty) bodyTy (bindParams b)
 
 -- | Convert a type expression (milang Expr) to a MiType.
 -- Type expressions are regular milang expressions that have been reduced
@@ -123,6 +92,15 @@ exprToTypeWith env (Namespace bindings) =
 -- Lam in type position: represents a type-level function (keep as TAny for now,
 -- these get applied via the reducer before reaching here)
 exprToTypeWith _ (Lam _ _) = TAny
+-- Tag {fields} in type position: With (Name tag) bindings → tagged record type
+exprToTypeWith env (With (Name tag) fields)
+  | not (T.null tag) && isUpper (T.head tag) =
+    TRecord tag [(bindName b, exprToTypeWith env (bindBody b)) | b <- fields]
+  where isUpper c = c >= 'A' && c <= 'Z'
+exprToTypeWith env (With body bs) =
+  -- General With: extend env with local bindings, then infer body type
+  let env' = foldl (\acc b -> Map.insert (bindName b) (exprToTypeWith acc (bindBody b)) acc) env bs
+  in exprToTypeWith env' body
 -- App that wasn't fully reduced — try to interpret anyway
 exprToTypeWith env (App f x) =
   case exprToTypeWith env f of
@@ -139,10 +117,21 @@ checkBinding typeEnv b =
           case bindBody b of
             IntLit 0 | null (bindParams b) -> []
             _ -> let expectedType = exprToTypeWith typeEnv tyExpr
-                 in checkExprAgainst typeEnv (bindPos b) (bindName b) expectedType (bindBody b)
+                     -- Peel function types for each param, binding param types in env
+                     (env', bodyType) = peelParams typeEnv (bindParams b) expectedType
+                 in checkExprAgainst env' (bindPos b) (bindName b) bodyType (bindBody b)
       -- Also check for operand type errors in the body (even without annotation)
       operandErrs = checkOperands typeEnv (bindPos b) (bindName b) (bindBody b)
   in annotErrs ++ operandErrs
+
+-- | Peel function type layers for binding parameters, extending the type env
+peelParams :: TypeEnv -> [Text] -> MiType -> (TypeEnv, MiType)
+peelParams env [] ty = (env, ty)
+peelParams env (p:ps) (TFun argTy retTy) =
+  peelParams (Map.insert p argTy env) ps retTy
+peelParams env (_:ps) ty =
+  -- More params than type layers — remaining params are TAny
+  peelParams env ps ty
 
 -- | Walk an expression and report operand type mismatches.
 -- E.g. "hello" * 3 → Str used with arithmetic operator
@@ -166,7 +155,13 @@ checkOperands env pos name = go
             errs = checkNumericOp op lt rt
         in errs ++ go l ++ go r
       | otherwise = go l ++ go r
-    go (App f x) = go f ++ go x
+    go (App f x) =
+      let fty = inferExpr env f
+          xty = inferExpr env x
+          argErrs = case fty of
+            TFun argTy _ -> checkCompat pos name argTy xty
+            _ -> []
+      in argErrs ++ go f ++ go x
     go (Lam _ body) = go body
     go (With body bs) = go body ++ concatMap (go . bindBody) bs
     go (Case _ alts) = concatMap (\(Alt _ _ body) -> go body) alts
@@ -265,13 +260,22 @@ inferExpr env (FieldAccess e field) =
     _ -> TAny
 inferExpr _ (Thunk e) = inferExpr Map.empty e  -- thunks: infer underlying type
 inferExpr env (With e bs) =
-  -- Extend env with local bindings, then infer body
-  let env' = foldl addLocal env bs
-  in inferExpr env' e
+  -- Detect Tag {field = val; ...} pattern → tagged record type
+  case e of
+    Name tag | not (T.null tag) && isUpperWith (T.head tag)
+             , all hasNamedField bs ->
+      TRecord tag [(bindName b, inferExpr env (bindBody b)) | b <- bs]
+    _ ->
+      -- General With: extend env with local bindings, then infer body
+      let env' = foldl addLocal env bs
+      in inferExpr env' e
   where
     addLocal acc b = case bindType b of
       Just tyExpr -> Map.insert (bindName b) (exprToTypeWith acc tyExpr) acc
       Nothing     -> Map.insert (bindName b) (inferExpr acc (bindBody b)) acc
+    isUpperWith c = c >= 'A' && c <= 'Z'
+    hasNamedField b = not (T.null (bindName b)) && bindName b /= "_"
+                      && null (bindParams b)
 inferExpr env (Case scrutinee alts) =
   -- Infer type from all alternatives; use first non-TAny
   let altTypes = [inferExpr (extendWithPat env pat) body | Alt pat _ body <- alts]
@@ -316,8 +320,8 @@ checkCompat pos name expected actual =
           (subst'', errs2) = go subst' er ar
       in (subst'', errs1 ++ errs2)
     go subst (TRecord etag efields) (TRecord atag afields)
-      | etag /= "" && atag /= "" && etag /= atag =
-        (subst, [mkErr ("tag mismatch: expected " <> etag <> ", got " <> atag)])
+      | etag /= "" && etag /= atag =
+        (subst, [mkErr ("tag mismatch: expected " <> etag <> ", got " <> (if T.null atag then "(untagged)" else atag))])
       | otherwise =
         foldl (\(s, errs) (ename, etype) ->
           case lookup ename afields of
