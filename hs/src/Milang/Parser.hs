@@ -427,13 +427,7 @@ pInfixRest ml minPrec left = do
                if ml then scn else sc  -- newline after operator only inside delimiters
                let nextPrec = if assoc == RightAssoc then prec else prec + 1
                right <- pPrec ml nextPrec
-               let result
-                     | op == "|>" = App right left
-                     | op == ">>" = Lam "_c" (App right (App left (Name "_c")))
-                     | op == "<<" = Lam "_c" (App left (App right (Name "_c")))
-                     | op == "&&" = App (App (App (Name "if") left) (Thunk right)) (Thunk (IntLit 0))
-                     | op == "||" = App (App (App (Name "if") left) (Thunk (IntLit 1))) (Thunk right)
-                     | otherwise  = BinOp op left right
+               let result = BinOp op left right
                pInfixRest ml minPrec result
 
 -- Parse a backtick-quoted identifier: `name`
