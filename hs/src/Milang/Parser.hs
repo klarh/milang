@@ -445,6 +445,7 @@ opInfoWith tbl op = case Map.lookup op tbl of
   Nothing   -> opInfo op
 
 opInfo :: Text -> (Int, Assoc)
+opInfo "<-" = (8,   LeftAssoc)
 opInfo "|>" = (5,   LeftAssoc)
 opInfo "||" = (15,  RightAssoc)
 opInfo "&&" = (20,  RightAssoc)
@@ -488,15 +489,20 @@ pApp ml = do
 -- In normal mode: atoms must be on the same line (no indentation continuation).
 pAppArg :: Bool -> Parser Expr
 pAppArg ml
-  | ml = (scn *> pAtomDot) <|> pAtomDot
-  | otherwise = pAtomDot
+  | ml = (scn *> pAtomDotArg) <|> pAtomDotArg
+  | otherwise = pAtomDotArg
 
 -- An atom possibly followed by .field chains
 pAtomDot :: Parser Expr
 pAtomDot = do
   e <- pAtom
-  e' <- pDotChain e
-  pRecordUpdates e'
+  pDotChain e
+
+-- | Like pAtomDot but excludes anonymous records (for function arguments)
+pAtomDotArg :: Parser Expr
+pAtomDotArg = do
+  e <- pAtomNoRecord
+  pDotChain e
 
 pDotChain :: Expr -> Parser Expr
 pDotChain e = do
@@ -507,27 +513,28 @@ pDotChain e = do
       field <- pAnyIdentifier
       pDotChain (FieldAccess e field)
 
--- Parse zero or more record updates: expr:{f1=v1} :{f2=v2} ...
-pRecordUpdates :: Expr -> Parser Expr
-pRecordUpdates e = do
-  mUpd <- optional (try pRecordUpdate)
-  case mUpd of
-    Nothing -> pure e
-    Just bs -> pRecordUpdates (RecordUpdate e bs)
-
--- Parse :{bindings}
-pRecordUpdate :: Parser [Binding]
-pRecordUpdate = do
-  _ <- symbol ":"
-  _ <- symbol "{"
-  bs <- pBraceBindings
-  _ <- symbol "}"
-  pure bs
-
 -- ── Atoms ─────────────────────────────────────────────────────────
 
 pAtom :: Parser Expr
 pAtom = choice
+  [ pParens
+  , pListLit
+  , pThunk
+  , pQuote
+  , pSplice
+  , pStringLit
+  , try pFloatLit
+  , pIntLit
+  , pLambda
+  , try pUnionDecl
+  , try pAnonRecord
+  , pNameOrRecord
+  ]
+
+-- | Atoms excluding anonymous records — used for function arguments
+-- so that `f {x=1}` remains a With block, not App f (Record "" [...])
+pAtomNoRecord :: Parser Expr
+pAtomNoRecord = choice
   [ pParens
   , pListLit
   , pThunk

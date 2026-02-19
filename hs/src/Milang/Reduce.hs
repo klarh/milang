@@ -113,21 +113,6 @@ reduce env (Thunk body) = Thunk (applyEnv env body)  -- defer evaluation but cap
 
 reduce env (ListLit es) = listToCons (map (reduce env) es)
 
-reduce env (RecordUpdate e bs) =
-  let e' = reduce env e
-      bs' = map (reduceBind env) bs
-  in case e' of
-    Record tag fields ->
-      let overrides = [(bindName b, bindBody b) | b <- bs']
-          updated = map (\f -> case lookup (bindName f) overrides of
-                                 Just newBody -> f { bindBody = newBody }
-                                 Nothing      -> f) fields
-          -- Add any new fields not in the original
-          existingNames = map bindName fields
-          newFields = [b | b <- bs', bindName b `notElem` existingNames]
-      in Record tag (updated ++ newFields)
-    _ -> RecordUpdate e' bs'
-
 -- | Check if a name looks like an operator (composed of operator chars)
 isOperatorName :: Text -> Bool
 isOperatorName t = not (T.null t) && T.all (`elem` ("+-*/^<>=!&|@%?:" :: String)) t
@@ -251,6 +236,16 @@ reduceBinOp "&&" l r = App (App (App (Name "if") l) (Thunk r)) (Thunk (IntLit 0)
 -- Short-circuit or: a || b → if a ~1 ~b
 reduceBinOp "||" l r = App (App (App (Name "if") l) (Thunk (IntLit 1))) (Thunk r)
 
+-- Record merge: base <- overlay (override/add fields from overlay into base)
+reduceBinOp "<-" (Record tag fields) (Record _ overlayBs) =
+  let overrides = [(bindName b, bindBody b) | b <- overlayBs]
+      updated = map (\f -> case lookup (bindName f) overrides of
+                             Just newBody -> f { bindBody = newBody }
+                             Nothing      -> f) fields
+      existingNames = map bindName fields
+      newFields = [b | b <- overlayBs, bindName b `notElem` existingNames]
+  in Record tag (updated ++ newFields)
+
 -- Residual: can't reduce
 reduceBinOp op l r = BinOp op l r
 
@@ -344,8 +339,6 @@ exprFreeVars (Case s alts)    =
 exprFreeVars (CFunction {})   = Set.empty
 exprFreeVars (Thunk body)     = exprFreeVars body
 exprFreeVars (ListLit es)     = Set.unions (map exprFreeVars es)
-exprFreeVars (RecordUpdate e bs) =
-  Set.union (exprFreeVars e) (Set.unions (map (exprFreeVars . bindBody) bs))
 exprFreeVars (Quote _)          = Set.empty  -- quoted code has no free vars
 exprFreeVars (Splice e)         = exprFreeVars e
 
@@ -386,7 +379,6 @@ substExpr n e (Case s alts) =
 substExpr _ _ e@(CFunction {}) = e
 substExpr n e (Thunk body) = Thunk (substExpr n e body)
 substExpr n e (ListLit es) = ListLit (map (substExpr n e) es)
-substExpr n e (RecordUpdate ex bs) = RecordUpdate (substExpr n e ex) (map (substBind n e) bs)
 substExpr _ _ e@(Quote _) = e  -- don't substitute inside quotes
 substExpr n e (Splice ex) = Splice (substExpr n e ex)
 
@@ -446,8 +438,6 @@ quoteExpr (ListLit es)  = Record "List"  [mkBind "elems" (listToCons (map quoteE
 quoteExpr (Thunk e)     = Record "Thunk" [mkBind "body" (quoteExpr e)]
 quoteExpr (FieldAccess e f) = Record "Access" [mkBind "expr" (quoteExpr e),
                                                 mkBind "field" (StringLit f)]
-quoteExpr (RecordUpdate e bs) = Record "Update" [mkBind "expr" (quoteExpr e),
-                                                   mkBind "fields" (quoteBindings bs)]
 quoteExpr (Quote e)     = Record "Quote"  [mkBind "body" (quoteExpr e)]
 quoteExpr (Splice e)    = Record "Splice" [mkBind "body" (quoteExpr e)]
 quoteExpr (CFunction {}) = Record "CFunc" []
@@ -523,10 +513,6 @@ unquoteExpr (Record "Access" bs) = do
   expr  <- getField "expr" bs >>= unquoteExpr
   field <- getStrField "field" bs
   Just (FieldAccess expr field)
-unquoteExpr (Record "Update" bs) = do
-  expr   <- getField "expr" bs >>= unquoteExpr
-  fields <- getField "fields" bs >>= unquoteBindings
-  Just (RecordUpdate expr fields)
 unquoteExpr (Record "Quote" bs)  = Quote <$> (getField "body" bs >>= unquoteExpr)
 unquoteExpr (Record "Splice" bs) = Splice <$> (getField "body" bs >>= unquoteExpr)
 -- Raw values pass through: allows mixing AST records with concrete values
@@ -747,7 +733,6 @@ warnExpr (FieldAccess e _) = warnExpr e
 warnExpr (Namespace bs) = concatMap warnBinding bs
 warnExpr (Thunk e) = warnExpr e
 warnExpr (ListLit es) = concatMap warnExpr es
-warnExpr (RecordUpdate e bs) = warnExpr e ++ concatMap warnBinding bs
 warnExpr (Quote _) = []
 warnExpr (Splice e) = warnExpr e
 warnExpr _ = []

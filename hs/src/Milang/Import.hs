@@ -152,14 +152,6 @@ resolveExpr ctx dir (ListLit es) = do
   es' <- mapM (resolveExpr ctx dir) es
   pure $ ListLit <$> sequence es'
 
-resolveExpr ctx dir (RecordUpdate base updates) = do
-  base' <- resolveExpr ctx dir base
-  resolvedUpdates <- mapM (\b -> do
-    (bodyResult, _circular) <- resolveBindingBody ctx dir b
-    pure $ fmap (\body' -> b { bindBody = body' }) bodyResult
-    ) updates
-  pure $ RecordUpdate <$> base' <*> sequence resolvedUpdates
-
 resolveExpr ctx dir (Quote body) = do
   body' <- resolveExpr ctx dir body
   pure $ Quote <$> body'
@@ -258,7 +250,6 @@ collectImportURLs base = go
     go (Case s as)      = go s ++ concatMap (\a -> maybe [] go (altGuard a) ++ go (altBody a)) as
     go (Thunk b)        = go b
     go (ListLit es)     = concatMap go es
-    go (RecordUpdate e bs) = go e ++ concatMap (go . bindBody) bs
     go (Quote b)        = go b
     go (Splice b)       = go b
     go _                = []
@@ -495,7 +486,6 @@ findURLImports = go
     go (Case s as)         = go s ++ concatMap (\a -> maybe [] go (altGuard a) ++ go (altBody a)) as
     go (Thunk b)           = go b
     go (ListLit es)        = concatMap go es
-    go (RecordUpdate e bs) = go e ++ concatMap (go . bindBody) bs
     go (Quote b)           = go b
     go (Splice b)          = go b
     go _                   = []

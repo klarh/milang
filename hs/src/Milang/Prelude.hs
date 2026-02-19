@@ -70,6 +70,7 @@ preludeSrc = T.unlines
   , "max a b = if (a > b) ~a ~b"
   , "not :: Num : Num"
   , "not x = if x ~0 ~1"
+  , "(<-) base overlay = fold (\\acc pair -> setField acc (head pair) (head (tail pair))) base (zip (fieldNames overlay) (fields overlay))"
   ]
 
 -- | Parse the prelude source into bindings.

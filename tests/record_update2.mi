@@ -1,10 +1,10 @@
 p = Point {x = 1; y = 2; z = 3}
-q = p :{x = 10; z = 30}
-r = q :{y = 20}
+q = p <- {x = 10; z = 30}
+r = q <- {y = 20}
 sum = r.x + r.y + r.z
 
-add_field = p :{w = 4}
+add_field = p <- {w = 4}
 has_w = add_field.w
 
-chain = p :{x = 100} :{y = 200}
+chain = (p <- {x = 100}) <- {y = 200}
 chain_result = chain.x + chain.y + chain.z
