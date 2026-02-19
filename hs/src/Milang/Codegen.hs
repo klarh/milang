@@ -12,8 +12,8 @@ import System.IO (Handle, hPutStr, hPutStrLn)
 -- | Operators handled by the C runtime's mi_binop
 isBuiltinOp :: Text -> Bool
 isBuiltinOp op = op `elem`
-  [ "+", "-", "*", "/", "**", "<", ">", "<=", ">=", "==", "/="
-  , "++", ":", "&&", "||" ]
+  [ "+", "-", "*", "/", "%", "**", "<", ">", "<=", ">=", "==", "/="
+  , "++", ":" ]
 
 -- | Codegen state
 data CGState = CGState
@@ -921,6 +921,7 @@ emitPreamble h = hPutStr h $ unlines
   , "  if (strcmp(op, \"-\") == 0) return mi_int(ia - ib);"
   , "  if (strcmp(op, \"*\") == 0) return mi_int(ia * ib);"
   , "  if (strcmp(op, \"/\") == 0) { if (ib==0) { fprintf(stderr,\"division by zero\\n\"); exit(1); } return mi_int(ia / ib); }"
+  , "  if (strcmp(op, \"%\") == 0) { if (ib==0) { fprintf(stderr,\"modulo by zero\\n\"); exit(1); } return mi_int(ia % ib); }"
   , "  if (strcmp(op, \"**\") == 0) { int64_t r=1; for(int64_t e=ib;e>0;e--) r*=ia; return mi_int(r); }"
   , "  if (strcmp(op, \"<\") == 0) return mi_int(ia < ib);"
   , "  if (strcmp(op, \">\") == 0) return mi_int(ia > ib);"
