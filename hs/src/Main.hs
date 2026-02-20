@@ -87,7 +87,7 @@ loadAndReduce file = do
             _            -> []
       let reduced = reduce emptyEnv astWithPrelude
       let ws = warnings reduced
-      mapM_ (printWarning file) ws
+      mapM_ (printError file) ws
       -- Type check post-reduction (catches residual type issues)
       let postTypeErrs = case reduced of
             Namespace bs -> typeCheck bs
@@ -95,9 +95,10 @@ loadAndReduce file = do
       -- Deduplicate: combine both passes, keep unique error messages
       let allErrs = dedup (filterPrelude preTypeErrs ++ filterPrelude postTypeErrs)
       mapM_ (printTypeError file) allErrs
-      if not (null allErrs)
+      let totalErrs = length ws + length allErrs
+      if totalErrs > 0
         then do
-          hPutStrLn stderr $ show (length allErrs) ++ " type error(s)"
+          hPutStrLn stderr $ show totalErrs ++ " error(s)"
           exitFailure
         else pure $ Right (reduced, li)
 
@@ -125,12 +126,12 @@ injectPrelude :: Expr -> Expr
 injectPrelude (Namespace bs) = Namespace (preludeBindings ++ bs)
 injectPrelude other = other
 
-printWarning :: FilePath -> Warning -> IO ()
-printWarning _file (Warning mpos msg) =
+printError :: FilePath -> Warning -> IO ()
+printError _file (Warning mpos msg) =
   let loc = case mpos of
               Just pos -> prettySrcPos pos
               Nothing  -> _file
-  in hPutStrLn stderr $ "warning: " ++ loc ++ ": " ++ msg
+  in hPutStrLn stderr $ "error: " ++ loc ++ ": " ++ msg
 
 printTypeError :: FilePath -> TypeError -> IO ()
 printTypeError _file te =
@@ -346,7 +347,7 @@ replEval env input =
       let ast = Namespace newEnv
       let reduced = reduce emptyEnv ast
       let ws = warnings reduced
-      mapM_ (printWarning "<repl>") ws
+      mapM_ (printError "<repl>") ws
       case reduced of
         Namespace bs -> pure (bs, Just [bindName merged])
         _ -> pure (newEnv, Just [bindName merged])
@@ -358,7 +359,7 @@ replEval env input =
       let ast = Namespace newEnv
       let reduced = reduce emptyEnv ast
       let ws = warnings reduced
-      mapM_ (printWarning "<repl>") ws
+      mapM_ (printError "<repl>") ws
       case reduced of
         Namespace bs' -> pure (bs', Just names)
         _ -> pure (newEnv, Just names)
@@ -372,7 +373,7 @@ replEval env input =
           let ast = Namespace newEnv
           let reduced = reduce emptyEnv ast
           let ws = warnings reduced
-          mapM_ (printWarning "<repl>") ws
+          mapM_ (printError "<repl>") ws
           case reduced of
             Namespace bs -> pure (bs, Just ["_it"])
             _ -> pure (newEnv, Just ["_it"])
