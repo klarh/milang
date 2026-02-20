@@ -637,11 +637,14 @@ ctorToBinding (name, params) =
   in Binding name False [] body Nothing Nothing Nothing
 
 pBraceBindings :: Parser [Binding]
-pBraceBindings = concat <$> (pBraceBindingOrDestruct `sepEndBy` pSep)
+pBraceBindings = do
+  bs <- concat <$> (pBraceBindingOrDestruct `sepEndBy` pSep)
+  skipBraceWhitespace  -- consume trailing whitespace/newlines before }
+  pure bs
 
 -- Either a destructuring {a; b} = expr, a normal binding, or a bare expression
 pBraceBindingOrDestruct :: Parser [Binding]
-pBraceBindingOrDestruct = try pBraceDestruct <|> try (pure <$> pBraceBinding) <|> pBraceBareExpr
+pBraceBindingOrDestruct = try pBraceDestruct <|> try (pure <$> pBraceBinding) <|> try pBraceBareExpr
 
 -- Parse a bare expression inside braces, auto-naming it
 pBraceBareExpr :: Parser [Binding]
