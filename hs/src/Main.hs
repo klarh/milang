@@ -226,19 +226,17 @@ cmdPin file = do
     Left err -> hPutStrLn stderr err >> exitFailure
     Right ast -> do
       let imports = findURLImports ast
-          unpinned = filter (isNothing . snd) imports
+          unpinned = filter (\(_, s) -> isNothing s) imports
           allUrls  = map fst imports
       if null allUrls
         then putStrLn "No URL imports found."
         else do
-          -- Resolve imports to compute Merkle hashes
           resolved <- resolveAndPin file ast
           case resolved of
             Left err -> hPutStrLn stderr err >> exitFailure
             Right (_, _, merkleMap) -> do
               let successes = [(url, h) | url <- allUrls
                                         , Just h <- [Map.lookup url merkleMap]]
-              -- Read file content for rewriting
               src <- TIO.readFile file
               let src' = foldl pinOne src successes
               if src' == src
@@ -246,30 +244,20 @@ cmdPin file = do
                 else do
                   TIO.writeFile file src'
                   putStrLn $ "Pinned " ++ show (length unpinned) ++ " import(s) in " ++ file
-              -- Print summary
               mapM_ (\(url, h) -> putStrLn $ "  " ++ url ++ "\n    sha256 = \"" ++ h ++ "\"") successes
   where
     isNothing Nothing = True
     isNothing _       = False
 
-    -- Insert sha256 into an import that doesn't have one
+    -- Rewrite `import "url"` → `import' "url" ({sha256 = "hash"})`
     pinOne :: T.Text -> (String, String) -> T.Text
     pinOne src (url, hash) =
-      let hashLine = T.pack $ "sha256 = \"" ++ hash ++ "\""
-          bare = T.pack $ "import \"" ++ url ++ "\""
-          withHash = T.pack $ "import \"" ++ url ++ "\" ({" ++ T.unpack hashLine ++ "})"
-      in if bare `T.isInfixOf` src && not (hasOpts src (T.pack url))
+      let bare = T.pack $ "import \"" ++ url ++ "\""
+          withHash = T.pack $ "import' \"" ++ url ++ "\" ({sha256 = \"" ++ hash ++ "\"})"
+          alreadyPinned = T.pack ("import' \"" ++ url ++ "\"") `T.isInfixOf` src
+      in if bare `T.isInfixOf` src && not alreadyPinned
            then T.replace bare withHash src
            else src
-
-    -- Check if import "url" already has ({...}) options
-    hasOpts :: T.Text -> T.Text -> Bool
-    hasOpts src url =
-      let importStr = T.pack "import \"" <> url <> T.pack "\""
-          after = snd $ T.breakOn importStr src
-          rest  = T.drop (T.length importStr) after
-          trimmed = T.dropWhile (== ' ') rest
-      in not (T.null trimmed) && T.head trimmed == '('
 
 -- | REPL: interactive read-eval-print loop with haskeline
 cmdRepl :: IO ()

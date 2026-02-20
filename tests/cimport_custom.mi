@@ -1,5 +1,5 @@
 -- Test importing a custom C header with source linking
-Lib = import "lib/mylib.h" ({src = "lib/mylib.c"})
+Lib = import' "lib/mylib.h" ({src = "lib/mylib.c"})
 
 a = Lib.add_ints 3 4
 main1 = world.io.println a
