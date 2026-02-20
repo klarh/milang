@@ -12,7 +12,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
-import Control.Monad (void)
+import Control.Monad (void, when)
 
 import Milang.Syntax
 import Milang.Lexer (Parser, sc, lexeme, symbol)
@@ -398,8 +398,9 @@ pPrec ml minPrec = do
 pInfixRest :: Bool -> Int -> Expr -> Parser Expr
 pInfixRest ml minPrec left = do
   let tbl = unsafePerformIO (readIORef globalOpTable)
-  -- Allow continuation: backslash + newline
+  -- Allow continuation: backslash + newline (always), or any newline in ML mode
   _ <- many (try $ char '\\' *> newline *> sc)
+  when ml (void scn)
   -- Try backtick infix: a `div` b → div a b
   mBacktick <- optional (try $ lookAhead pBacktickOp)
   case mBacktick of
@@ -480,7 +481,8 @@ pOperator = try $ lexeme $ do
 -- Field access (.) binds tighter than application
 pApp :: Bool -> Parser Expr
 pApp ml = do
-  f <- pAtomDot
+  when ml (void scn)
+  f <- pAtomDot ml
   args <- many (try (pAppArg ml))
   pure $ foldl App f args
 
@@ -489,19 +491,19 @@ pApp ml = do
 -- In normal mode: atoms must be on the same line (no indentation continuation).
 pAppArg :: Bool -> Parser Expr
 pAppArg ml
-  | ml = (scn *> pAtomDotArg) <|> pAtomDotArg
-  | otherwise = pAtomDotArg
+  | ml = (scn *> pAtomDotArg ml) <|> pAtomDotArg ml
+  | otherwise = pAtomDotArg ml
 
 -- An atom possibly followed by .field chains
-pAtomDot :: Parser Expr
-pAtomDot = do
-  e <- pAtom
+pAtomDot :: Bool -> Parser Expr
+pAtomDot ml = do
+  e <- pAtomML ml
   pDotChain e
 
 -- | Like pAtomDot but excludes anonymous records (for function arguments)
-pAtomDotArg :: Parser Expr
-pAtomDotArg = do
-  e <- pAtomNoRecord
+pAtomDotArg :: Bool -> Parser Expr
+pAtomDotArg ml = do
+  e <- pAtomNoRecordML ml
   pDotChain e
 
 pDotChain :: Expr -> Parser Expr
@@ -515,8 +517,8 @@ pDotChain e = do
 
 -- ── Atoms ─────────────────────────────────────────────────────────
 
-pAtom :: Parser Expr
-pAtom = choice
+pAtomML :: Bool -> Parser Expr
+pAtomML ml = choice
   [ pParens
   , pListLit
   , pThunk
@@ -525,7 +527,7 @@ pAtom = choice
   , pStringLit
   , try pFloatLit
   , pIntLit
-  , pLambda
+  , pLambdaML ml
   , try pUnionDecl
   , try pAnonRecord
   , pNameOrRecord
@@ -533,8 +535,8 @@ pAtom = choice
 
 -- | Atoms excluding anonymous records — used for function arguments
 -- so that `f {x=1}` remains a With block, not App f (Record "" [...])
-pAtomNoRecord :: Parser Expr
-pAtomNoRecord = choice
+pAtomNoRecordML :: Bool -> Parser Expr
+pAtomNoRecordML ml = choice
   [ pParens
   , pListLit
   , pThunk
@@ -543,7 +545,7 @@ pAtomNoRecord = choice
   , pStringLit
   , try pFloatLit
   , pIntLit
-  , pLambda
+  , pLambdaML ml
   , try pUnionDecl
   , pNameOrRecord
   ]
@@ -565,17 +567,17 @@ pParens = do
 pThunk :: Parser Expr
 pThunk = do
   _ <- symbol "~"
-  Thunk <$> pAtomDot
+  Thunk <$> pAtomDot False
 
 pQuote :: Parser Expr
 pQuote = do
   _ <- char '#'
-  Quote <$> pAtomDot
+  Quote <$> pAtomDot False
 
 pSplice :: Parser Expr
 pSplice = do
   _ <- char '$'
-  Splice <$> pAtomDot
+  Splice <$> pAtomDot False
 
 pListLit :: Parser Expr
 pListLit = do
@@ -723,12 +725,12 @@ pIntLit = IntLit <$> lexeme L.decimal
 pFloatLit :: Parser Expr
 pFloatLit = FloatLit <$> lexeme L.float
 
-pLambda :: Parser Expr
-pLambda = do
+pLambdaML :: Bool -> Parser Expr
+pLambdaML ml = do
   _ <- symbol "\\"
   params <- some pIdentifier
   _ <- symbol "->"
-  body <- pExpr
+  body <- if ml then pExprML else pExpr
   pure $ foldr Lam body params
 
 pNameOrRecord :: Parser Expr
