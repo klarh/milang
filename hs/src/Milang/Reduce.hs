@@ -212,7 +212,13 @@ evalSCCD d env (AcyclicSCC b) =
       val = if bindLazy b
             then bindBody b
             else reduceD d env body
-  in envInsert name val env
+      -- Only inline value forms (literals, lambdas, concrete records).
+      -- Non-concrete expressions (App, BinOp, FieldAccess etc.) stay as
+      -- named bindings so the With block evaluates them once at runtime,
+      -- preserving sharing and preventing duplication of side effects.
+  in if isConcrete val
+     then envInsert name val env
+     else env
 evalSCCD _ env (CyclicSCC bs) =
   -- Mutually recursive group: insert as unreduced lambdas, marked recursive.
   -- The concrete-args gate in reduceD (App) prevents exponential unrolling
