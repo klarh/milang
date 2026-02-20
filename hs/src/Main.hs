@@ -2,7 +2,7 @@
 module Main where
 
 import System.Environment (getArgs)
-import Data.List (nub, isPrefixOf)
+import Data.List (nub, isPrefixOf, foldl')
 import System.Exit (exitFailure, ExitCode(..))
 import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (callProcess, readProcessWithExitCode)
@@ -87,18 +87,20 @@ loadAndReduce file = do
             _            -> []
       let reduced = reduce emptyEnv astWithPrelude
       let ws = warnings reduced
-      mapM_ (printError file) ws
       -- Type check post-reduction (catches residual type issues)
       let postTypeErrs = case reduced of
             Namespace bs -> typeCheck bs
             _            -> []
-      -- Deduplicate: combine both passes, keep unique error messages
-      let allErrs = dedup (filterPrelude preTypeErrs ++ filterPrelude postTypeErrs)
-      mapM_ (printTypeError file) allErrs
-      let totalErrs = length ws + length allErrs
-      if totalErrs > 0
+      -- Unify all errors and deduplicate by source line
+      let warnMsgs = [(warnPos w, warnMsg w) | w <- ws]
+          tyMsgs  = [(tePos te, T.unpack (teName te) ++ ": " ++ T.unpack (teMessage te))
+                     | te <- filterPrelude preTypeErrs ++ filterPrelude postTypeErrs]
+          allMsgs = dedupByLine (warnMsgs ++ tyMsgs)
+          fmtErr (pos, msg) = "error: " ++ fmtLoc file pos ++ ": " ++ msg
+      mapM_ (hPutStrLn stderr . fmtErr) allMsgs
+      if not (null allMsgs)
         then do
-          hPutStrLn stderr $ show totalErrs ++ " error(s)"
+          hPutStrLn stderr $ show (length allMsgs) ++ " error(s)"
           exitFailure
         else pure $ Right (reduced, li)
 
@@ -110,16 +112,46 @@ filterPrelude = filter (not . isPrelude)
       Just pos -> "<prelude>" `isPrefixOf` srcFile pos
       Nothing  -> False
 
--- | Deduplicate type errors by (name, message) pair
-dedup :: [TypeError] -> [TypeError]
-dedup = go Set.empty
-  where
-    go _ [] = []
-    go seen (te:tes) =
-      let key = (teName te, teMessage te)
-      in if Set.member key seen
-         then go seen tes
-         else te : go (Set.insert key seen) tes
+-- | Format a source location for error messages
+fmtLoc :: FilePath -> Maybe SrcPos -> String
+fmtLoc file Nothing    = file
+fmtLoc _    (Just pos) = prettySrcPos pos
+
+-- | Deduplicate errors: merge same-line errors into one message, dedup by message
+dedupByLine :: [(Maybe SrcPos, String)] -> [(Maybe SrcPos, String)]
+dedupByLine msgs =
+  let lineKey (Just p)  = Just (srcFile p, srcLine p)
+      lineKey Nothing   = Nothing
+      -- Merge messages that share a source line (dedup segments within a line)
+      addSeg existing new =
+        let segs = splitOn "; " existing
+        in if new `elem` segs then existing else existing ++ "; " ++ new
+      merged = foldl' (\acc (pos, msg) ->
+        case lineKey pos of
+          Nothing -> acc ++ [(pos, msg)]
+          Just lk ->
+            if any (\(p,_) -> lineKey p == Just lk) acc
+            then map (\(p,m) -> if lineKey p == Just lk
+                                then (p, addSeg m msg)
+                                else (p, m)) acc
+            else acc ++ [(pos, msg)]
+        ) [] msgs
+      -- Also dedup by full message text
+      dedupMsg = go Set.empty merged
+      go _ [] = []
+      go seen ((p, m):rest)
+        | Set.member m seen = go seen rest
+        | otherwise = (p, m) : go (Set.insert m seen) rest
+  in dedupMsg
+
+-- | Split a string by a delimiter
+splitOn :: String -> String -> [String]
+splitOn _ [] = [""]
+splitOn delim s
+  | take (length delim) s == delim = "" : splitOn delim (drop (length delim) s)
+  | otherwise = case splitOn delim (tail s) of
+      (first:rest) -> (head s : first) : rest
+      []           -> [[head s]]
 
 -- | Prepend prelude bindings to the user's top-level namespace
 injectPrelude :: Expr -> Expr
@@ -132,13 +164,6 @@ printError _file (Warning mpos msg) =
               Just pos -> prettySrcPos pos
               Nothing  -> _file
   in hPutStrLn stderr $ "error: " ++ loc ++ ": " ++ msg
-
-printTypeError :: FilePath -> TypeError -> IO ()
-printTypeError _file te =
-  let loc = case tePos te of
-              Just pos -> prettySrcPos pos
-              Nothing  -> _file
-  in hPutStrLn stderr $ "type error: " ++ loc ++ ": " ++ T.unpack (teName te) ++ ": " ++ T.unpack (teMessage te)
 
 -- | dump: show parsed AST (before import resolution)
 cmdDump :: FilePath -> IO ()
