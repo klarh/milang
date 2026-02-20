@@ -206,8 +206,9 @@ cmdRun file = do
           binFile = tmpDir </> "out"
           extraFlags = nub (linkFlags li)
           extraSrcs  = nub (linkSources li)
+          extraIncls = nub (map ("-I" ++) (linkIncludes li))
           gccArgs = ["-O2", "-o", binFile, cFile, "-I" ++ cwd]
-                    ++ extraSrcs ++ extraFlags ++ ["-lm"]
+                    ++ extraIncls ++ extraSrcs ++ extraFlags ++ ["-lm"]
       withFile cFile WriteMode (\h -> codegen h preludeNames ast)
       (ec, _, cerr) <- readProcessWithExitCode "gcc" gccArgs ""
       case ec of
