@@ -11,9 +11,9 @@ area shape = shape ->
   Circle {_0} = 3.14 * _0 * _0
   Rect {_0; _1} = _0 * _1
 
--- Record literals and updates with :{
+-- Record literals and merge with <-
 origin = Point {x = 0; y = 0}
-moved = origin :{x = 5; y = 10}
+moved = origin <- ({x = 5; y = 10})
 
 -- Partial application, closures, lists
 shapes = [Shape.Circle 3, Shape.Rect 4 5]

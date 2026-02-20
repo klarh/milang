@@ -98,17 +98,16 @@ resolveExpr ctx dir (BinOp op l r) = do
   r' <- resolveExpr ctx dir r
   pure $ BinOp op <$> l' <*> r'
 
--- Intercept `import "path" { opts }`
-resolveExpr ctx dir (With (App (Name "import") (StringLit path)) opts) = do
+-- Intercept `import "path" ({opts})` (2-arg form with options record)
+resolveExpr ctx dir (App (App (Name "import") (StringLit path)) (Record _ opts)) = do
   let pathStr = T.unpack path
-  -- Extract link/hash opts (only makes sense for local imports)
   unless (isURL pathStr) $ do
     importOpts <- extractImportOpts dir opts
     addLinkInfo (rcLinkRef ctx) importOpts
   let sha256 = extractSha256 opts
   resolveImport ctx dir pathStr sha256
 
--- Intercept `import "path"`
+-- Intercept `import "path"` (1-arg form)
 resolveExpr ctx dir (App (Name "import") (StringLit path)) = do
   let pathStr = T.unpack path
   resolveImport ctx dir pathStr Nothing
@@ -237,7 +236,7 @@ collectImportURLs base = go
     go (App (Name "import") (StringLit path)) =
       let p = T.unpack path
       in if isURL p || not ("/" `isPrefixOf` p) then [resolve p] else []
-    go (With (App (Name "import") (StringLit path)) _) =
+    go (App (App (Name "import") (StringLit path)) (Record _ _)) =
       let p = T.unpack path
       in if isURL p || not ("/" `isPrefixOf` p) then [resolve p] else []
     go (BinOp _ l r)    = go l ++ go r
@@ -301,7 +300,7 @@ extractOwnBindings e = e
 isImportBinding :: Binding -> Bool
 isImportBinding b = case bindBody b of
   App (Name "import") (StringLit _)   -> True
-  With (App (Name "import") (StringLit _)) _ -> True
+  App (App (Name "import") (StringLit _)) (Record _ _) -> True
   _ -> False
 
 -- | Extract link options from import { ... } bindings
@@ -424,7 +423,7 @@ resolveBindingBody ctx dir b = case bindBody b of
     let pathStr = T.unpack path
     resolveBindingImport ctx dir pathStr Nothing
 
-  With (App (Name "import") (StringLit path)) opts -> do
+  App (App (Name "import") (StringLit path)) (Record _ opts) -> do
     let pathStr = T.unpack path
         sha256 = extractSha256 opts
     unless (isURL pathStr || isURL dir) $ do
@@ -474,7 +473,7 @@ findURLImports = go
   where
     go (App (Name "import") (StringLit path))
       | isURL (T.unpack path) = [(T.unpack path, Nothing)]
-    go (With (App (Name "import") (StringLit path)) opts)
+    go (App (App (Name "import") (StringLit path)) (Record _ opts))
       | isURL (T.unpack path) = [(T.unpack path, extractSha256 opts)]
     go (BinOp _ l r)      = go l ++ go r
     go (App f x)           = go f ++ go x

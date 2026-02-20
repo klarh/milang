@@ -257,19 +257,19 @@ cmdPin file = do
     pinOne src (url, hash) =
       let hashLine = T.pack $ "sha256 = \"" ++ hash ++ "\""
           bare = T.pack $ "import \"" ++ url ++ "\""
-          withHash = T.pack $ "import \"" ++ url ++ "\" { " ++ T.unpack hashLine ++ " }"
+          withHash = T.pack $ "import \"" ++ url ++ "\" ({" ++ T.unpack hashLine ++ "})"
       in if bare `T.isInfixOf` src && not (hasOpts src (T.pack url))
            then T.replace bare withHash src
            else src
 
-    -- Check if import "url" already has { ... } options
+    -- Check if import "url" already has ({...}) options
     hasOpts :: T.Text -> T.Text -> Bool
     hasOpts src url =
       let importStr = T.pack "import \"" <> url <> T.pack "\""
           after = snd $ T.breakOn importStr src
           rest  = T.drop (T.length importStr) after
           trimmed = T.dropWhile (== ' ') rest
-      in not (T.null trimmed) && T.head trimmed == '{'
+      in not (T.null trimmed) && T.head trimmed == '('
 
 -- | REPL: interactive read-eval-print loop with haskeline
 cmdRepl :: IO ()
