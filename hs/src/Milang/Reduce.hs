@@ -376,12 +376,66 @@ reduceAppD _ _ (Record tag bs) arg
   | isPositionalRecord bs =
     let nextIdx = "_" <> T.pack (show (length bs))
     in Record tag (bs ++ [Binding nextIdx False [] arg Nothing Nothing Nothing])
+-- ── Compile-time builtin reductions ──
+-- len on lists: walk the Cons chain
+reduceAppD _ _ (Name "len") arg
+  | Just n <- listLen arg = IntLit n
+-- len / strlen on strings
+reduceAppD _ _ (Name "len") (StringLit s) = IntLit (fromIntegral $ T.length s)
+reduceAppD _ _ (Name "strlen") (StringLit s) = IntLit (fromIntegral $ T.length s)
+-- String builtins on concrete args
+reduceAppD _ _ (Name "toUpper") (StringLit s) = StringLit (T.toUpper s)
+reduceAppD _ _ (Name "toLower") (StringLit s) = StringLit (T.toLower s)
+reduceAppD _ _ (Name "trim") (StringLit s) = StringLit (T.strip s)
+reduceAppD _ _ (Name "toString") (IntLit n) = StringLit (T.pack (show n))
+reduceAppD _ _ (Name "toString") (FloatLit n) = StringLit (T.pack (show n))
+reduceAppD _ _ (Name "toString") (StringLit s) = StringLit s
+-- toInt / toFloat
+reduceAppD _ _ (Name "toInt") (StringLit s) =
+  case reads (T.unpack s) :: [(Integer, String)] of
+    [(n, "")] -> IntLit n
+    _         -> App (Name "toInt") (StringLit s)
+reduceAppD _ _ (Name "toFloat") (StringLit s) =
+  case reads (T.unpack s) :: [(Double, String)] of
+    [(n, "")] -> FloatLit n
+    _         -> App (Name "toFloat") (StringLit s)
+-- charAt string index
+reduceAppD _ _ (App (Name "charAt") (StringLit s)) (IntLit i)
+  | i >= 0 && fromIntegral i < T.length s =
+    StringLit (T.singleton (T.index s (fromIntegral i)))
+-- indexOf string substring
+reduceAppD _ _ (App (Name "indexOf") (StringLit hay)) (StringLit needle) =
+  case T.breakOn needle hay of
+    (before, match) | T.null match -> IntLit (-1)
+                    | otherwise    -> IntLit (fromIntegral $ T.length before)
+-- split string delimiter
+reduceAppD _ _ (App (Name "split") (StringLit s)) (StringLit delim) =
+  let parts = if T.null delim
+              then map T.singleton (T.unpack s)
+              else T.splitOn delim s
+  in listToCons (map StringLit parts)
+-- slice (string or list) — 2-arg curried: slice collection start
+reduceAppD _ _ (App (App (Name "slice") (StringLit s)) (IntLit start)) (IntLit end) =
+  let s' = T.take (fromIntegral (end - start)) (T.drop (fromIntegral start) s)
+  in StringLit s'
+-- replace old new string
+reduceAppD _ _ (App (App (Name "replace") (StringLit old)) (StringLit new)) (StringLit s) =
+  StringLit (T.replace old new s)
 -- Residual
 reduceAppD _ _ f x = App f x
 
 -- | Check if all record fields are positional (_0, _1, ...)
 isPositionalRecord :: [Binding] -> Bool
 isPositionalRecord bs = all (\(b, i) -> bindName b == "_" <> T.pack (show i)) (zip bs [0::Int ..])
+
+-- | Count elements in a compile-time Cons/Nil list
+listLen :: Expr -> Maybe Integer
+listLen (Record "Nil" _) = Just 0
+listLen (Record "Cons" bs) =
+  case [bindBody b | b <- bs, bindName b == "tail"] of
+    [tl] -> (1 +) <$> listLen tl
+    _    -> Nothing
+listLen _ = Nothing
 
 -- | Force a thunk: if the expression is a Thunk, reduce its body
 forceThunk :: Env -> Expr -> Expr
@@ -398,7 +452,7 @@ exprFreeVars (IntLit _)       = Set.empty
 exprFreeVars (FloatLit _)     = Set.empty
 exprFreeVars (StringLit _)    = Set.empty
 exprFreeVars (Name n)         = Set.singleton n
-exprFreeVars (BinOp _ l r)    = Set.union (exprFreeVars l) (exprFreeVars r)
+exprFreeVars (BinOp op l r)   = Set.insert op $ Set.union (exprFreeVars l) (exprFreeVars r)
 exprFreeVars (App f x)        = Set.union (exprFreeVars f) (exprFreeVars x)
 exprFreeVars (Lam p b)        = Set.delete p (exprFreeVars b)
 exprFreeVars (With body bs)   =
