@@ -9,7 +9,8 @@ import qualified Data.Text as T
 -- | Standard prelude source code
 preludeSrc :: T.Text
 preludeSrc = T.unlines
-  [ "List = {Nil; Cons head tail}"
+  [ "Bool = {True; False}"
+  , "List = {Nil; Cons head tail}"
   , "id :: a : a"
   , "id x = x"
   , "const :: a : b : a"

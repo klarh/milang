@@ -64,8 +64,15 @@ collectTypes = foldl go builtinTypes
       Just tyExpr ->
         Map.insert (bindName b) (exprToTypeWith env tyExpr) env
       Nothing -> case detectUnion b of
-        Just (uname, tags) ->
-          Map.insert uname (TUnion uname tags) env
+        Just (uname, ctors) ->
+          -- Register the union type and each constructor
+          let tags = map fst ctors
+              utype = TUnion uname tags
+              env' = Map.insert uname utype env
+              -- Zero-arg ctors: TRecord "Tag" []; N-arg ctors: TAny : ... : TRecord "Tag" []
+              ctorType (tag, 0) = TRecord tag []
+              ctorType (tag, n) = foldr (\_ t -> TFun TAny t) (TRecord tag []) [1..n]
+          in foldl (\e ct -> Map.insert (fst ct) (ctorType ct) e) env' ctors
         Nothing ->
           -- Infer type from body (for non-annotated bindings)
           let bodyType = inferBodyType env b
@@ -74,12 +81,12 @@ collectTypes = foldl go builtinTypes
                _    -> Map.insert (bindName b) bodyType env
 
 -- | Detect if a binding is a union declaration (Namespace of all-uppercase ctors)
-detectUnion :: Binding -> Maybe (Text, [Text])
+detectUnion :: Binding -> Maybe (Text, [(Text, Int)])
 detectUnion b = case bindBody b of
   Namespace ctors
     | not (null ctors)
     , all (\c -> let n = bindName c in not (T.null n) && isUpper' (T.head n)) ctors ->
-      Just (bindName b, map bindName ctors)
+      Just (bindName b, [(bindName c, length (bindParams c)) | c <- ctors])
   _ -> Nothing
   where isUpper' c = c >= 'A' && c <= 'Z'
 
@@ -173,10 +180,8 @@ checkOperands env pos name = go
             errs = checkNumericOp op lt rt
         in errs ++ go l ++ go r
       | op `elem` ["<", ">", "<=", ">="] =
-        let lt = inferExpr env l
-            rt = inferExpr env r
-            errs = checkNumericOp op lt rt
-        in errs ++ go l ++ go r
+        -- Comparison: allow same-type (Num/Num, Str/Str, Float/Float)
+        go l ++ go r
       | otherwise = go l ++ go r
     go (App f x) =
       let fty = inferExpr env f

@@ -95,7 +95,11 @@ loadAndReduce file = do
       -- Deduplicate: combine both passes, keep unique error messages
       let allErrs = dedup (filterPrelude preTypeErrs ++ filterPrelude postTypeErrs)
       mapM_ (printTypeError file) allErrs
-      pure $ Right (reduced, li)
+      if not (null allErrs)
+        then do
+          hPutStrLn stderr $ show (length allErrs) ++ " type error(s)"
+          exitFailure
+        else pure $ Right (reduced, li)
 
 -- | Filter out type errors originating from prelude definitions
 filterPrelude :: [TypeError] -> [TypeError]
