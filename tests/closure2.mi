@@ -11,5 +11,5 @@ add3 = make_adder 3
 -- use it
 result = apply add3 10
 
--- print it
-main = println result
+-- world.io.print it
+main = world.io.println result

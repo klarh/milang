@@ -1,3 +1,3 @@
 -- Test destructuring imports
 {circle_area} = import "lib/mymath.mi"
-main1 = println (circle_area 5)
+main1 = world.io.println (circle_area 5)

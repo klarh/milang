@@ -4,4 +4,4 @@ IO = import "/usr/include/stdio.h"
 -- printf returns int, takes const char * format + varargs
 -- We can't do varargs, but puts works with a single string
 result = IO.puts "Hello from C!"
-main1 = println result
+main1 = world.io.println result

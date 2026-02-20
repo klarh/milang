@@ -3,12 +3,12 @@ M = import "/usr/include/math.h"
 
 -- sin(1.0) ≈ 0.841471
 a = M.sin 1.0
-main1 = println a
+main1 = world.io.println a
 
 -- sqrt(144) = 12
 b = M.sqrt 144.0
-main2 = println b
+main2 = world.io.println b
 
 -- pow(2, 10) = 1024
 c = M.pow 2.0 10.0
-main3 = println c
+main3 = world.io.println c

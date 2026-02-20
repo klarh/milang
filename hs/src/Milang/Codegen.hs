@@ -54,8 +54,6 @@ captureIO st hidden expr = do
   ref <- newIORef ""
   let emit s = modifyIORef ref (++ s)
   let emitBuiltins = do
-        emit "  mi_env_set(_env, \"print\", mi_native(mi_builtin_print));\n"
-        emit "  mi_env_set(_env, \"println\", mi_native(mi_builtin_println));\n"
         emit "  mi_env_set(_env, \"if\", mi_native(mi_builtin_if));\n"
         emit "  mi_env_set(_env, \"strlen\", mi_native(mi_builtin_len));\n"
         emit "  mi_env_set(_env, \"len\", mi_native(mi_builtin_len));\n"
@@ -82,6 +80,10 @@ captureIO st hidden expr = do
       emit "int main(int argc, char **argv) {\n"
       emit "  MiEnv *_env = mi_env_new(NULL);\n"
       emitBuiltins
+      -- Script mode: expose world before evaluating bindings
+      if not hasMainWithArg
+        then emit "  mi_env_set(_env, \"world\", mi_build_world(argc, argv));\n"
+        else pure ()
       -- Evaluate each binding in order
       mapM_ (\b -> do
         code <- bindingEvalCode st b

@@ -1,11 +1,11 @@
--- Test IO: print and println built-ins
+-- Test IO: world.io.print and world.io.println built-ins
 
--- println prints a value followed by newline
-main1 = println 42
-main2 = println "hello world"
-main3 = println (3 + 4)
+-- world.io.println prints a value followed by newline
+main1 = world.io.println 42
+main2 = world.io.println "hello world"
+main3 = world.io.println (3 + 4)
 
--- print without newline
-main4 = print "a"
-main5 = print "b"
-main6 = println "c"
+-- world.io.print without newline
+main4 = world.io.print "a"
+main5 = world.io.print "b"
+main6 = world.io.println "c"
