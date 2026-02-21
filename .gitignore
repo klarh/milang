@@ -5,3 +5,4 @@ milang
 # Generated C output left in tests/
 tests/*.c
 !tests/lib/*.c
+docs-out/

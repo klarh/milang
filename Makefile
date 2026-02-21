@@ -1,4 +1,4 @@
-.PHONY: all clean test
+.PHONY: all clean test docs
 
 all:
 	cd hs && cabal build
@@ -40,3 +40,9 @@ test: all
 	rm -rf "$$TMPDIR"; \
 	echo "Passed: $$PASS, Failed: $$FAIL"; \
 	[ $$FAIL -eq 0 ]
+
+docs:
+	cd docs && mdbook build
+
+docs-serve:
+	cd docs && mdbook serve --open

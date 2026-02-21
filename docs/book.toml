@@ -1,0 +1,13 @@
+[book]
+title = "The Milang Programming Language"
+authors = ["Matthew"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../docs-out"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/milang/milang"
