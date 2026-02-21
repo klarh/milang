@@ -272,8 +272,8 @@ reduceBindD d env b =
 reduceBinOp :: Text -> Expr -> Expr -> Expr
 -- Cons operator: h : t → Record "Cons" [head=h, tail=t]
 reduceBinOp ":" h t =
-  Record "Cons" [ Binding "head" False [] h Nothing Nothing Nothing Nothing
-                , Binding "tail" False [] t Nothing Nothing Nothing Nothing ]
+  Record "Cons" [ Binding "head" False [] h Nothing Nothing Nothing Nothing Nothing
+                , Binding "tail" False [] t Nothing Nothing Nothing Nothing Nothing ]
 -- Int × Int
 reduceBinOp "+"  (IntLit a) (IntLit b) = IntLit (a + b)
 reduceBinOp "-"  (IntLit a) (IntLit b) = IntLit (a - b)
@@ -374,7 +374,7 @@ reduceAppD d env (Lam p body) arg =
 -- Uppercase constructor application: Just 5 → Just {_0 = 5}
 reduceAppD _ _ (Name n) arg
   | not (T.null n) && isUpper (T.head n) =
-    Record n [Binding "_0" False [] arg Nothing Nothing Nothing Nothing]
+    Record n [Binding "_0" False [] arg Nothing Nothing Nothing Nothing Nothing]
 -- Record introspection builtins
 reduceAppD _ _ (Name "fields") (Record _ bs) =
   listToCons [bindBody b | b <- bs]
@@ -390,13 +390,13 @@ reduceAppD _ _ (App (Name "getField") (Record _ bs)) (StringLit name) =
 reduceAppD _ _ (App (App (Name "setField") (Record t bs)) (StringLit name)) val =
   let updated = map (\b -> if bindName b == name then b { bindBody = val } else b) bs
       exists = any (\b -> bindName b == name) bs
-      result = if exists then updated else bs ++ [Binding name False [] val Nothing Nothing Nothing Nothing]
+      result = if exists then updated else bs ++ [Binding name False [] val Nothing Nothing Nothing Nothing Nothing]
   in Record t result
 -- Positional record extension: (Pair {_0=1}) 2 → Pair {_0=1, _1=2}
 reduceAppD _ _ (Record tag bs) arg
   | isPositionalRecord bs =
     let nextIdx = "_" <> T.pack (show (length bs))
-    in Record tag (bs ++ [Binding nextIdx False [] arg Nothing Nothing Nothing Nothing])
+    in Record tag (bs ++ [Binding nextIdx False [] arg Nothing Nothing Nothing Nothing Nothing])
 -- ── Compile-time builtin reductions ──
 -- len on lists: walk the Cons chain
 reduceAppD _ _ (Name "len") arg
@@ -558,7 +558,7 @@ substAlt n e a = a { altBody = substExpr n e (altBody a)
 
 -- | Helper to build a binding with no source position
 mkBind :: Text -> Expr -> Binding
-mkBind n e = Binding n False [] e Nothing Nothing Nothing Nothing
+mkBind n e = Binding n False [] e Nothing Nothing Nothing Nothing Nothing
 
 -- | Convert a list of expressions to a cons-cell chain: Cons(head, Cons(..., Nil))
 listToCons :: [Expr] -> Expr
@@ -694,7 +694,7 @@ unquoteBindings expr = case consToList expr of
     unquoteField (Record "Field" bs) = do
       name <- getStrField "name" bs
       val  <- getField "val" bs >>= unquoteExpr
-      Just (Binding name False [] val Nothing Nothing Nothing Nothing)
+      Just (Binding name False [] val Nothing Nothing Nothing Nothing Nothing)
     unquoteField _ = Nothing
 
 unquoteAlt :: Expr -> Maybe Alt

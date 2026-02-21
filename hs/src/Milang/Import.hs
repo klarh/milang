@@ -338,22 +338,22 @@ extractImportOpts dir bs = do
   pkgFlags <- concat <$> mapM getPkgConfig bs
   pure $ LinkInfo (flags ++ pkgFlags) srcs incls
   where
-    getFlag (Binding "flags" _ _ (StringLit s) _ _ _ _) = words (T.unpack s)
+    getFlag (Binding "flags" _ _ (StringLit s) _ _ _ _ _) = words (T.unpack s)
     getFlag _ = []
     -- Single source file: src = "foo.c"
-    getSrc d (Binding "src" _ _ (StringLit s) _ _ _ _) = [normalise (d </> T.unpack s)]
+    getSrc d (Binding "src" _ _ (StringLit s) _ _ _ _ _) = [normalise (d </> T.unpack s)]
     getSrc _ _ = []
     -- List of source files: sources = ["foo.c", "bar.c"]
-    getSources d (Binding "sources" _ _ (ListLit es) _ _ _ _) =
+    getSources d (Binding "sources" _ _ (ListLit es) _ _ _ _ _) =
       [normalise (d </> T.unpack s) | StringLit s <- es]
     getSources _ _ = []
     -- Include directories: include = "path" or include = ["p1", "p2"]
-    getInclude d (Binding "include" _ _ (StringLit s) _ _ _ _) =
+    getInclude d (Binding "include" _ _ (StringLit s) _ _ _ _ _) =
       [normalise (d </> T.unpack s)]
-    getInclude d (Binding "include" _ _ (ListLit es) _ _ _ _) =
+    getInclude d (Binding "include" _ _ (ListLit es) _ _ _ _ _) =
       [normalise (d </> T.unpack s) | StringLit s <- es]
     getInclude _ _ = []
-    getPkgConfig (Binding "pkg" _ _ (StringLit pkg) _ _ _ _) = do
+    getPkgConfig (Binding "pkg" _ _ (StringLit pkg) _ _ _ _ _) = do
       let pkgStr = T.unpack pkg
       (ec1, cflags, _) <- readProcessWithExitCode
         "pkg-config" ["--cflags", pkgStr] ""
@@ -367,16 +367,16 @@ extractImportOpts dir bs = do
 -- | Extract sha256 hash from import options, if present
 extractSha256 :: [Binding] -> Maybe String
 extractSha256 [] = Nothing
-extractSha256 (Binding "sha256" _ _ (StringLit s) _ _ _ _ : _) = Just (T.unpack s)
+extractSha256 (Binding "sha256" _ _ (StringLit s) _ _ _ _ _ : _) = Just (T.unpack s)
 extractSha256 (_ : bs) = extractSha256 bs
 
 -- | Extract source file paths from import options (for hashing)
 extractSourcePaths :: FilePath -> [Binding] -> [FilePath]
 extractSourcePaths dir bs = concatMap getSrc bs ++ concatMap getSources bs
   where
-    getSrc (Binding "src" _ _ (StringLit s) _ _ _ _) = [normalise (dir </> T.unpack s)]
+    getSrc (Binding "src" _ _ (StringLit s) _ _ _ _ _) = [normalise (dir </> T.unpack s)]
     getSrc _ = []
-    getSources (Binding "sources" _ _ (ListLit es) _ _ _ _) =
+    getSources (Binding "sources" _ _ (ListLit es) _ _ _ _ _) =
       [normalise (dir </> T.unpack s) | StringLit s <- es]
     getSources _ = []
 
@@ -446,6 +446,7 @@ loadCHeader path = do
         , bindPos    = Nothing
         , bindType   = Nothing
         , bindTraits = Nothing
+        , bindDoc    = Nothing
         , bindSource = Nothing
         }
 

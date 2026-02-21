@@ -61,6 +61,7 @@ data Binding = Binding
   , bindPos :: !(Maybe SrcPos)  -- source location of this binding
   , bindType :: !(Maybe Expr)   -- optional type annotation from ::
   , bindTraits :: !(Maybe Expr) -- optional traits annotation from :~
+  , bindDoc :: !(Maybe Expr)    -- optional documentation from :?
   , bindSource :: !(Maybe Text) -- original source text of this binding
   } deriving (Show, Eq)
 
@@ -114,14 +115,17 @@ prettyBindings :: Int -> [Binding] -> String
 prettyBindings i = concatMap (\b -> replicate i ' ' ++ prettyBinding i b ++ "\n")
 
 prettyBinding :: Int -> Binding -> String
-prettyBinding i (Binding n lz ps body _ mty mtr _) =
+prettyBinding i (Binding n lz ps body _ mty mtr mdoc _) =
   let typeStr = case mty of
         Just t  -> T.unpack n ++ " :: " ++ prettyExpr i t ++ "\n" ++ replicate i ' '
         Nothing -> ""
       traitStr = case mtr of
         Just t  -> T.unpack n ++ " :~ " ++ prettyExpr i t ++ "\n" ++ replicate i ' '
         Nothing -> ""
-  in typeStr ++ traitStr ++
+      docStr = case mdoc of
+        Just d  -> T.unpack n ++ " :? " ++ prettyExpr i d ++ "\n" ++ replicate i ' '
+        Nothing -> ""
+  in docStr ++ typeStr ++ traitStr ++
      T.unpack n ++ concatMap ((" " ++) . T.unpack) ps ++
      (if lz then " := " else " = ") ++ prettyExpr i body
 

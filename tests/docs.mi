@@ -1,0 +1,32 @@
+-- Test documentation domain (:?) annotations
+
+-- Simple string docs
+add :? "Add two numbers"
+add :: Num : Num : Num
+add a b = a + b
+
+-- Structured docs with records
+distance :? {
+  summary = "Euclidean distance between two points"
+  params = {
+    x1 = "First x coordinate"
+    y1 = "First y coordinate"
+    x2 = "Second x coordinate"
+    y2 = "Second y coordinate"
+  }
+  returns = "The squared distance"
+}
+distance x1 y1 x2 y2 = (x2 - x1)**2 + (y2 - y1)**2
+
+-- Triple-quoted string docs
+greet :? """
+  Greet a person by name.
+  Prints a friendly message to the console.
+  """
+greet world name = world.io.println ("Hello, " + name + "!")
+
+main world =
+  world.io.println (add 3 4)
+  world.io.println (distance 0 0 3 4)
+  greet world "milang"
+  0

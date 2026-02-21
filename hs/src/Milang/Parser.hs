@@ -122,7 +122,7 @@ scn = L.space space1 (L.skipLineComment "--") (L.skipBlockCommentNested "/*" "*/
 pProgram :: Parser Expr
 pProgram = do
   bss <- many (pTopBindings <* skipNewlines)
-  pure $ Namespace (mergeTraitsAnnotations $ mergeTypeAnnotations (concat bss))
+  pure $ Namespace (mergeDocAnnotations $ mergeTraitsAnnotations $ mergeTypeAnnotations (concat bss))
 
 skipNewlines :: Parser ()
 skipNewlines = scn
@@ -158,6 +158,21 @@ mergeTraitsAnnotations (b1 : b2 : rest)
       (Just _, Nothing, IntLit 0) -> True
       _                           -> False
 
+-- | Merge doc annotations (:?) with their value bindings (=).
+-- A doc-only binding (bindDoc = Just d, body = IntLit 0) followed by
+-- a value binding with the same name gets merged into one binding.
+mergeDocAnnotations :: [Binding] -> [Binding]
+mergeDocAnnotations [] = []
+mergeDocAnnotations [b] = [b]
+mergeDocAnnotations (b1 : b2 : rest)
+  | isDocOnly b1 && bindName b1 == bindName b2 && not (isDocOnly b2) =
+    b2 { bindDoc = bindDoc b1 } : mergeDocAnnotations rest
+  | otherwise = b1 : mergeDocAnnotations (b2 : rest)
+  where
+    isDocOnly b = case (bindDoc b, bindType b, bindTraits b, bindBody b) of
+      (Just _, Nothing, Nothing, IntLit 0) -> True
+      _                                    -> False
+
 -- ── Bindings ──────────────────────────────────────────────────────
 
 -- Top-level binding(s): must start at column 1
@@ -172,6 +187,7 @@ pTopBindings = do
 pBindingsAt :: Pos -> Parser [Binding]
 pBindingsAt ref = try (pure <$> pTypeBindingAt ref)
              <|> try (pure <$> pTraitsBindingAt ref)
+             <|> try (pure <$> pDocBindingAt ref)
              <|> try (pParseDomainBinding ref)
              <|> try (pDestructBinding ref)
              <|> (pure <$> pBindingAt ref)
@@ -202,9 +218,9 @@ pDestructBinding _ref = do
   _ <- symbol "="
   body <- pExpr
   let tmpName = T.pack ("_destruct_" ++ show off)
-      tmpBind = Binding tmpName False [] body (Just pos) Nothing Nothing Nothing
+      tmpBind = Binding tmpName False [] body (Just pos) Nothing Nothing Nothing Nothing
       fieldBinds = map (\(localName, fieldName) ->
-        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing Nothing Nothing
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing Nothing Nothing Nothing
         ) fields
   pure (tmpBind : fieldBinds)
 
@@ -226,7 +242,7 @@ pTypeBindingAt _ref = do
   name <- pBindingName
   _ <- symbol "::"
   typeExpr <- pExpr
-  pure $ Binding name False [] (IntLit 0) (Just pos) (Just typeExpr) Nothing Nothing
+  pure $ Binding name False [] (IntLit 0) (Just pos) (Just typeExpr) Nothing Nothing Nothing
 
 -- Parse a traits annotation: name :~ traitsExpr
 -- Traits are lists of effect/attribute names, e.g. [console, fs.read]
@@ -236,7 +252,17 @@ pTraitsBindingAt _ref = do
   name <- pBindingName
   _ <- symbol ":~"
   traitsExpr <- pExpr
-  pure $ Binding name False [] (IntLit 0) (Just pos) Nothing (Just traitsExpr) Nothing
+  pure $ Binding name False [] (IntLit 0) (Just pos) Nothing (Just traitsExpr) Nothing Nothing
+
+-- Parse a doc annotation: name :? docExpr
+-- Doc expressions are typically strings or structured records.
+pDocBindingAt :: Pos -> Parser Binding
+pDocBindingAt _ref = do
+  pos <- grabPos
+  name <- pBindingName
+  _ <- symbol ":?"
+  docExpr <- pExpr
+  pure $ Binding name False [] (IntLit 0) (Just pos) Nothing Nothing (Just docExpr) Nothing
 
 -- Parse a binding given its indent level
 pBindingAt :: Pos -> Parser Binding
@@ -262,7 +288,7 @@ pBindingAt ref = do
   children <- pIndentedChildren ref body''
   endOff <- getOffset
   srcText <- captureSource startOff endOff
-  pure $ Binding name lazy params children (Just pos) Nothing Nothing srcText
+  pure $ Binding name lazy params children (Just pos) Nothing Nothing Nothing srcText
 
 -- Name on the LHS of a binding: lowercase or uppercase (for module aliases)
 -- Uppercase binding must be followed by = or := (not {, which would be a record)
@@ -276,8 +302,8 @@ pOpBindingName = try $ do
   _ <- symbol "("
   op <- pOperator
   _ <- symbol ")"
-  -- Must be followed by params or = / := / :: / :~
-  _ <- lookAhead (try pIdentifier <|> try (symbol "::" *> pure "") <|> try (symbol ":~" *> pure "") <|> try (symbol "=" *> pure "") <|> try (symbol ":=" *> pure ""))
+  -- Must be followed by params or = / := / :: / :~ / :?
+  _ <- lookAhead (try pIdentifier <|> try (symbol "::" *> pure "") <|> try (symbol ":~" *> pure "") <|> try (symbol ":?" *> pure "") <|> try (symbol "=" *> pure "") <|> try (symbol ":=" *> pure ""))
   pure op
 
 pRegularBindingName :: Parser Text
@@ -292,7 +318,7 @@ pRegularBindingName = try $ do
   -- If uppercase and next char is '{', this isn't a binding — fail
   if isUpper (T.head n)
     then do
-      _ <- lookAhead (try pIdentifier <|> try (symbol "::" *> pure "") <|> try (symbol ":~" *> pure "") <|> try (symbol "=" *> pure "") <|> try (symbol ":=" *> pure ""))
+      _ <- lookAhead (try pIdentifier <|> try (symbol "::" *> pure "") <|> try (symbol ":~" *> pure "") <|> try (symbol ":?" *> pure "") <|> try (symbol "=" *> pure "") <|> try (symbol ":=" *> pure ""))
       pure n
     else pure n
 
@@ -338,7 +364,7 @@ pBareExpr = do
   off <- getOffset
   e <- pExpr
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding name False [] e (Just pos) Nothing Nothing Nothing]
+  pure [Binding name False [] e (Just pos) Nothing Nothing Nothing Nothing]
 
 -- | Build a scope from a list of child bindings and an initial body expression.
 -- If there's an explicit body (not the default IntLit 0), it stays as the With body
@@ -502,7 +528,7 @@ pOperator = try $ lexeme $ do
   op <- some (oneOf ("+-*/^<>=!&|@%?:" :: String))
   let t = T.pack op
   -- Don't consume binding operators, match arrow, or type annotation
-  if t == "=" || t == ":=" || t == "->" || t == "::" || t == ":!" || t == ":~"
+  if t == "=" || t == ":=" || t == "->" || t == "::" || t == ":!" || t == ":~" || t == ":?"
     then fail "reserved operator"
     else pure t
 
@@ -661,11 +687,11 @@ pConstructorField = symbol "_" <|> lexeme (do
 
 -- Convert a constructor declaration to a binding
 ctorToBinding :: (Text, [Text]) -> Binding
-ctorToBinding (name, []) = Binding name False [] (Record name []) Nothing Nothing Nothing Nothing
+ctorToBinding (name, []) = Binding name False [] (Record name []) Nothing Nothing Nothing Nothing Nothing
 ctorToBinding (name, params) =
-  let fields = [Binding p False [] (Name p) Nothing Nothing Nothing Nothing | p <- params]
+  let fields = [Binding p False [] (Name p) Nothing Nothing Nothing Nothing Nothing | p <- params]
       body = foldr (\p b -> Lam p b) (Record name fields) params
-  in Binding name False [] body Nothing Nothing Nothing Nothing
+  in Binding name False [] body Nothing Nothing Nothing Nothing Nothing
 
 pBraceBindings :: Parser [Binding]
 pBraceBindings = do
@@ -685,7 +711,7 @@ pBraceBareExpr = do
   off <- getOffset
   e <- pExpr
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding name False [] e (Just pos) Nothing Nothing Nothing]
+  pure [Binding name False [] e (Just pos) Nothing Nothing Nothing Nothing]
 
 pBraceDestruct :: Parser [Binding]
 pBraceDestruct = do
@@ -698,9 +724,9 @@ pBraceDestruct = do
   _ <- symbol "="
   body <- pExpr
   let tmpName = T.pack ("_destruct_" ++ show off)
-      tmpBind = Binding tmpName False [] body (Just pos) Nothing Nothing Nothing
+      tmpBind = Binding tmpName False [] body (Just pos) Nothing Nothing Nothing Nothing
       fieldBinds = map (\(localName, fieldName) ->
-        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing Nothing Nothing
+        Binding localName False [] (FieldAccess (Name tmpName) fieldName) (Just pos) Nothing Nothing Nothing Nothing
         ) fields
   pure (tmpBind : fieldBinds)
 
@@ -737,7 +763,7 @@ pBraceBinding = do
       children <- pIndentedStatements ref
       if null children then pure body''
       else pure $ buildScope children body''
-  pure $ Binding name lazy params body''' (Just pos) Nothing Nothing Nothing
+  pure $ Binding name lazy params body''' (Just pos) Nothing Nothing Nothing Nothing
 
 pSep :: Parser ()
 pSep = void (symbol ";") <|> void (some (lexeme newline))
