@@ -312,10 +312,7 @@ pIndentedChildren ref body = do
       -- Parse indented bindings or bare expressions
       children <- pIndentedStatements ref
       if null children then pure body
-      else
-        -- The last bare expression (if any) becomes the body
-        let (stmts, result) = splitLastExpr children body
-        in pure $ With result stmts
+      else pure $ buildScope children body
 
 pBindOp :: Parser Bool
 pBindOp = (False <$ symbol "=") <|> (True <$ symbol ":=")
@@ -342,16 +339,21 @@ pBareExpr = do
   let name = T.pack ("_stmt_" ++ show off)
   pure [Binding name False [] e (Just pos) Nothing Nothing Nothing]
 
--- Split bindings: if the last item is an auto-generated statement binding,
--- use its body as the With result; otherwise use the original body.
-splitLastExpr :: [Binding] -> Expr -> ([Binding], Expr)
-splitLastExpr [] fallback = ([], fallback)
-splitLastExpr bs fallback =
-  let lastB = last bs
-      initBs = init bs
-  in if "_stmt_" `T.isPrefixOf` bindName lastB
-     then (initBs, bindBody lastB)
-     else (bs, fallback)
+-- | Build a scope from a list of child bindings and an initial body expression.
+-- If there's an explicit body (not the default IntLit 0), it stays as the With body
+-- and children are local bindings. If there's no explicit body, named bindings
+-- form an implicit record. Bare expressions (_stmt_) execute for effect only.
+buildScope :: [Binding] -> Expr -> Expr
+buildScope children body =
+  case body of
+    IntLit 0 ->
+      -- No explicit body: scope returns implicit record of named bindings
+      let named = filter isNamedBinding children
+          result = if null named then IntLit 0 else Record "" named
+      in With result children
+    _ ->
+      -- Explicit body: children are local bindings, body is the result
+      With body children
 
 -- | Check if a binding has a real name (not an auto-generated _stmt_ name)
 isNamedBinding :: Binding -> Bool
@@ -731,9 +733,7 @@ pBraceBinding = do
     _ -> do
       children <- pIndentedStatements ref
       if null children then pure body''
-      else
-        let (stmts, result) = splitLastExpr children body''
-        in pure $ With result stmts
+      else pure $ buildScope children body''
   pure $ Binding name lazy params body''' (Just pos) Nothing Nothing Nothing
 
 pSep :: Parser ()

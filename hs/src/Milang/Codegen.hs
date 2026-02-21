@@ -94,7 +94,8 @@ captureIO st hidden expr = do
         then do
           -- Application mode: build world, call main(world)
           emit "  MiVal _world = mi_build_world(argc, argv);\n"
-          emit "  mi_apply(mi_env_get(_env, \"main\"), _world);\n"
+          emit "  MiVal _result = mi_apply(mi_env_get(_env, \"main\"), _world);\n"
+          emit "  return (_result.type == MI_INT) ? (int)_result.as.i : 0;\n}\n"
         else do
           -- Script mode: print all user bindings (skip prelude)
           mapM_ (\b -> do
@@ -103,7 +104,7 @@ captureIO st hidden expr = do
               then pure ()
               else emit $ "  printf(\"" ++ name ++ " = \"); mi_print_val(mi_env_get(_env, \"" ++ name ++ "\")); printf(\"\\n\");\n"
             ) bs
-      emit "  return 0;\n}\n"
+          emit "  return 0;\n}\n"
     _ -> do
       emit "int main(int argc, char **argv) {\n"
       emit "  (void)argc; (void)argv;\n"
