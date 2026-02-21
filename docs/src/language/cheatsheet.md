@@ -189,11 +189,33 @@ main world = greet world.io          -- only give IO, not process/fs
 ## Imports
 
 ```
-import "other.mi"                    -- local file import
-import "https://example.com/lib.mi"  -- URL import (sha256 pinning)
-import "math.h"                      -- C header (auto-parse signatures)
-import' "math.h" (sin, cos, sqrt)    -- selective C import
+-- Local file import (result is a record of all top-level bindings)
+Math = import "lib/math.mi"
+x = Math.square 5
+
+-- URL import (cached locally)
+Lib = import "https://example.com/lib.mi"
+
+-- URL import with sha256 pinning (recommended for reproducibility)
+Lib = import' "https://example.com/lib.mi" ({sha256 = "a1b2c3..."})
+
+-- C header import (auto-parses function signatures)
+M = import "/usr/include/math.h"
+x = M.sin 1.0
+
+-- C header with source file linking
+Lib = import' "mylib.h" ({src = "mylib.c"})
+
+-- C header with extended options
+Lib = import' "mylib.h" ({
+  sources = ["a.c", "b.c"]
+  flags = "-O2"
+  include = "include"
+  pkg = "libpng"
+})
 ```
+
+Use `milang pin <file>` to auto-discover URL imports and add sha256 hashes.
 
 ## Annotation Domains
 
