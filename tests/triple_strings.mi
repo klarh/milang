@@ -1,0 +1,35 @@
+-- Test triple-quoted string literals with margin stripping
+
+main world =
+  -- Basic multi-line
+  msg = """
+    Hello, world!
+    This is multi-line.
+    """
+  world.io.println msg
+
+  -- Preserved relative indentation
+  code = """
+    if x > 0
+      then x
+      else 0
+    """
+  world.io.println code
+
+  -- Embedded double quotes
+  quoted = """
+    She said "hello"
+    """
+  world.io.println quoted
+
+  -- Single line
+  one = """
+    just one
+    """
+  world.io.println one
+
+  -- Empty
+  empty = """
+    """
+  world.io.println (len empty)
+  0

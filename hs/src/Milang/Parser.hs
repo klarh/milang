@@ -6,6 +6,7 @@ import qualified Data.Text as T
 import Data.Char (isUpper, isDigit)
 import Data.Void (Void)
 import Data.Maybe (mapMaybe)
+import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import System.IO.Unsafe (unsafePerformIO)
@@ -552,6 +553,7 @@ pAtomML ml = choice
   , pThunk
   , pQuote
   , pSplice
+  , try pTripleStringLit
   , pStringLit
   , try pFloatLit
   , pIntLit
@@ -570,6 +572,7 @@ pAtomNoRecordML ml = choice
   , pThunk
   , pQuote
   , pSplice
+  , try pTripleStringLit
   , pStringLit
   , try pFloatLit
   , pIntLit
@@ -747,6 +750,42 @@ pStringLit = lexeme $ do
   _ <- char '"'
   s <- manyTill L.charLiteral (char '"')
   pure $ StringLit (T.pack s)
+
+-- | Triple-quoted string literal with Swift-style indentation stripping.
+-- The closing """ indentation defines the margin; that many leading spaces
+-- are stripped from each content line. First line (after opening """) and
+-- last line (before closing """) are stripped if blank.
+pTripleStringLit :: Parser Expr
+pTripleStringLit = lexeme $ do
+  _ <- string "\"\"\""
+  -- Consume the rest of the opening line (must be blank or only whitespace)
+  _ <- takeWhileP Nothing (== ' ')
+  _ <- char '\n'
+  -- Collect raw lines until we find a line with """
+  rawLines <- manyTill pTripleStringLine (lookAhead (try pTripleStringClose))
+  margin <- pTripleStringClose
+  -- Strip margin from each line
+  let stripped = map (stripMargin margin) rawLines
+      -- Drop trailing empty line if present
+      trimmed = case stripped of
+        [] -> []
+        _  | all (== ' ') (last stripped) || null (last stripped) -> init stripped
+           | otherwise -> stripped
+  pure $ StringLit (T.pack (intercalate "\n" trimmed))
+  where
+    pTripleStringLine :: Parser String
+    pTripleStringLine = do
+      cs <- manyTill anySingle (char '\n')
+      pure cs
+
+    pTripleStringClose :: Parser Int
+    pTripleStringClose = do
+      spaces <- takeWhileP Nothing (== ' ')
+      _ <- string "\"\"\""
+      pure (T.length spaces)
+
+    stripMargin :: Int -> String -> String
+    stripMargin n s = drop n s
 
 pIntLit :: Parser Expr
 pIntLit = IntLit <$> lexeme L.decimal
