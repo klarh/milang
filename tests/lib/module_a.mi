@@ -1,5 +1,5 @@
 -- Module A imports Module B (circular)
-B = import "module_b.mi"
+b = import "module_b.mi"
 
 greeting = "hello"
-combined = greeting + " " + B.farewell
+combined = greeting + " " + b.farewell

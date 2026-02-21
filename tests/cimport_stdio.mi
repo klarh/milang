@@ -1,7 +1,7 @@
 -- Test C header import with opaque pointers: stdio.h
-IO = import "/usr/include/stdio.h"
+cio = import "/usr/include/stdio.h"
 
 -- printf returns int, takes const char * format + varargs
 -- We can't do varargs, but puts works with a single string
-result = IO.puts "Hello from C!"
+result = cio.puts "Hello from C!"
 main1 = world.io.println result

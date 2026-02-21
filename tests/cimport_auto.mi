@@ -1,5 +1,5 @@
 -- Test auto-detection of companion .c file
-Lib = import "lib/mylib.h"
+lib = import "lib/mylib.h"
 
-a = Lib.add_ints 10 20
+a = lib.add_ints 10 20
 main1 = world.io.println a

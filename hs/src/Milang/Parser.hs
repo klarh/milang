@@ -314,11 +314,19 @@ pRegularBindingName = try $ do
     Just ('_', rest) | not (T.null rest) && T.all isDigit rest ->
       fail $ "'" ++ T.unpack n ++ "' is reserved for positional field access"
     _ -> pure ()
-  -- Peek ahead: must be followed by params or =/:=
-  -- If uppercase and next char is '{', this isn't a binding — fail
+  -- Uppercase names only for type declarations:
+  --   Name = { ... }     (union decl or record constructor)
+  --   Name = Name { ... } (record constructor)
+  --   Name :: ...         (type annotation)
+  --   Name :~ ...         (traits annotation)
+  --   Name :? ...         (doc annotation)
   if isUpper (T.head n)
     then do
-      _ <- lookAhead (try pIdentifier <|> try (symbol "::" *> pure "") <|> try (symbol ":~" *> pure "") <|> try (symbol ":?" *> pure "") <|> try (symbol "=" *> pure "") <|> try (symbol ":=" *> pure ""))
+      _ <- lookAhead (try (symbol "=" *> symbol "{")
+                  <|> try (symbol "=" *> pAnyIdentifier *> symbol "{" *> pure "{")
+                  <|> try (symbol "::" *> pure "")
+                  <|> try (symbol ":~" *> pure "")
+                  <|> try (symbol ":?" *> pure ""))
       pure n
     else pure n
 

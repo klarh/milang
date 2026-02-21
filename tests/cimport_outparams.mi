@@ -1,10 +1,10 @@
 -- Test output params: frexp returns (mantissa, exponent)
-M = import "/usr/include/math.h"
+m = import "/usr/include/math.h"
 
 -- frexp(6.0) should give mantissa=0.75, exponent=3 (since 0.75 * 2^3 = 6)
-r = M.frexp 6.0
+r = m.frexp 6.0
 main1 = world.io.println r
 
 -- modf(3.14) should give integer part and fractional part
-r2 = M.modf 3.14
+r2 = m.modf 3.14
 main2 = world.io.println r2

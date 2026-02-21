@@ -190,30 +190,33 @@ main world = greet world.io          -- only give IO, not process/fs
 
 ```
 -- Local file import (result is a record of all top-level bindings)
-Math = import "lib/math.mi"
-x = Math.square 5
+math = import "lib/math.mi"
+x = math.square 5
 
 -- URL import (cached locally)
-Lib = import "https://example.com/lib.mi"
+lib = import "https://example.com/lib.mi"
 
 -- URL import with sha256 pinning (recommended for reproducibility)
-Lib = import' "https://example.com/lib.mi" ({sha256 = "a1b2c3..."})
+lib = import' "https://example.com/lib.mi" ({sha256 = "a1b2c3..."})
 
 -- C header import (auto-parses function signatures)
-M = import "/usr/include/math.h"
-x = M.sin 1.0
+m = import "/usr/include/math.h"
+x = m.sin 1.0
 
 -- C header with source file linking
-Lib = import' "mylib.h" ({src = "mylib.c"})
+lib = import' "mylib.h" ({src = "mylib.c"})
 
 -- C header with extended options
-Lib = import' "mylib.h" ({
+lib = import' "mylib.h" ({
   sources = ["a.c", "b.c"]
   flags = "-O2"
   include = "include"
   pkg = "libpng"
 })
 ```
+
+Binding names are always lowercase. Uppercase names are reserved for type
+declarations (union types, record constructors, type annotations).
 
 Use `milang pin <file>` to auto-discover URL imports and add sha256 hashes.
 

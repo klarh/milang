@@ -1,5 +1,5 @@
 -- A geometry library that imports math
-Math = import "mymath.mi"
+math = import "mymath.mi"
 
-circle_area r = Math.circle_area r
+circle_area r = math.circle_area r
 rect_area w h = w * h

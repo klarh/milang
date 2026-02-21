@@ -1,8 +1,8 @@
 -- Test circular imports: A imports B, B imports A
-A = import "lib/module_a.mi"
-B = import "lib/module_b.mi"
+a = import "lib/module_a.mi"
+b = import "lib/module_b.mi"
 
-main1 = world.io.println A.greeting
-main2 = world.io.println B.farewell
-main3 = world.io.println A.combined
-main4 = world.io.println B.combined
+main1 = world.io.println a.greeting
+main2 = world.io.println b.farewell
+main3 = world.io.println a.combined
+main4 = world.io.println b.combined
