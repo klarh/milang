@@ -271,24 +271,37 @@ pBindingAt ref = do
   pos <- grabPos
   name <- pBindingName
   params <- many (try pIdentifier)
-  lazy <- pBindOp
-  body <- try pExpr <|> pure (IntLit 0)
-  mMatch <- optional (try pMatchArrow)
-  let body' = case mMatch of
-        Just alts -> Case body alts
-        Nothing   -> body
-  mWith <- optional (try pBraceWith)
-  let body'' = case mWith of
-        Nothing -> body'
-        Just bs
-          -- Bare {name=expr; ...} without a preceding expression → anonymous record
-          | IntLit 0 <- body', all isNamedBinding bs -> Record "" bs
-          -- Normal With block: expr { bindings }
-          | otherwise -> With body' bs
-  children <- pIndentedChildren ref body''
-  endOff <- getOffset
-  srcText <- captureSource startOff endOff
-  pure $ Binding name lazy params children (Just pos) Nothing Nothing Nothing srcText
+  -- Try -> (match on last param) or = / :=
+  matchForm <- optional (try (symbol "->"))
+  case matchForm of
+    Just _ | not (null params) -> do
+      -- name params -> alts  ≡  name params = lastParam -> alts
+      let lastParam = last params
+      inlineAlts <- try (pMatchAlt `sepBy1` symbol ";") <|> pure []
+      let body' = Case (Name lastParam) inlineAlts
+      children <- pIndentedChildren ref body'
+      endOff <- getOffset
+      srcText <- captureSource startOff endOff
+      pure $ Binding name False params children (Just pos) Nothing Nothing Nothing srcText
+    _ -> do
+      lazy <- pBindOp
+      body <- try pExpr <|> pure (IntLit 0)
+      mMatch <- optional (try pMatchArrow)
+      let body' = case mMatch of
+            Just alts -> Case body alts
+            Nothing   -> body
+      mWith <- optional (try pBraceWith)
+      let body'' = case mWith of
+            Nothing -> body'
+            Just bs
+              -- Bare {name=expr; ...} without a preceding expression → anonymous record
+              | IntLit 0 <- body', all isNamedBinding bs -> Record "" bs
+              -- Normal With block: expr { bindings }
+              | otherwise -> With body' bs
+      children <- pIndentedChildren ref body''
+      endOff <- getOffset
+      srcText <- captureSource startOff endOff
+      pure $ Binding name lazy params children (Just pos) Nothing Nothing Nothing srcText
 
 -- Name on the LHS of a binding: lowercase or uppercase (for module aliases)
 -- Uppercase binding must be followed by = or := (not {, which would be a record)
@@ -420,15 +433,16 @@ pGuardAlt = do
         _        -> Just cond
   pure $ Alt PWild guard body'
 
--- Pattern alternative: Pattern = body
+-- Pattern alternative: Pattern [| guard] = body
 pPatternAlt :: Parser Alt
 pPatternAlt = do
   pat <- pPattern
+  mGuard <- optional (try (symbol "|" *> pExpr))
   _ <- symbol "="
   body <- pExpr
   mWith <- optional (try pBraceWith)
   let body' = maybe body (With body) mWith
-  pure $ Alt pat Nothing body'
+  pure $ Alt pat mGuard body'
 
 -- Parse a trailing {bindings} block (for With expressions)
 pBraceWith :: Parser [Binding]

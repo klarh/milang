@@ -1,0 +1,41 @@
+-- Test new match syntax forms
+
+Shape = {Circle r; Rect w h; Point}
+
+-- 1. Function definition with -> (match on last param)
+area shape ->
+  Circle {r = r} = r * r
+  Rect {w = w; h = h} = w * h
+  Point = 0
+
+r1 = area (Circle 5)
+r2 = area (Rect 3 4)
+r3 = area Point
+
+-- 2. Guard-only with -> form (no redundant scrutinee)
+classify x ->
+  | x < 0 = "negative"
+  | x == 0 = "zero"
+  | _ = "positive"
+
+r4 = classify 5
+r5 = classify 0
+r6 = classify (0 - 3)
+
+-- 3. Pattern + guard combined
+safe_area shape ->
+  Circle {r = r} | r > 0 = r * r
+  _ = 0
+
+r7 = safe_area (Circle 5)
+r8 = safe_area (Circle 0)
+r9 = safe_area (Rect 3 4)
+
+-- 4. Multi-param function with -> matches last param
+describe label shape ->
+  Circle {r = r} = label + ": circle"
+  Rect {w = w; h = h} = label + ": rect"
+  _ = label + ": unknown"
+
+r10 = describe "shape" (Circle 5)
+r11 = describe "shape" (Rect 3 4)
