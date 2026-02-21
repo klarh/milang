@@ -215,8 +215,8 @@ exprToC st (Thunk body) = do
 exprToC st (ListLit es) = exprToC st (listLitToCons es)
   where
     listLitToCons []     = Record "Nil" []
-    listLitToCons (x:xs) = Record "Cons" [Binding "head" False [] x Nothing Nothing Nothing,
-                                           Binding "tail" False [] (listLitToCons xs) Nothing Nothing Nothing]
+    listLitToCons (x:xs) = Record "Cons" [Binding "head" False [] x Nothing Nothing Nothing Nothing,
+                                           Binding "tail" False [] (listLitToCons xs) Nothing Nothing Nothing Nothing]
 
 exprToC st (CFunction hdr cname retTy paramTys) = do
   modifyIORef (cgIncludes st) (("#include " ++ show (T.unpack hdr)) :)

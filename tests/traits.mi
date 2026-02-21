@@ -1,0 +1,23 @@
+-- Test traits domain (:~) annotations
+
+-- Define trait groups
+pure :~ []
+io :~ [console]
+readonly :~ [console, fs.read]
+readwrite :~ [console, fs.read, fs.write]
+
+-- Annotate a pure function
+distance :~ pure
+distance x1 y1 x2 y2 = (x2 - x1)**2 + (y2 - y1)**2
+
+-- Annotate an IO function
+greet :~ io
+greet world = world.io.println "hello from traits test"
+
+-- Traits-only binding (no value binding to merge with)
+fs_effects :~ [fs.read, fs.write, fs.remove]
+
+main world =
+  world.io.println (distance 0 0 3 4)
+  greet world
+  0

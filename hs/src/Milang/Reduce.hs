@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
-module Milang.Reduce (reduce, Env, emptyEnv, warnings, Warning(..)) where
+module Milang.Reduce (reduce, Env, emptyEnv, envImpure, warnings, Warning(..)) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -15,10 +15,11 @@ import Milang.Syntax
 data Env = Env
   { envMap :: !(Map.Map Text Expr)
   , envRec :: !(Set.Set Text)       -- names from CyclicSCC groups
+  , envImpure :: !(Set.Set Text)    -- world-tainted names (auto-monad spine)
   } deriving (Show)
 
 emptyEnv :: Env
-emptyEnv = Env Map.empty Set.empty
+emptyEnv = Env Map.empty Set.empty Set.empty
 
 -- Env helpers
 envLookup :: Text -> Env -> Maybe Expr
@@ -32,6 +33,18 @@ envDelete n env = env { envMap = Map.delete n (envMap env) }
 
 envIsRec :: Text -> Env -> Bool
 envIsRec n = Set.member n . envRec
+
+envMarkImpure :: Text -> Env -> Env
+envMarkImpure n env = env { envImpure = Set.insert n (envImpure env) }
+
+envIsImpure :: Text -> Env -> Bool
+envIsImpure n = Set.member n . envImpure
+
+-- | Check if an expression is world-tainted (references any impure name)
+isWorldTainted :: Env -> Expr -> Bool
+isWorldTainted env expr =
+  let fvs = exprFreeVars expr
+  in "world" `Set.member` fvs || any (`envIsImpure` env) (Set.toList fvs)
 
 -- | Maximum recursion depth for reduction (prevents infinite unrolling)
 maxReduceDepth :: Int
@@ -134,7 +147,11 @@ reduceD d env (With body bindings) =
   let env' = evalBindingsD d env bindings
       body' = reduceD d env' body
       bs' = map (reduceBindD d env') bindings
-      residualBs = filter (isResidual . bindBody) bs'
+      -- Keep a binding if it's residual (not fully reduced) OR if it's impure
+      -- (world-tainted). Impure bindings must be preserved even if they reduce
+      -- to concrete values, because they represent side effects that must execute.
+      keepBinding b = isResidual (bindBody b) || envIsImpure (bindName b) env'
+      residualBs = filter keepBinding bs'
   in if null residualBs then body' else With body' residualBs
 
 reduceD d env (Record tag bindings) =
@@ -212,13 +229,16 @@ evalSCCD d env (AcyclicSCC b) =
       val = if bindLazy b
             then bindBody b
             else reduceD d env body
+      -- Track world-taintedness: if the body references world or any impure name,
+      -- mark this binding as impure in the environment (auto-monad spine).
+      env1 = if isWorldTainted env body then envMarkImpure name env else env
       -- Only inline value forms (literals, lambdas, concrete records).
       -- Non-concrete expressions (App, BinOp, FieldAccess etc.) stay as
       -- named bindings so the With block evaluates them once at runtime,
       -- preserving sharing and preventing duplication of side effects.
   in if isConcrete val
-     then envInsert name val env
-     else env
+     then envInsert name val env1
+     else env1
 evalSCCD _ env (CyclicSCC bs) =
   -- Mutually recursive group: insert as unreduced lambdas, marked recursive.
   -- The concrete-args gate in reduceD (App) prevents exponential unrolling
@@ -227,8 +247,9 @@ evalSCCD _ env (CyclicSCC bs) =
   let insertBind e b =
         let body = wrapLambda (bindParams b) (bindBody b)
             name = bindName b
-        in e { envMap = Map.insert name body (envMap e)
-             , envRec = Set.insert name (envRec e) }
+            e1 = if isWorldTainted e body then envMarkImpure name e else e
+        in e1 { envMap = Map.insert name body (envMap e1)
+              , envRec = Set.insert name (envRec e1) }
   in foldl insertBind env bs
 
 -- Wrap a body in lambdas for its parameters: f x y = e → \x -> \y -> e
@@ -251,8 +272,8 @@ reduceBindD d env b =
 reduceBinOp :: Text -> Expr -> Expr -> Expr
 -- Cons operator: h : t → Record "Cons" [head=h, tail=t]
 reduceBinOp ":" h t =
-  Record "Cons" [ Binding "head" False [] h Nothing Nothing Nothing
-                , Binding "tail" False [] t Nothing Nothing Nothing ]
+  Record "Cons" [ Binding "head" False [] h Nothing Nothing Nothing Nothing
+                , Binding "tail" False [] t Nothing Nothing Nothing Nothing ]
 -- Int × Int
 reduceBinOp "+"  (IntLit a) (IntLit b) = IntLit (a + b)
 reduceBinOp "-"  (IntLit a) (IntLit b) = IntLit (a - b)
@@ -353,7 +374,7 @@ reduceAppD d env (Lam p body) arg =
 -- Uppercase constructor application: Just 5 → Just {_0 = 5}
 reduceAppD _ _ (Name n) arg
   | not (T.null n) && isUpper (T.head n) =
-    Record n [Binding "_0" False [] arg Nothing Nothing Nothing]
+    Record n [Binding "_0" False [] arg Nothing Nothing Nothing Nothing]
 -- Record introspection builtins
 reduceAppD _ _ (Name "fields") (Record _ bs) =
   listToCons [bindBody b | b <- bs]
@@ -369,13 +390,13 @@ reduceAppD _ _ (App (Name "getField") (Record _ bs)) (StringLit name) =
 reduceAppD _ _ (App (App (Name "setField") (Record t bs)) (StringLit name)) val =
   let updated = map (\b -> if bindName b == name then b { bindBody = val } else b) bs
       exists = any (\b -> bindName b == name) bs
-      result = if exists then updated else bs ++ [Binding name False [] val Nothing Nothing Nothing]
+      result = if exists then updated else bs ++ [Binding name False [] val Nothing Nothing Nothing Nothing]
   in Record t result
 -- Positional record extension: (Pair {_0=1}) 2 → Pair {_0=1, _1=2}
 reduceAppD _ _ (Record tag bs) arg
   | isPositionalRecord bs =
     let nextIdx = "_" <> T.pack (show (length bs))
-    in Record tag (bs ++ [Binding nextIdx False [] arg Nothing Nothing Nothing])
+    in Record tag (bs ++ [Binding nextIdx False [] arg Nothing Nothing Nothing Nothing])
 -- ── Compile-time builtin reductions ──
 -- len on lists: walk the Cons chain
 reduceAppD _ _ (Name "len") arg
@@ -537,7 +558,7 @@ substAlt n e a = a { altBody = substExpr n e (altBody a)
 
 -- | Helper to build a binding with no source position
 mkBind :: Text -> Expr -> Binding
-mkBind n e = Binding n False [] e Nothing Nothing Nothing
+mkBind n e = Binding n False [] e Nothing Nothing Nothing Nothing
 
 -- | Convert a list of expressions to a cons-cell chain: Cons(head, Cons(..., Nil))
 listToCons :: [Expr] -> Expr
@@ -673,7 +694,7 @@ unquoteBindings expr = case consToList expr of
     unquoteField (Record "Field" bs) = do
       name <- getStrField "name" bs
       val  <- getField "val" bs >>= unquoteExpr
-      Just (Binding name False [] val Nothing Nothing Nothing)
+      Just (Binding name False [] val Nothing Nothing Nothing Nothing)
     unquoteField _ = Nothing
 
 unquoteAlt :: Expr -> Maybe Alt
