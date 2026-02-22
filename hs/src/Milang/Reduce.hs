@@ -170,7 +170,9 @@ reduceD d env (Namespace bindings) =
 reduceD d env (Case scrut alts) =
   let scrut' = forceThunkD d env (reduceD d env scrut)
   in if isResidual scrut'
-       then Case scrut' (map (\(Alt p g b) -> Alt p (fmap (reduceD d env) g) (reduceD d env b)) alts)
+       then Case scrut' (map (\(Alt p g b) ->
+              let env' = Set.foldl' (\e v -> envDelete v e) env (patVars p)
+              in Alt p (fmap (reduceD d env') g) (reduceD d env' b)) alts)
        else reduceCaseD d env scrut' alts
 
 reduceD _ _ e@(CFunction {}) = e  -- C FFI: irreducible
@@ -487,8 +489,9 @@ exprFreeVars (Namespace bs)   =
   in Set.difference (Set.unions (map (exprFreeVars . bindBody) bs)) bnames
 exprFreeVars (Case s alts)    =
   Set.union (exprFreeVars s) (Set.unions (map altFreeVars alts))
-  where altFreeVars (Alt _ mg b) =
-          Set.union (exprFreeVars b) (maybe Set.empty exprFreeVars mg)
+  where altFreeVars (Alt p mg b) =
+          let bodyFVs = Set.union (exprFreeVars b) (maybe Set.empty exprFreeVars mg)
+          in Set.difference bodyFVs (patVars p)
 exprFreeVars (CFunction {})   = Set.empty
 exprFreeVars (Thunk body)     = exprFreeVars body
 exprFreeVars (ListLit es)     = Set.unions (map exprFreeVars es)
@@ -817,6 +820,15 @@ tryMatchD d env scrut (Alt pat guard body : rest) =
                IntLit _ -> Just (binds, body)       -- guard passed
                _        -> Nothing                  -- guard residual, can't decide
     Nothing -> tryMatchD d env scrut rest
+
+-- | Extract variable names bound by a pattern
+patVars :: Pat -> Set.Set Text
+patVars (PVar v)         = Set.singleton v
+patVars PWild            = Set.empty
+patVars (PLit _)         = Set.empty
+patVars (PRec _ fields)  = Set.unions [patVars p | (_, p) <- fields]
+patVars (PList pats mrest) =
+  Set.unions (map patVars pats) `Set.union` maybe Set.empty Set.singleton mrest
 
 matchPat :: Pat -> Expr -> Maybe [(Text, Expr)]
 matchPat (PVar v) e = Just [(v, e)]
