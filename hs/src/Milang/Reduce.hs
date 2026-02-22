@@ -472,11 +472,11 @@ reduceAppD _ _ (Name "fields") (Record _ bs) =
 reduceAppD _ _ (Name "fieldNames") (Record _ bs) =
   listToCons [StringLit (bindName b) | b <- bs]
 reduceAppD _ _ (Name "tag") (Record t _) = StringLit t
--- getField record "name" → field value
+-- getField record "name" → Just value or Nothing
 reduceAppD _ _ (App (Name "getField") (Record _ bs)) (StringLit name) =
   case [bindBody b | b <- bs, bindName b == name] of
-    (v:_) -> v
-    []    -> App (App (Name "getField") (Record "" bs)) (StringLit name)  -- residual
+    (v:_) -> justExpr v
+    []    -> nothingExpr
 -- setField record "name" value → copy with field overridden
 reduceAppD _ _ (App (App (Name "setField") (Record t bs)) (StringLit name)) val =
   let updated = map (\b -> if bindName b == name then b { bindBody = val } else b) bs
@@ -503,19 +503,24 @@ reduceAppD _ _ (Name "trim") (StringLit s) = StringLit (T.strip s)
 reduceAppD _ _ (Name "_toString") (IntLit n) = StringLit (T.pack (show n))
 reduceAppD _ _ (Name "_toString") (FloatLit n) = StringLit (T.pack (show n))
 reduceAppD _ _ (Name "_toString") (StringLit s) = StringLit s
--- toInt / toFloat
+-- toInt / toFloat → Just val or Nothing
+reduceAppD _ _ (Name "toInt") (IntLit n) = justExpr (IntLit n)
+reduceAppD _ _ (Name "toInt") (FloatLit n) = justExpr (IntLit (truncate n))
 reduceAppD _ _ (Name "toInt") (StringLit s) =
   case reads (T.unpack s) :: [(Integer, String)] of
-    [(n, "")] -> IntLit n
-    _         -> App (Name "toInt") (StringLit s)
+    [(n, "")] -> justExpr (IntLit n)
+    _         -> nothingExpr
+reduceAppD _ _ (Name "toFloat") (FloatLit n) = justExpr (FloatLit n)
+reduceAppD _ _ (Name "toFloat") (IntLit n) = justExpr (FloatLit (fromInteger n))
 reduceAppD _ _ (Name "toFloat") (StringLit s) =
   case reads (T.unpack s) :: [(Double, String)] of
-    [(n, "")] -> FloatLit n
-    _         -> App (Name "toFloat") (StringLit s)
--- charAt string index
+    [(n, "")] -> justExpr (FloatLit n)
+    _         -> nothingExpr
+-- charAt string index → Just char or Nothing
 reduceAppD _ _ (App (Name "charAt") (StringLit s)) (IntLit i)
   | i >= 0 && fromIntegral i < T.length s =
-    StringLit (T.singleton (T.index s (fromIntegral i)))
+    justExpr (StringLit (T.singleton (T.index s (fromIntegral i))))
+  | otherwise = nothingExpr
 -- indexOf string substring
 reduceAppD _ _ (App (Name "indexOf") (StringLit hay)) (StringLit needle) =
   case T.breakOn needle hay of
@@ -652,6 +657,13 @@ substAlt n e a = a { altBody = substExpr n e (altBody a)
 -- | Helper to build a binding with no source position
 mkBind :: Text -> Expr -> Binding
 mkBind n e = Binding n False [] e Nothing Nothing Nothing Nothing Nothing
+
+-- | Maybe constructors for safe builtins
+nothingExpr :: Expr
+nothingExpr = Record "Nothing" []
+
+justExpr :: Expr -> Expr
+justExpr val = Record "Just" [mkBind "val" val]
 
 -- | Convert a list of expressions to a cons-cell chain: Cons(head, Cons(..., Nil))
 listToCons :: [Expr] -> Expr

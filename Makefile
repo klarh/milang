@@ -1,4 +1,4 @@
-.PHONY: all clean test docs
+.PHONY: all clean test docs docs-serve
 
 all:
 	cd hs && cabal build

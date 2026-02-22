@@ -1,0 +1,33 @@
+-- Test Maybe-returning builtins for safety
+main world =
+  -- head/tail on empty → Nothing
+  world.io.println (toString (head []))
+  world.io.println (toString (tail []))
+  -- head/tail on non-empty → Just
+  world.io.println (toString (head [1, 2, 3]))
+  world.io.println (toString (tail [1, 2, 3]))
+  -- get: in bounds → Just, out of bounds → Nothing
+  world.io.println (toString (get [10, 20, 30] 1))
+  world.io.println (toString (get [10, 20, 30] 5))
+  -- toInt: valid → Just, invalid → Nothing
+  world.io.println (toString (toInt "42"))
+  world.io.println (toString (toInt "abc"))
+  -- toFloat: valid → Just, invalid → Nothing
+  world.io.println (toString (toFloat "3.14"))
+  world.io.println (toString (toFloat "xyz"))
+  -- charAt: in bounds → Just, out of bounds → Nothing
+  world.io.println (toString (charAt "hello" 1))
+  world.io.println (toString (charAt "hello" 99))
+  -- getField: present → Just, missing → Nothing
+  r = {x = 1; y = 2}
+  world.io.println (toString (getField r "x"))
+  world.io.println (toString (getField r "z"))
+  -- last/init on non-empty
+  world.io.println (toString (last [1, 2, 3]))
+  world.io.println (toString (init [1, 2, 3]))
+  -- last/init on empty → Nothing
+  world.io.println (toString (last []))
+  world.io.println (toString (init []))
+  -- truthy on Maybe
+  world.io.println (toString (truthy (Just 1)))
+  world.io.println (toString (truthy Nothing))
