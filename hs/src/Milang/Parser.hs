@@ -836,10 +836,10 @@ pTripleStringLit = lexeme $ do
     stripMargin n s = drop n s
 
 pIntLit :: Parser Expr
-pIntLit = IntLit <$> lexeme L.decimal
+pIntLit = IntLit <$> lexeme (L.signed (pure ()) L.decimal)
 
 pFloatLit :: Parser Expr
-pFloatLit = FloatLit <$> lexeme L.float
+pFloatLit = FloatLit <$> lexeme (L.signed (pure ()) L.float)
 
 pLambdaML :: Bool -> Parser Expr
 pLambdaML ml = do
@@ -947,7 +947,7 @@ pPatField = do
     Nothing -> (name, PVar name)  -- shorthand: {x} means {x = x}
 
 pPatLitInt :: Parser Pat
-pPatLitInt = PLit . IntLit <$> lexeme L.decimal
+pPatLitInt = PLit . IntLit <$> lexeme (L.signed (pure ()) L.decimal)
 
 pPatLitStr :: Parser Pat
 pPatLitStr = do
