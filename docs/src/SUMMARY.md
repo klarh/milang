@@ -21,6 +21,7 @@
 - [Imports & Modules](./language/imports.md)
 - [IO & the World](./language/io.md)
 - [C FFI](./language/ffi.md)
+- [Standard Library](./language/stdlib.md)
 
 # Annotation Domains
 
@@ -31,6 +32,7 @@
 
 # Advanced Topics
 
+- [Open Function Chaining](./language/open-functions.md)
 - [Partial Evaluation](./language/partial-eval.md)
 - [Thunks & Laziness](./language/thunks.md)
 - [Metaprogramming](./language/metaprogramming.md)
