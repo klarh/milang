@@ -1,0 +1,24 @@
+/* Sized numeric types — Int', UInt', Float' with bit width parameter */
+
+/* Prelude aliases: Int = Int' 64, UInt = UInt' 64, Float = Float' 64, Byte = UInt' 8 */
+
+/* Type annotations with sized types */
+add32 :: Int' 32 : Int' 32 : Int' 32
+add32 a b = a + b
+
+/* Backward compat: Num still works as Int */
+double :: Num : Num
+double x = x * 2
+
+/* Float annotation */
+pi_val :: Float : Float
+pi_val x = x * 3.14
+
+/* Basic arithmetic */
+main world =
+  world.io.println (add32 3 4)
+  world.io.println (double 21)
+  world.io.println (pi_val 2.0)
+  world.io.println (1 + 2)
+  world.io.println (3.14 + 1.0)
+/* expect: 7, 42, 6.28, 3, 4.140000000000001 */

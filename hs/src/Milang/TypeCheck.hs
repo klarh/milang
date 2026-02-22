@@ -8,8 +8,9 @@ import Milang.Syntax
 
 -- | Type representation
 data MiType
-  = TNum                             -- integer type
-  | TFloat                           -- floating point
+  = TInt   (Maybe Integer)           -- signed integer: Nothing = default (64), Just n = n bits
+  | TUInt  (Maybe Integer)           -- unsigned integer: Nothing = default (64), Just n = n bits
+  | TFloat (Maybe Integer)           -- floating point: Nothing = default (64), Just n = n bits
   | TStr                             -- string type
   | TFun MiType MiType               -- function type: a -> b
   | TRecord Text [(Text, MiType)]    -- tagged record with field types
@@ -42,9 +43,9 @@ typeCheck bindings =
 -- | Built-in type environment for native functions (len, slice, etc.)
 builtinTypes :: TypeEnv
 builtinTypes = Map.fromList
-  [ ("len",        TFun TAny TNum)          -- works on strings and lists
-  , ("strlen",     TFun TStr TNum)
-  , ("slice",      TFun TAny (TFun TNum (TFun TNum TAny)))
+  [ ("len",        TFun TAny (TInt Nothing))   -- works on strings and lists
+  , ("strlen",     TFun TStr (TInt Nothing))
+  , ("slice",      TFun TAny (TFun (TInt Nothing) (TFun (TInt Nothing) TAny)))
   , ("fields",     TFun TAny (TUnion "List" ["Nil", "Cons"]))
   , ("fieldNames", TFun TAny (TUnion "List" ["Nil", "Cons"]))
   , ("tag",        TFun TAny TStr)
@@ -109,9 +110,16 @@ exprToType :: Expr -> MiType
 exprToType = exprToTypeWith Map.empty
 
 exprToTypeWith :: TypeEnv -> Expr -> MiType
-exprToTypeWith _ (Name "Num")   = TNum
+-- Sized type constructors: Int' n, UInt' n, Float' n
+exprToTypeWith _ (App (Name "Int'") (IntLit n))   = TInt (Just n)
+exprToTypeWith _ (App (Name "UInt'") (IntLit n))  = TUInt (Just n)
+exprToTypeWith _ (App (Name "Float'") (IntLit n)) = TFloat (Just n)
+-- Backward-compat names
+exprToTypeWith _ (Name "Num")   = TInt Nothing
+exprToTypeWith _ (Name "Int")   = TInt Nothing
+exprToTypeWith _ (Name "UInt")  = TUInt Nothing
 exprToTypeWith _ (Name "Str")   = TStr
-exprToTypeWith _ (Name "Float") = TFloat
+exprToTypeWith _ (Name "Float") = TFloat Nothing
 exprToTypeWith env (Name n)
   | not (T.null n) && isLower (T.head n) = TVar n
   | otherwise = case Map.lookup n env of
@@ -225,8 +233,11 @@ checkExprAgainst env pos name expected expr =
 
 -- | Infer the type of a single expression
 inferExpr :: TypeEnv -> Expr -> MiType
-inferExpr _ (IntLit _)    = TNum
-inferExpr _ (FloatLit _)  = TFloat
+inferExpr _ (IntLit _)          = TInt Nothing
+inferExpr _ (FloatLit _)        = TFloat Nothing
+inferExpr _ (SizedInt _ w True) = TInt (Just w)
+inferExpr _ (SizedInt _ w False) = TUInt (Just w)
+inferExpr _ (SizedFloat _ w)    = TFloat (Just w)
 inferExpr _ (StringLit _) = TStr
 inferExpr env (Name n) =
   case Map.lookup n env of
@@ -237,19 +248,19 @@ inferExpr env (BinOp op l r)
     let lt = inferExpr env l
         rt = inferExpr env r
     in case (lt, rt) of
-         (TFloat, _) -> TFloat
-         (_, TFloat) -> TFloat
-         _           -> TNum
+         (TFloat _, _) -> TFloat Nothing
+         (_, TFloat _) -> TFloat Nothing
+         _             -> TInt Nothing
   | op == "+" =
     let lt = inferExpr env l
         rt = inferExpr env r
     in case (lt, rt) of
-         (TStr, _)   -> TStr
-         (_, TStr)   -> TStr
-         (TFloat, _) -> TFloat
-         (_, TFloat) -> TFloat
-         _           -> TNum
-  | op `elem` ["==", "/=", "<", ">", "<=", ">="] = TNum
+         (TStr, _)     -> TStr
+         (_, TStr)     -> TStr
+         (TFloat _, _) -> TFloat Nothing
+         (_, TFloat _) -> TFloat Nothing
+         _             -> TInt Nothing
+  | op `elem` ["==", "/=", "<", ">", "<=", ">="] = TInt Nothing
   | op == ":" =
     let ht = inferExpr env l
     in TRecord "Cons" [("head", ht), ("tail", TAny)]
@@ -324,11 +335,15 @@ checkCompat pos name expected actual =
         Just prev -> go subst prev act  -- check consistency with previous binding
         Nothing   -> (Map.insert v act subst, [])  -- bind type var
     go subst _ (TVar _) = (subst, [])  -- actual is a type var, compatible
-    go subst TNum TNum = (subst, [])
-    go subst TFloat TFloat = (subst, [])
-    go subst TStr TStr = (subst, [])
-    go subst TNum TFloat = (subst, [])  -- numeric compatibility
-    go subst TFloat TNum = (subst, [])
+    go subst (TInt _) (TInt _) = (subst, [])        -- all int widths compatible
+    go subst (TUInt _) (TUInt _) = (subst, [])      -- all uint widths compatible
+    go subst (TFloat _) (TFloat _) = (subst, [])    -- all float widths compatible
+    go subst (TInt _) (TFloat _) = (subst, [])       -- numeric compatibility
+    go subst (TFloat _) (TInt _) = (subst, [])
+    go subst (TInt _) (TUInt _) = (subst, [])
+    go subst (TUInt _) (TInt _) = (subst, [])
+    go subst (TUInt _) (TFloat _) = (subst, [])
+    go subst (TFloat _) (TUInt _) = (subst, [])
     go subst (TFun ea er) (TFun aa ar) =
       let (subst', errs1) = go subst ea aa
           (subst'', errs2) = go subst' er ar
@@ -363,8 +378,12 @@ checkCompat pos name expected actual =
 
 -- | Pretty-print a type for error messages
 prettyType :: MiType -> Text
-prettyType TNum = "Num"
-prettyType TFloat = "Float"
+prettyType (TInt Nothing)  = "Int"
+prettyType (TInt (Just n)) = "Int' " <> T.pack (show n)
+prettyType (TUInt Nothing)  = "UInt"
+prettyType (TUInt (Just n)) = "UInt' " <> T.pack (show n)
+prettyType (TFloat Nothing)  = "Float"
+prettyType (TFloat (Just n)) = "Float' " <> T.pack (show n)
 prettyType TStr = "Str"
 prettyType (TVar v) = v
 prettyType TAny = "?"

@@ -337,6 +337,7 @@ pRegularBindingName = try $ do
     then do
       _ <- lookAhead (try (symbol "=" *> symbol "{")
                   <|> try (symbol "=" *> pAnyIdentifier *> symbol "{" *> pure "{")
+                  <|> try (symbol "=" *> pAnyIdentifier *> pure "")  -- type alias: Int = Int' 64
                   <|> try (symbol "::" *> pure "")
                   <|> try (symbol ":~" *> pure "")
                   <|> try (symbol ":?" *> pure ""))

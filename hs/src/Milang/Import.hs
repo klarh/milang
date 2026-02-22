@@ -104,9 +104,11 @@ addLinkInfo :: LinkRef -> LinkInfo -> IO ()
 addLinkInfo ref li = modifyIORef ref (mergeLinkInfo li)
 
 resolveExpr :: ResCtx -> String -> Expr -> IO (Either String Expr)
-resolveExpr _ _ e@(IntLit _)    = pure $ Right e
-resolveExpr _ _ e@(FloatLit _)  = pure $ Right e
-resolveExpr _ _ e@(StringLit _) = pure $ Right e
+resolveExpr _ _ e@(IntLit _)      = pure $ Right e
+resolveExpr _ _ e@(FloatLit _)    = pure $ Right e
+resolveExpr _ _ e@(SizedInt {})   = pure $ Right e
+resolveExpr _ _ e@(SizedFloat {}) = pure $ Right e
+resolveExpr _ _ e@(StringLit _)   = pure $ Right e
 resolveExpr _ _ e@(Name _)      = pure $ Right e
 resolveExpr _ _ e@(CFunction {}) = pure $ Right e
 
