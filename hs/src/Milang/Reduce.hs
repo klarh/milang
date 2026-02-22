@@ -163,8 +163,10 @@ reduceD d env (FieldAccess e field) =
   in reduceFieldAccess e' field
 
 reduceD d env (Namespace bindings) =
-  let env' = evalBindingsD d env bindings
-      bs'  = map (reduceBindD d env') bindings
+  let expanded = concatMap expandUnion bindings
+      merged   = mergeOpenDefs expanded
+      env'     = evalBindingsD d env bindings
+      bs'      = map (reduceBindD d env') merged
   in Namespace bs'
 
 reduceD d env (Case scrut alts) =
@@ -206,13 +208,63 @@ evalBindings = evalBindingsD maxReduceDepth
 evalBindingsD :: Int -> Env -> [Binding] -> Env
 evalBindingsD d env bindings =
   let expanded = concatMap expandUnion bindings
-      bindNames = Set.fromList [bindName b | b <- expanded]
+      -- Merge same-named bindings in list order (open function chaining).
+      -- Later definitions with Case (no catch-all) extend earlier ones.
+      merged = mergeOpenDefs expanded
+      bindNames = Set.fromList [bindName b | b <- merged]
       nodes = [ (b, bindName b,
                  Set.toList $ Set.intersection bindNames
                    (exprFreeVars (wrapLambda (bindParams b) (bindBody b))))
-               | b <- expanded ]
+               | b <- merged ]
       sccs = stronglyConnComp nodes
   in foldl (evalSCCD d) env sccs
+
+-- | Merge same-named bindings: if a later binding redefines a name and both
+-- are functions with Case (match) bodies, the later one's alternatives are
+-- prepended and the earlier definition becomes the fallback (like a cons list
+-- of match clauses).  If the later binding has a catch-all (wildcard/variable),
+-- it completely replaces the earlier one.
+mergeOpenDefs :: [Binding] -> [Binding]
+mergeOpenDefs [] = []
+mergeOpenDefs bindings =
+  let -- Build map of name → merged binding, processing in order
+      (_, result) = foldl merge (Map.empty, []) bindings
+  in reverse result
+  where
+    merge (seen, acc) b =
+      let name = bindName b
+      in case Map.lookup name seen of
+        Nothing -> (Map.insert name b seen, b : acc)
+        Just old ->
+          let oldBody = wrapLambda (bindParams old) (bindBody old)
+              newBody = wrapLambda (bindParams b) (bindBody b)
+              merged = case chainBodies newBody oldBody of
+                Just body' -> b { bindBody = body', bindParams = [] }
+                Nothing    -> b  -- can't chain; later def replaces
+          in (Map.insert name merged seen, map (\x -> if bindName x == name then merged else x) acc)
+
+-- | Try to chain a new lambda-case body with an old one.
+-- Returns Just the merged body if chaining is possible.
+chainBodies :: Expr -> Expr -> Maybe Expr
+chainBodies new old = case (new, old) of
+  (Lam p1 inner1, Lam p2 inner2)
+    | p1 == p2  -> Lam p1 <$> chainBodies inner1 inner2
+    | otherwise -> Lam p1 <$> chainBodies inner1 (substExpr p2 (Name p1) inner2)
+  (Case scrut newAlts, Case _ oldAlts)
+    | not (hasWildcard newAlts) ->
+      Just $ Case scrut (newAlts ++ oldAlts)
+  (Case scrut newAlts, _)
+    | not (hasWildcard newAlts) ->
+      Just $ Case scrut (newAlts ++ [Alt PWild Nothing (appToScrut old scrut)])
+  _ -> Nothing  -- not a lambda-case pattern, just replace
+  where
+    appToScrut oldDef (Name n) = App oldDef (Name n)
+    appToScrut oldDef s        = App oldDef s
+    hasWildcard [] = False
+    hasWildcard as = case altPat (last as) of
+      PWild  -> True
+      PVar _ -> True
+      _      -> False
 
 -- | Expand union declarations: if a binding's body is a Namespace of all-uppercase
 -- bindings, inject those as additional top-level bindings
@@ -227,9 +279,18 @@ expandUnion b = case bindBody b of
 evalSCCD :: Int -> Env -> SCC Binding -> Env
 evalSCCD d env (AcyclicSCC b) =
   let name = bindName b
-      body = wrapLambda (bindParams b) (bindBody b)
-      val = if bindLazy b
-            then bindBody b
+      -- Open function chaining: if this name already exists in the env and the
+      -- new definition is a lambda-case without a catch-all, chain with the old.
+      b' = case Map.lookup name (envMap env) of
+             Just oldExpr ->
+               let newBody = wrapLambda (bindParams b) (bindBody b)
+               in case chainBodies newBody oldExpr of
+                    Just merged -> b { bindBody = merged, bindParams = [] }
+                    Nothing     -> b
+             Nothing -> b
+      body = wrapLambda (bindParams b') (bindBody b')
+      val = if bindLazy b'
+            then bindBody b'
             else reduceD d env body
       -- Track world-taintedness: if the body references world or any impure name,
       -- mark this binding as impure in the environment (auto-monad spine).
@@ -360,6 +421,14 @@ truthyExpr (Record "Cons" _)   = IntLit 1
 truthyExpr (Record _ _)        = IntLit 1  -- any other record is truthy
 truthyExpr e                   = App (Name "truthy") e  -- residual
 
+-- | Dispatch truthy through the env's truthy function.
+-- If truthy is defined in the env, call it; otherwise fall back to truthyExpr.
+envTruthy :: Int -> Env -> Expr -> Expr
+envTruthy d env val =
+  case envLookup "truthy" env of
+    Just fn -> reduceD d env (App fn val)
+    Nothing -> truthyExpr val
+
 -- ── Application reduction ─────────────────────────────────────────
 
 reduceApp :: Expr -> Expr -> Expr
@@ -368,11 +437,9 @@ reduceApp = reduceAppD maxReduceDepth emptyEnv
 reduceAppD :: Int -> Env -> Expr -> Expr -> Expr
 -- Depth limit reached: return residual
 reduceAppD d _ f x | d <= 0 = App f x
--- Built-in `truthy`: convert any value to 0/1
-reduceAppD _ _ (Name "truthy") arg = truthyExpr arg
--- Built-in `not`: apply truthy then negate
-reduceAppD _ _ (Name "not") arg =
-  case truthyExpr arg of
+-- Built-in `not`: apply truthy via env then negate
+reduceAppD d env (Name "not") arg =
+  case envTruthy d env arg of
     IntLit 0 -> IntLit 1
     IntLit _ -> IntLit 0
     other    -> App (Name "not") other
@@ -380,7 +447,7 @@ reduceAppD _ _ (Name "not") arg =
 -- Fully applied: App (App (App (Name "if") cond) thenExpr) elseExpr
 -- Uses truthy conversion so if works with bools, lists, strings, etc.
 reduceAppD d env (App (App (Name "if") cond) thenExpr) elseExpr =
-  case truthyExpr cond of
+  case envTruthy d env cond of
     IntLit 0 -> forceThunkD d env elseExpr  -- false
     IntLit _ -> forceThunkD d env thenExpr  -- true (any non-zero)
     _        -> App (App (App (Name "if") cond) thenExpr) elseExpr  -- residual
@@ -837,7 +904,7 @@ tryMatchD d env scrut (Alt pat guard body : rest) =
         Just g  ->
           let env' = env { envMap = Map.union (Map.fromList binds) (envMap env) }
               g' = reduceD d env' g
-          in case truthyExpr g' of
+          in case envTruthy d env' g' of
                IntLit 0 -> tryMatchD d env scrut rest  -- guard failed
                IntLit _ -> Just (binds, body)       -- guard passed
                _        -> Nothing                  -- guard residual, can't decide

@@ -1,0 +1,40 @@
+/* Open function chaining: redefining a function extends it with new pattern
+   alternatives, falling through to the previous definition */
+
+-- Define a custom type
+Maybe = {Nothing; Just val}
+
+-- Extend truthy for Maybe (chains with prelude truthy)
+truthy val = val -> Nothing = 0; Just = 1
+
+main world =
+  assert msg cond = if cond ~0 ~(world.io.println ("FAIL: " ++ msg))
+
+  assert "Nothing is falsy" (truthy Nothing == 0)
+  assert "Just is truthy" (truthy (Just 42) == 1)
+  /* Prelude truthy still works through the chain */
+  assert "True is truthy" (truthy True == 1)
+  assert "False is falsy" (truthy False == 0)
+  assert "0 is falsy" (truthy 0 == 0)
+  assert "1 is truthy" (truthy 1 == 1)
+  assert "empty string is falsy" (truthy "" == 0)
+  assert "non-empty string is truthy" (truthy "hi" == 1)
+  assert "Nil is falsy" (truthy [] == 0)
+  assert "non-empty list is truthy" (truthy [1] == 1)
+  /* if dispatches through extended truthy */
+  assert "if Nothing" (if Nothing ~1 ~0 == 0)
+  assert "if Just" (if (Just 42) ~1 ~0 == 1)
+  /* not dispatches through extended truthy */
+  assert "not Nothing" (not Nothing == 1)
+  assert "not Just" (not (Just 42) == 0)
+  /* Multi-level chaining: a second extension further extends */
+  Result = {Err msg; Ok val}
+  truthy val = val -> Err = 0; Ok = 1
+  assert "Err is falsy" (truthy (Err "oops") == 0)
+  assert "Ok is truthy" (truthy (Ok 42) == 1)
+  /* Previous extensions still chain through */
+  assert "Nothing still falsy" (truthy Nothing == 0)
+  assert "Just still truthy" (truthy (Just 42) == 1)
+  assert "True still truthy" (truthy True == 1)
+  assert "0 still falsy" (truthy 0 == 0)
+  0

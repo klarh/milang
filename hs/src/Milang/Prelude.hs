@@ -11,6 +11,7 @@ preludeSrc :: T.Text
 preludeSrc = T.unlines
   [ "Bool = {True; False}"
   , "List = {Nil; Cons head tail}"
+  , "truthy val = val -> False = 0; Nil = 0; 0 = 0; \"\" = 0; _ = 1"
   , "id :: a : a"
   , "id x = x"
   , "const :: a : b : a"
