@@ -72,7 +72,6 @@ preludeSrc = T.unlines
   , "min a b = if (a < b) ~a ~b"
   , "max :: Num : Num : Num"
   , "max a b = if (a > b) ~a ~b"
-  , "not :: Num : Num"
   , "not x = if x ~0 ~1"
   , "(<-) base overlay = fold (\\acc pair -> setField acc (head pair) (head (tail pair))) base (zip (fieldNames overlay) (fields overlay))"
   , "(|>) x f = f x"

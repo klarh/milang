@@ -344,6 +344,22 @@ boolToExpr :: Bool -> Expr
 boolToExpr True  = IntLit 1
 boolToExpr False = IntLit 0
 
+-- | Truthy conversion: any value to IntLit 0 (falsy) or IntLit 1 (truthy)
+-- Falsy: 0, 0.0, "", False, Nil/[]
+-- Truthy: everything else (non-zero numbers, non-empty strings, True, Cons, records)
+truthyExpr :: Expr -> Expr
+truthyExpr (IntLit 0)          = IntLit 0
+truthyExpr (IntLit _)          = IntLit 1
+truthyExpr (FloatLit 0.0)      = IntLit 0
+truthyExpr (FloatLit _)        = IntLit 1
+truthyExpr (StringLit s)       = if T.null s then IntLit 0 else IntLit 1
+truthyExpr (Record "False" []) = IntLit 0
+truthyExpr (Record "True" [])  = IntLit 1
+truthyExpr (Record "Nil" [])   = IntLit 0
+truthyExpr (Record "Cons" _)   = IntLit 1
+truthyExpr (Record _ _)        = IntLit 1  -- any other record is truthy
+truthyExpr e                   = App (Name "truthy") e  -- residual
+
 -- ── Application reduction ─────────────────────────────────────────
 
 reduceApp :: Expr -> Expr -> Expr
@@ -352,13 +368,19 @@ reduceApp = reduceAppD maxReduceDepth emptyEnv
 reduceAppD :: Int -> Env -> Expr -> Expr -> Expr
 -- Depth limit reached: return residual
 reduceAppD d _ f x | d <= 0 = App f x
--- Built-in `not`: not 0 → 1, not nonzero → 0
-reduceAppD _ _ (Name "not") (IntLit 0) = IntLit 1
-reduceAppD _ _ (Name "not") (IntLit _) = IntLit 0
+-- Built-in `truthy`: convert any value to 0/1
+reduceAppD _ _ (Name "truthy") arg = truthyExpr arg
+-- Built-in `not`: apply truthy then negate
+reduceAppD _ _ (Name "not") arg =
+  case truthyExpr arg of
+    IntLit 0 -> IntLit 1
+    IntLit _ -> IntLit 0
+    other    -> App (Name "not") other
 -- Built-in `if`: if cond ~then ~else
 -- Fully applied: App (App (App (Name "if") cond) thenExpr) elseExpr
+-- Uses truthy conversion so if works with bools, lists, strings, etc.
 reduceAppD d env (App (App (Name "if") cond) thenExpr) elseExpr =
-  case cond of
+  case truthyExpr cond of
     IntLit 0 -> forceThunkD d env elseExpr  -- false
     IntLit _ -> forceThunkD d env thenExpr  -- true (any non-zero)
     _        -> App (App (App (Name "if") cond) thenExpr) elseExpr  -- residual
@@ -815,7 +837,7 @@ tryMatchD d env scrut (Alt pat guard body : rest) =
         Just g  ->
           let env' = env { envMap = Map.union (Map.fromList binds) (envMap env) }
               g' = reduceD d env' g
-          in case g' of
+          in case truthyExpr g' of
                IntLit 0 -> tryMatchD d env scrut rest  -- guard failed
                IntLit _ -> Just (binds, body)       -- guard passed
                _        -> Nothing                  -- guard residual, can't decide
