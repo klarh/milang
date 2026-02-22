@@ -67,6 +67,7 @@ captureIO st hidden expr = do
         emit "  mi_env_set(_env, \"toLower\", mi_native(mi_builtin_toLower));\n"
         emit "  mi_env_set(_env, \"replace\", mi_native(mi_builtin_replace));\n"
         emit "  mi_env_set(_env, \"toString\", mi_native(mi_builtin_toString));\n"
+        emit "  mi_env_set(_env, \"_toString\", mi_native(mi_builtin_toString));\n"
         emit "  mi_env_set(_env, \"toInt\", mi_native(mi_builtin_toInt));\n"
         emit "  mi_env_set(_env, \"toFloat\", mi_native(mi_builtin_toFloat));\n"
         emit "  mi_env_set(_env, \"fields\", mi_native(mi_builtin_fields));\n"

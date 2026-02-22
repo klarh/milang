@@ -1,0 +1,51 @@
+/* Extensible toString and eq via open function chaining */
+
+Maybe = {Nothing; Just val}
+
+-- Extend toString for Maybe
+toString val = val ->
+  Nothing = "Nothing"
+  Just = "Just(" + toString val.val + ")"
+
+-- Extend eq for Maybe (Nothing == Nothing, Just x == Just y iff x == y)
+eqMaybe a b = a.val == b.val
+eq a b = a ->
+  Nothing = tag b == "Nothing"
+  Just = if (tag b == "Just") ~(eqMaybe a b) ~0
+
+main world =
+  /* toString on primitives (falls through to _toString) */
+  assert msg cond = if cond ~0 ~(world.io.println ("FAIL: " + msg))
+
+  assert "toString int" (toString 42 == "42")
+  assert "toString float" (toString 3.14 == "3.14")
+  assert "toString string" (toString "hi" == "hi")
+
+  /* toString on prelude types */
+  assert "toString True" (toString True == "True")
+  assert "toString False" (toString False == "False")
+  assert "toString Nil" (toString [] == "[]")
+
+  /* toString on custom types */
+  assert "toString Nothing" (toString Nothing == "Nothing")
+  assert "toString Just" (toString (Just 42) == "Just(42)")
+  assert "toString nested" (toString (Just (Just "x")) == "Just(Just(x))")
+
+  /* eq on primitives (falls through to ==) */
+  assert "eq ints" (eq 1 1 == 1)
+  assert "eq ints ne" (eq 1 2 == 0)
+  assert "eq strings" (eq "a" "a" == 1)
+  assert "eq strings ne" (eq "a" "b" == 0)
+
+  /* eq on custom types */
+  assert "eq Nothing Nothing" (eq Nothing Nothing == 1)
+  assert "eq Nothing Just" (eq Nothing (Just 1) == 0)
+  assert "eq Just Just same" (eq (Just 5) (Just 5) == 1)
+  assert "eq Just Just diff" (eq (Just 5) (Just 6) == 0)
+
+  /* contains uses eq */
+  ms = [Just 1, Nothing, Just 3]
+  assert "contains Just 1" (contains ms (Just 1) == 1)
+  assert "contains Just 2" (contains ms (Just 2) == 0)
+  assert "contains Nothing" (contains ms Nothing == 1)
+  0

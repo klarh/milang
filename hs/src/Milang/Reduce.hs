@@ -499,9 +499,10 @@ reduceAppD _ _ (Name "strlen") (StringLit s) = IntLit (fromIntegral $ T.length s
 reduceAppD _ _ (Name "toUpper") (StringLit s) = StringLit (T.toUpper s)
 reduceAppD _ _ (Name "toLower") (StringLit s) = StringLit (T.toLower s)
 reduceAppD _ _ (Name "trim") (StringLit s) = StringLit (T.strip s)
-reduceAppD _ _ (Name "toString") (IntLit n) = StringLit (T.pack (show n))
-reduceAppD _ _ (Name "toString") (FloatLit n) = StringLit (T.pack (show n))
-reduceAppD _ _ (Name "toString") (StringLit s) = StringLit s
+-- _toString: primitive conversion (fallback for the extensible toString)
+reduceAppD _ _ (Name "_toString") (IntLit n) = StringLit (T.pack (show n))
+reduceAppD _ _ (Name "_toString") (FloatLit n) = StringLit (T.pack (show n))
+reduceAppD _ _ (Name "_toString") (StringLit s) = StringLit s
 -- toInt / toFloat
 reduceAppD _ _ (Name "toInt") (StringLit s) =
   case reads (T.unpack s) :: [(Integer, String)] of
