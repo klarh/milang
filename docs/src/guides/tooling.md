@@ -14,13 +14,13 @@ This page collects practical tips for building Milang programs and the documenta
 
 ## C toolchain
 
-Milang emits C and requires a working C toolchain (gcc or clang) and the math library (``). On Debian/Ubuntu:
+Milang emits C and requires a working C toolchain (gcc or clang). On Debian/Ubuntu:
 
 ```bash
 sudo apt-get install build-essential pkg-config
 ```
 
-If compilation fails with undefined references, ensure your compiler and linker flags include ``.
+
 
 ## Building the docs (mdBook)
 
@@ -44,11 +44,6 @@ getField r "a"`.
 - Division/modulo by zero is handled at the runtime/C level (implementation-defined); avoid relying on undefined behaviour in portable code.
 - Use `milang dump` to inspect how the parser grouped expressions if you hit unexpected parse errors.
 
-## Troubleshooting build failures
-
-- If `./milang run` fails because the C compiler is missing: install `gcc` or `clang`.
-- If examples using FFI fail, try building with `--no-ffi` to isolate issues.
-- For documentation preprocessor problems, run `python3 docs/mdbook-milang.py` manually to see preprocessor errors.
 
 ## Quick checklist
 

@@ -97,14 +97,8 @@ Example session:
 
 Bindings persist across lines; rethink and refine definitions live.
 
-## Troubleshooting
-
-- Parse ambiguity with inline record literals: parenthesize the literal when passing it directly as an argument (`getField ({a = 1}) "a"`) or bind it to a name first.
-- `toInt`/`toFloat` return `Nothing` on failure — always handle the `Nothing` case.
-
-
 ## Next Steps
 
 - Read the full [syntax cheatsheet](../language/cheatsheet.md).
 - Inspect reduction with `./milang reduce` (see [Partial Evaluation](../language/partial-eval.md)).
-- Try the larger examples in `` at the repository root.
+- Try the larger examples in the repository root.
