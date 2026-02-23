@@ -5,7 +5,7 @@ partial evaluation as the core compilation model. Everything is an expression.
 
 ## Literals
 
-```
+```text
 42              -- integer
 3.14            -- float
 "hello"         -- string (supports \n \t \\ \")
@@ -19,7 +19,7 @@ partial evaluation as the core compilation model. Everything is an expression.
 
 ## Bindings
 
-```
+```milang
 x = 42                    -- value binding
 f x y = x + y             -- function binding (params before =)
 lazy := expensive_calc    -- lazy binding (thunk, evaluated on first use)
@@ -27,7 +27,7 @@ lazy := expensive_calc    -- lazy binding (thunk, evaluated on first use)
 
 ## Functions & Application
 
-```
+```milang
 f x y = x + y             -- define: name params = body
 f 3 4                     -- apply: juxtaposition (left-associative)
 (\x -> x + 1)             -- lambda
@@ -41,7 +41,7 @@ f << g                    -- compose right-to-left: \x -> f (g x)
 
 All operators are just functions. Standard arithmetic, comparison, logical:
 
-```
+```text
 + - * / % **              -- arithmetic (** is power)
 == /= < > <= >=           -- comparison
 && ||                     -- logical (short-circuit)
@@ -52,14 +52,14 @@ not x                     -- logical negation (function, not operator)
 
 Operators as functions and functions as operators:
 
-```
+```milang
 (+) 3 4                   -- operator in prefix: 7
 3 `add` 4                 -- function in infix (backtick syntax)
 ```
 
 ## Records
 
-```
+```text
 -- Anonymous record
 point = {x = 3; y = 4}
 
@@ -78,13 +78,22 @@ world.io.println              -- chained field access
 -- Destructuring
 {x; y} = point               -- binds x=3, y=4
 {myX = x; myY = y} = point   -- binds myX=3, myY=4
+
+-- Parsing gotcha
+-- When passing a record literal directly as an argument you may need to parenthesize
+-- the literal or bind it to a name to avoid parse ambiguity. For example:
+--   -- may need parentheses
+--   getField ({a = 1}) "a"
+--   -- or bind first
+--   r = {a = 1}
+--   getField r "a"
 ```
 
 ## ADTs (Algebraic Data Types)
 
 Uppercase bindings with braces declare tagged constructors:
 
-```
+```milang
 Shape = {Circle radius; Rect width height}
 
 -- Creates constructors:
@@ -99,7 +108,7 @@ Shape = {Circle {radius}; Rect {width; height}}
 
 The `->` operator introduces match alternatives:
 
-```
+```text
 -- Inline alternatives (separated by ;)
 f x = x -> 0 = "zero"; 1 = "one"; _ = "other"
 
@@ -133,7 +142,7 @@ area s = s ->
 
 Indented lines under a binding form a scope:
 
-```
+```milang
 -- With explicit body expression (body = the expression after =)
 compute x = result
   doubled = x * 2
@@ -150,12 +159,11 @@ makeVec x y =
 main world =
   world.io.println "hello"       -- effect: prints, result discarded
   world.io.println "world"       -- effect: prints, result discarded
-  0                              -- explicit body (exit code)
 ```
 
 Inline scopes use braces:
 
-```
+```milang
 f x = result { doubled = x * 2; result = doubled + 1 }
 ```
 
@@ -163,7 +171,7 @@ f x = result { doubled = x * 2; result = doubled + 1 }
 
 IO uses capability-based design. `main` receives `world`:
 
-```
+```milang,run
 main world =
   world.io.println "hello"           -- print line
   world.io.print "no newline"        -- print without newline
@@ -184,11 +192,11 @@ greet io = io.println "hello"
 main world = greet world.io          -- only give IO, not process/fs
 ```
 
-`main`'s return value is the process exit code (int → exit code, non-int → 0).
+`main`'s return value is the process exit code (int -> exit code, non-int -> 0).
 
 ## Imports
 
-```
+```text
 -- Local file import (result is a record of all top-level bindings)
 math = import "lib/math.mi"
 x = math.square 5
@@ -196,7 +204,7 @@ x = math.square 5
 -- URL import (cached locally)
 lib = import "https://example.com/lib.mi"
 
--- URL import with sha256 pinning (recommended for reproducibility)
+-- URL import with sha256 pinning (required for reproducibility)
 lib = import' "https://example.com/lib.mi" ({sha256 = "a1b2c3..."})
 
 -- C header import (auto-parses function signatures)
@@ -224,12 +232,16 @@ Use `milang pin <file>` to auto-discover URL imports and add sha256 hashes.
 
 Milang has five binding domains, each with its own operator:
 
-```
+```milang
 -- Value domain (=) — what it computes
 add a b = a + b
 
 -- Type domain (::) — structural type annotation
 add :: Num : Num : Num
+
+-- Sized numeric types: Int', UInt', Float' take a bit width
+-- Prelude aliases: Int = Int' 64, UInt = UInt' 64, Float = Float' 64, Byte = UInt' 8
+add8 :: Int' 8 : Int' 8 : Int' 8
 
 -- Traits domain (:~) — computational attributes / effect sets
 add :~ pure                          -- pure = [] (no effects)
@@ -256,21 +268,22 @@ distance p1 p2 = sqrt ((p2.x - p1.x)**2 + (p2.y - p1.y)**2)
 
 ## Thunks & Laziness
 
-```
+```milang
 ~expr                   -- thunk: delays evaluation
 x := expensive          -- lazy binding: creates thunk, evaluates once on use
 ```
 
 ## Metaprogramming
 
-```
+```milang
 #expr                   -- quote: capture AST as a record
 $expr                   -- splice: evaluate quoted AST back to code
+f #param = $param       -- auto-quote param: compiler quotes arg at call site
 ```
 
 ## Comments
 
-```
+```text
 -- line comment
 /* block comment (nestable) */
 ```
@@ -278,14 +291,14 @@ $expr                   -- splice: evaluate quoted AST back to code
 ## Built-in Functions
 
 ### Core
-- `if cond ~then ~else` — conditional (takes thunks)
+- `if cond then else` — conditional (auto-quotes branches via `#`-params)
 - `len xs` — length of string or list
 - `toString x` — convert to string
-- `toInt s` — parse string to int
-- `toFloat s` — parse string to float
+- `toInt s` — parse string to int; returns `Just` on success, `Nothing` on failure
+- `toFloat s` — parse string to float; returns `Just` on success, `Nothing` on failure
 
 ### String
-- `charAt i s` — character at index
+- `charAt i s` — character at index; returns `Just` character when index valid, otherwise `Nothing`
 - `slice start end s` — substring
 - `indexOf needle haystack` — find substring (-1 if not found)
 - `split sep s` — split string by separator
@@ -294,21 +307,21 @@ $expr                   -- splice: evaluate quoted AST back to code
 - `replace old new s` — string replacement
 
 ### List (prelude)
-- `head xs` / `tail xs` / `last xs` / `init xs`
+- `head xs` / `tail xs` / `last xs` / `init xs` — return `Maybe` (`Just` value or `Nothing`)
 - `map f xs` / `filter f xs` / `fold f acc xs`
 - `concat xs ys` / `push xs x` / `reverse xs`
 - `take n xs` / `drop n xs` / `slice start end xs`
 - `zip xs ys` / `enumerate xs` / `range start end`
 - `sum xs` / `product xs` / `join sep xs`
 - `any f xs` / `all f xs` / `contains x xs`
-- `get i xs` — element at index
+- `get i xs` — element at index (returns `Maybe`)
 - `sort xs` / `sortBy f xs`
 
 ### Record introspection
 - `fields r` — list of `{name, value}` records
 - `fieldNames r` — list of field name strings
-- `tag r` — constructor tag string (or "")
-- `getField r name` — dynamic field access
+- `tag r` — constructor `tag` string (or "")
+- `getField r name` — dynamic field access; returns `Just value` if present, otherwise `Nothing`.
 - `setField r name val` — return new record with field set
 
 ### Utility

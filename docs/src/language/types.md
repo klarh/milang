@@ -51,6 +51,54 @@ Short = Int' 16
 Word = UInt' 32
 ```
 
+
+<!-- Sized numeric types
+
+The primitive constructors `Int'`, `UInt'`, and `Float'` take a compile-time
+bit-width argument and provide fixed-width numeric types. The language treats
+these as distinct primitive types rather than mere annotations:
+
+- Signed integers (`Int' n`) use two's-complement semantics; arithmetic on
+  signed integers is performed modulo 2^n and results are interpreted in two's
+  complement when read as signed values. Overflow wraps around (modular
+  arithmetic).
+
+- Unsigned integers (`UInt' n`) are arithmetic modulo 2^n with values in the
+  range [0, 2^n-1]. Mixing signed and unsigned operands follows a conservative
+  promotion model: the operands are first promoted to the wider bit-width and
+  if any operand is unsigned the operation is performed in the unsigned domain
+  of that width.
+
+- Floating-point types (`Float' 32`, `Float' 64`) correspond to standard
+  IEEE-like single- and double-precision floats. Arithmetic on mixed-width
+  floats promotes to the wider precision before performing the operation.
+
+Promotion and result width:
+- For integer arithmetic, the result width is the maximum of the operand widths
+  after promotion; the resulting value is wrapped/clamped to that width as
+  described above.
+- For mixed signed/unsigned arithmetic the operation is performed in the
+  unsigned interpretation of the promoted width.
+
+Compile-time requirements and partial evaluation:
+- The bit-width argument (the `n` in `Int' n`) must be a compile-time
+  constant. The reducer treats sized-type aliases (for example `Int = Int' 64`)
+  as syntactic sugar and reduces type aliases away.
+- Note: currently the compiler treats sized types primarily as type-level
+  annotations and for FFI/representation purposes. Constant arithmetic is
+  evaluated by the reducer using Milang's unbounded numeric semantics (or the
+  platform default) and is not automatically wrapped/clamped to a target bit
+  width. If exact width-limited arithmetic is required, use explicit conversion
+  primitives or perform the operation in C via the FFI.
+
+Practical notes:
+- Use sized types when you need explicit control over representation and
+  ABI compatibility (FFI interop, binary formats, embedded targets).
+- The prelude exposes convenient aliases (`Int`, `UInt`, `Float`, `Byte`) for
+  common widths; you can define your own aliases like `Short = Int' 16`.
+-->
+
+
 ## Basic Examples
 
 ```milang,run
@@ -132,4 +180,4 @@ This works because `::` on its own line clearly marks the boundary between value
 
 ## Type Checking Behavior
 
-The type checker is bidirectional: it pushes `::` annotations downward and infers types bottom-up. Type errors are currently reported as warnings rather than hard errors. Checking is structural — records match by shape (field names and types), not by name. Any record with the right `fields` satisfies a record type.
+The type checker is bidirectional: it pushes `::` annotations downward and infers types bottom-up. Type errors are reported as errors. Checking is structural — records match by shape (field names and types), not by name. Any record with the right `fields` satisfies a record type.

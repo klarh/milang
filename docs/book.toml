@@ -1,6 +1,6 @@
 [book]
 title = "The Milang Programming Language"
-authors = ["Matthew"]
+authors = ["Matthew Spellings"]
 language = "en"
 src = "src"
 
@@ -10,4 +10,19 @@ build-dir = "../docs-out"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "ayu"
-git-repository-url = "https://github.com/milang/milang"
+
+[preprocessor.milang]
+command = "python3 mdbook-milang.py"
+
+[output.pandoc.profile.pdf]
+output-file = "The-Milang-Programming-Language.pdf"
+pdf-engine = "xelatex"
+variables.mainfont = "Droid Serif"
+variables.sansfont = "Droid Sans"
+variables.monofont = "Droid Sans Mono"
+variables.geometry = "margin=1in"
+
+[output.pandoc.profile.single]
+output-file = "The-Milang-Programming-Language.html"
+standalone = true
+self-contained = true

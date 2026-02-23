@@ -1,54 +1,101 @@
 # IO & the World
 
-<!-- STUB: Cover the capability-based IO model.
+Milang uses a capability-based IO model. Side effects are not global — they flow through an explicit `world` record that the runtime passes to `main`. If a function never receives `world` (or a sub-record of it), it cannot perform IO.
 
-  ## The world record
-  - `main world = ...` — main receives the world capability record
-  - `world` contains sub-records for different capabilities:
-    - `world.io` — console and file IO
-    - `world.process` — process execution and exit
-    - `world.argv` — command-line arguments (inert list, always available)
-    - `world.getEnv` — environment variable access
-  
-  ## Console IO
-  - `world.io.println msg` — print with newline
-  - `world.io.print msg` — print without newline
-  - `world.io.readLine` — read line from stdin (returns string)
-  
-  ## File IO
-  - `world.io.readFile path` — read entire file as string
-  - `world.io.writeFile path content` — write string to file
-  - `world.io.appendFile path content` — append to file
-  - `world.io.exists path` — check if file exists (1/0)
-  - `world.io.remove path` — delete file
-  
-  ## Process
-  - `world.process.exec cmd` — run shell command, return output string
-  - `world.process.exit code` — exit with status code
-  
-  ## Capability restriction
-  - Pass sub-records to restrict what helpers can do:
-    ```
-    greet io = io.println "hello"
-    main world = greet world.io    -- greet can only do IO, not exec
-    ```
-  - This is structural: greet literally cannot access world.process
-  
-  ## Exit code
-  - main's return value is the process exit code
-  - Integer → used as exit code
-  - Non-integer (record, string, etc.) → defaults to 0
-  
-  ## Script mode
-  - If there's no `main` with a parameter, all top-level bindings are
-    evaluated and printed (useful for quick calculations)
-  
-  ## Auto-monad spine
-  - The compiler automatically tracks which expressions are "world-tainted"
-    (impure — they transitively reference world)
-  - Impure expressions are guaranteed to execute in declaration order
-  - Pure expressions can float freely (potential for future parallelism)
-  - No monads, no do-notation — just write imperative-looking code
-  
-  Reference: tests/world_basic.mi, tests/file_io.mi, tests/process.mi
--->
+## Hello World
+
+```milang,run
+main world =
+  world.io.println "Hello, world!"
+```
+
+`main` is the program entry point. It receives `world` and its return value becomes the process exit code.
+
+## The World Record
+
+`world` is a record containing sub-records for different capabilities:
+
+| Path | Description |
+|------|-------------|
+| `world.io` | Console and file IO |
+| `world.process` | Process execution and exit |
+| `world.argv` | Command-line arguments (a list of strings) |
+| `world.getEnv` | Read environment variables |
+
+## Console IO
+
+```milang
+world.io.println msg          -- print with trailing newline
+world.io.print msg            -- print without newline
+line = world.io.readLine      -- read one line from stdin
+```
+
+## File IO
+
+```milang
+content = world.io.readFile "data.txt"
+world.io.writeFile "out.txt" content
+world.io.appendFile "log.txt" "new line\n"
+exists = world.io.exists "data.txt"       -- returns 1 or 0
+world.io.remove "tmp.txt"
+```
+
+## Process
+
+```milang
+output = world.process.exec "ls -la"      -- run shell command, return output
+world.process.exit 1                       -- exit immediately with status code
+```
+
+## Command-Line Arguments and Environment
+
+`world.argv` is an inert list — it does not perform IO, so it is always available:
+
+```milang
+main world =
+  world.io.println (len world.argv)
+```
+
+`world.getEnv` reads an environment variable by name:
+
+```milang
+home = world.getEnv "HOME"
+```
+
+## Capability Restriction
+
+Because capabilities are just record `fields`, you can restrict what a helper function can do by passing only the sub-record it needs:
+
+```milang,run
+greet io = io.println "hello from restricted IO"
+
+main world =
+  greet world.io
+```
+
+`greet` receives `world.io` and can print, but it structurally cannot access `world.process` — there is no way for it to execute shell commands or exit the process.
+
+## Exit Code
+
+The return value of `main` is used as the process exit code. An integer is used directly; any non-integer value (record, string, etc.) defaults to exit code 0.
+
+```milang,run
+main world =
+  world.io.println "exiting with code 0"
+```
+
+## Script Mode
+
+When a file has no `main` binding that takes a parameter, milang runs in script mode: every top-level binding is evaluated and printed.
+
+```milang,run
+x = 6 * 7
+y = x + 1
+greeting = "hello"
+```
+
+This is useful for quick calculations and exploring the language without writing a full `main` function.
+
+## Auto-Monad Spine
+
+You do not need monads or do-notation in milang. The compiler automatically tracks which expressions are *`world`-tainted* (they transitively reference `world`). Impure expressions are guaranteed to execute in the order they appear in the source. Pure expressions can float freely, opening the door for future optimizations. The result is imperative-looking code that is safe and predictable.

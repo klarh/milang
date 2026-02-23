@@ -1,19 +1,77 @@
 # Installation
 
-<!-- STUB: Cover these installation methods:
-  1. Building from source (the only method currently):
-     - Prerequisites: GHC 9.6+, cabal 3.10+ (Haskell toolchain)
-     - Also needs: gcc (for compiling output C code)
-     - Clone the repo, cd into it
-     - `cd hs && cabal build` to build the compiler
-     - `make` to build and symlink the binary
-     - `make test` to verify (should show 60 tests passing)
-  2. The binary is at: hs/dist-newstyle/build/.../milang
-     - `make` symlinks it to ./milang in the repo root
-  3. Optional: copy to somewhere on PATH
-  4. Verify: `./milang repl` should start the REPL
-  
-  Note: milang compiles to C and shells out to gcc, so gcc must be on PATH.
-  On Arch Linux: `pacman -S ghc cabal-install gcc`
-  On Ubuntu: `apt install ghc cabal-install gcc`
--->
+Milang is built from source using the Haskell toolchain and compiles programs to C via `gcc`.
+
+## Prerequisites
+
+You need three things installed:
+
+| Tool | Minimum version | Purpose |
+|------|----------------|---------|
+| **GHC** | 9.6+ | Haskell compiler (builds the milang compiler itself) |
+| **cabal** | 3.10+ | Haskell build tool |
+| **gcc** | any recent | C compiler (milang emits C, then calls gcc to produce binaries) |
+
+### Ubuntu / Debian
+
+```bash
+sudo apt install ghc cabal-install build-essential
+```
+
+### Arch Linux
+
+```bash
+sudo pacman -S ghc cabal-install base-devel
+```
+
+### macOS (Homebrew)
+
+```bash
+brew install ghc cabal-install gcc
+```
+
+## Building from Source
+
+Clone the repository and build:
+
+```bash
+git clone <repository>
+cd milang
+make
+```
+
+`make` runs `cabal build` inside the `hs/` directory.
+
+If you prefer to do it manually:
+
+```bash
+cd hs
+cabal update
+cabal build
+```
+
+## Verifying the Installation
+
+Start the REPL to confirm everything works:
+
+```bash
+./milang repl
+```
+
+You should see a `>` prompt. Try evaluating an expression:
+
+```text
+> 2 + 3
+5
+```
+
+Press Ctrl-D to exit.
+
+Run the test suite to make sure the compiler is healthy:
+
+```bash
+make test
+```
+
+This compiles and runs every `.mi` file in the repository's test suite. A successful run prints something like `Passed: 60, Failed: 0`.
+

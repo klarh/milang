@@ -41,5 +41,6 @@
 
 # Tools
 
+- [Tooling & Flags](./guides/tooling.md)
 - [REPL](./guides/repl.md)
 - [Compiler Modes](./guides/compiler-modes.md)
