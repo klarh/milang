@@ -6,9 +6,9 @@ main world =
   -- head/tail on non-empty → Just
   world.io.println (toString (head [1, 2, 3]))
   world.io.println (toString (tail [1, 2, 3]))
-  -- get: in bounds → Just, out of bounds → Nothing
-  world.io.println (toString (get [10, 20, 30] 1))
-  world.io.println (toString (get [10, 20, 30] 5))
+  -- at: in bounds → Just, out of bounds → Nothing
+  world.io.println (toString (at [10, 20, 30] 1))
+  world.io.println (toString (at [10, 20, 30] 5))
   -- toInt: valid → Just, invalid → Nothing
   world.io.println (toString (toInt "42"))
   world.io.println (toString (toInt "abc"))

@@ -14,5 +14,5 @@ tail xs = xs ->
   [_, ...rest] = rest
   _ = []
 
-sum_list xs = if (len xs == 0) 0 (get xs 0 + sum_list (tail xs))
+sum_list xs = if (len xs == 0) 0 (at xs 0 + sum_list (tail xs))
 main3 = world.io.println (sum_list [10, 20, 30, 40])

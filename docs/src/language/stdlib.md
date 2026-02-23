@@ -66,7 +66,7 @@ These functions are designed to be extended via [open function chaining](./open-
 | `filter` | `(a : Num) : List : List` | Keep elements where predicate is `truthy`. |
 | `concat` | `List : List : List` | Concatenate two lists. |
 | `push` | `List : a : List` | Append element to end of list. |
-| `get` | `List : Num : Maybe` | Get element at index (zero-based); returns `Nothing` if out of bounds. |
+| `at` | `List : Num : Maybe` | Get element at index (zero-based); returns `Nothing` if out of bounds. `at'` takes index first. |
 | `sum` | `List : Num` | Sum of numeric list. |
 | `product` | `List : Num` | Product of numeric list. |
 | `any` | `(a : Num) : List : Num` | `1` if predicate is `truthy` for any element. |

@@ -314,7 +314,7 @@ f #param = $param       -- auto-quote param: compiler quotes arg at call site
 - `zip xs ys` / `enumerate xs` / `range start end`
 - `sum xs` / `product xs` / `join sep xs`
 - `any f xs` / `all f xs` / `contains x xs`
-- `get i xs` — element at index (returns `Maybe`)
+- `at lst i` / `at' i lst` — element at index (returns `Maybe`)
 - `sort xs` / `sortBy f xs`
 
 ### Record introspection

@@ -8,15 +8,15 @@ main1 = world.io.println (factorial 10)
 fib n = if (n < 2) n (fib (n - 1) + fib (n - 2))
 main2 = world.io.println (fib 10)
 
--- Recursive list operations using built-in get/len/push
+-- Recursive list operations using built-in at/len/push
 -- sum_list: sum all elements
 tail xs = xs ->
   [_, ...rest] = rest
   _ = []
 
-sum_list xs = if (len xs == 0) 0 (get xs 0 + sum_list (tail xs))
+sum_list xs = if (len xs == 0) 0 (at xs 0 + sum_list (tail xs))
 main3 = world.io.println (sum_list [10, 20, 30, 40])
 
 -- Recursive reverse
-reverse_list xs = if (len xs == 0) [] (push (reverse_list (tail xs)) (get xs 0))
+reverse_list xs = if (len xs == 0) [] (push (reverse_list (tail xs)) (at xs 0))
 main4 = world.io.println (reverse_list [1, 2, 3, 4])

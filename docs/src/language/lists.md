@@ -25,7 +25,7 @@ b = range 1 11
 ## Accessing Elements
 
 `head`, `tail`, `last`, and `init` all return `Maybe` values — `Just x` on
-success, `Nothing` on an empty list. `get` returns `Maybe` for index access.
+success, `Nothing` on an empty list. `at` returns `Maybe` for index access.
 
 ```milang,run
 xs = [10, 20, 30]
@@ -33,7 +33,7 @@ a = head xs
 b = tail xs
 c = last xs
 d = init xs
-e = get xs 1
+e = at xs 1
 f = head []
 ```
 

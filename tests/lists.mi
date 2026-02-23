@@ -5,9 +5,9 @@ main1 = world.io.println xs
 -- len
 main2 = world.io.println (len xs)
 
--- get (indexing)
-main3 = world.io.println (get xs 0)
-main4 = world.io.println (get xs 4)
+-- at (indexing)
+main3 = world.io.println (at xs 0)
+main4 = world.io.println (at xs 4)
 
 -- push
 ys = push xs 6

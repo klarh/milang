@@ -49,7 +49,7 @@ A more advanced "Hello World" might greet someone by name, using command-line ar
 ```milang,run
 -- main entrypoint
 main world =
-  name = fromMaybe "World" (get world.argv 1)
+  name = fromMaybe "World" (at' 1 world.argv)
   world.io.println ("Hello, " + name + "!")
 ```
 
@@ -68,7 +68,7 @@ Run this from your terminal:
 This example shows several concepts:
 
 - `world.argv`: A list of strings from the command line.
-- `get`: A standard library function to safely get an element from a list by index. It returns a `Maybe` value.
+- `at'`: A prelude function to safely get an element from a list by index. It returns a `Maybe` value. (`at'` takes index first; `at` takes list first for use as an operator: `` xs `at` 1 ``).
 - `fromMaybe`: A prelude function that unwraps a `Maybe`, returning a default value if `Nothing`.
 
 This pattern of using helpers to safely extract information is common in Milang.
