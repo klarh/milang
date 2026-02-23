@@ -115,7 +115,8 @@ reduceD d env (BinOp op l r) =
     -- If reduceBinOp left it as a residual BinOp, try user-defined operator
     BinOp op' _ _ | op' == op ->
       case envLookup op env of
-        Just fn -> reduceD d env (App (App fn l') r')
+        -- Pass unreduced r so #-params on operators can auto-quote
+        Just fn -> reduceD d env (App (App fn l') r)
         Nothing -> result
     _ -> result
 
@@ -132,21 +133,25 @@ reduceD d env (App f x) =
          else foldl App (Name n) args'  -- leave recursive call residual
     _ ->
       let f' = reduceD d env f
-          x' = reduceD d env x
-      in reduceAppD d env f' x'
+      in case f' of
+           -- If the function expects a quoted param, pass arg unreduced
+           Lam p _ | isQuotedParam p -> reduceAppD d env f' x
+           _ -> let x' = reduceD d env x in reduceAppD d env f' x'
 
 reduceD d env (Lam p b) =
-  -- Check if any env value has p as a free variable (capture risk)
-  let envFVs = Set.unions (map exprFreeVars (Map.elems (envMap env)))
-  in if p `Set.member` envFVs
+  -- Check if any env value has the param's binding name as a free variable (capture risk)
+  let pn = lamParamName p
+      envFVs = Set.unions (map exprFreeVars (Map.elems (envMap env)))
+  in if pn `Set.member` envFVs
      then -- Alpha-rename the lambda parameter to avoid capture
        let allNames = Set.unions [envFVs, exprFreeVars b, Map.keysSet (envMap env)]
-           fresh = freshName p allNames
-           b' = substExpr p (Name fresh) b
+           fresh = freshName pn allNames
+           b' = substExpr pn (Name fresh) b
+           newParam = if isQuotedParam p then "#" <> fresh else fresh
            env' = envDelete fresh env
-       in Lam fresh (reduceD d env' b')
+       in Lam newParam (reduceD d env' b')
      else
-       let env' = envDelete p env
+       let env' = envDelete pn env
        in Lam p (reduceD d env' b)
 
 reduceD d env (With body bindings) =
@@ -190,9 +195,15 @@ reduceD _ _ (Quote body) =
 
 reduceD d env (Splice body) =
   let body' = reduceD d env body
-  in case unquoteExpr body' of
-       Just expr -> reduceD d env expr
-       Nothing   -> Splice body'  -- residual: can't splice non-AST value
+  in case body' of
+       -- If body reduced to a bare name, keep splice residual
+       -- (the name will resolve to a quoted AST record once bound)
+       Name _ -> Splice body'
+       _ -> case unquoteExpr body' of
+              -- Force thunks after splicing: splice brings code into
+              -- the evaluation context, so thunks should be unwrapped.
+              Just expr -> forceThunkD d env (reduceD d env expr)
+              Nothing   -> Splice body'  -- residual: can't splice non-AST value
 
 reduceD d env (Thunk body) = Thunk (applyEnvD d env body)  -- defer evaluation but capture bindings
 
@@ -504,14 +515,12 @@ reduceAppD d env (Name "not") arg =
     IntLit 0 -> IntLit 1
     IntLit _ -> IntLit 0
     other    -> App (Name "not") other
--- Built-in `if`: if cond ~then ~else
--- Fully applied: App (App (App (Name "if") cond) thenExpr) elseExpr
--- Uses truthy conversion so if works with bools, lists, strings, etc.
-reduceAppD d env (App (App (Name "if") cond) thenExpr) elseExpr =
-  case envTruthy d env cond of
-    IntLit 0 -> forceThunkD d env elseExpr  -- false
-    IntLit _ -> forceThunkD d env thenExpr  -- true (any non-zero)
-    _        -> App (App (App (Name "if") cond) thenExpr) elseExpr  -- residual
+-- Quoted parameter: auto-quote the argument (don't evaluate it)
+reduceAppD d env (Lam p body) arg
+  | isQuotedParam p =
+    let realName = lamParamName p
+        quoted = quoteExpr arg
+    in reduceD (d - 1) (envInsert realName quoted env) body
 -- Beta reduction: (\x -> body) arg → substitute x with arg in body
 -- Uses full environment so recursive calls and outer bindings are available
 reduceAppD d env (Lam p body) arg =
@@ -638,7 +647,7 @@ exprFreeVars (StringLit _)    = Set.empty
 exprFreeVars (Name n)         = Set.singleton n
 exprFreeVars (BinOp op l r)   = Set.insert op $ Set.union (exprFreeVars l) (exprFreeVars r)
 exprFreeVars (App f x)        = Set.union (exprFreeVars f) (exprFreeVars x)
-exprFreeVars (Lam p b)        = Set.delete p (exprFreeVars b)
+exprFreeVars (Lam p b)        = Set.delete (lamParamName p) (exprFreeVars b)
 exprFreeVars (With body bs)   =
   let bnames = Set.fromList (map bindName bs)
   in Set.union (Set.difference (exprFreeVars body) bnames)
@@ -676,12 +685,14 @@ substExpr _ _ v@(StringLit _) = v
 substExpr n e (BinOp op l r) = BinOp op (substExpr n e l) (substExpr n e r)
 substExpr n e (App f x) = App (substExpr n e f) (substExpr n e x)
 substExpr n e (Lam p b)
-  | p == n    = Lam p b  -- shadowed
-  | p `Set.member` exprFreeVars e =
+  | lamParamName p == n    = Lam p b  -- shadowed
+  | lamParamName p `Set.member` exprFreeVars e =
     -- Alpha-rename to avoid capture
-    let fresh = freshName p (Set.unions [exprFreeVars e, exprFreeVars b, Set.singleton n])
-        b' = substExpr p (Name fresh) b
-    in Lam fresh (substExpr n e b')
+    let pn = lamParamName p
+        fresh = freshName pn (Set.unions [exprFreeVars e, exprFreeVars b, Set.singleton n])
+        b' = substExpr pn (Name fresh) b
+        newParam = if isQuotedParam p then "#" <> fresh else fresh
+    in Lam newParam (substExpr n e b')
   | otherwise = Lam p (substExpr n e b)
 substExpr n e (With body bs) =
   let shadowed = n `elem` map bindName bs
@@ -752,6 +763,11 @@ consToList _ = Nothing
 quoteExpr :: Expr -> Expr
 quoteExpr (IntLit n)    = Record "Int"   [mkBind "val" (IntLit n)]
 quoteExpr (FloatLit d)  = Record "Float" [mkBind "val" (FloatLit d)]
+quoteExpr (SizedInt n w s) = Record "SizedInt" [mkBind "val" (IntLit n),
+                                                 mkBind "width" (IntLit w),
+                                                 mkBind "signed" (IntLit (if s then 1 else 0))]
+quoteExpr (SizedFloat d w) = Record "SizedFloat" [mkBind "val" (FloatLit d),
+                                                    mkBind "width" (IntLit w)]
 quoteExpr (StringLit s) = Record "Str"   [mkBind "val" (StringLit s)]
 quoteExpr (Name n)      = Record "Var"   [mkBind "name" (StringLit n)]
 quoteExpr (App f x)     = Record "App"   [mkBind "fn" (quoteExpr f),
@@ -803,6 +819,15 @@ quotePat PWild         = Record "PWild" []
 unquoteExpr :: Expr -> Maybe Expr
 unquoteExpr (Record "Int" bs)    = IntLit <$> getIntField "val" bs
 unquoteExpr (Record "Float" bs)  = FloatLit <$> getFloatField "val" bs
+unquoteExpr (Record "SizedInt" bs) = do
+  val    <- getIntField "val" bs
+  width  <- getIntField "width" bs
+  signed <- getIntField "signed" bs
+  Just (SizedInt val width (signed /= 0))
+unquoteExpr (Record "SizedFloat" bs) = do
+  val   <- getFloatField "val" bs
+  width <- getIntField "width" bs
+  Just (SizedFloat val width)
 unquoteExpr (Record "Str" bs)    = StringLit <$> getStrField "val" bs
 unquoteExpr (Record "Var" bs)    = Name <$> getStrField "name" bs
 unquoteExpr (Record "App" bs)    = do
@@ -852,6 +877,8 @@ unquoteExpr (Record "Splice" bs) = Splice <$> (getField "body" bs >>= unquoteExp
 -- Raw values pass through: allows mixing AST records with concrete values
 unquoteExpr e@(IntLit _)    = Just e
 unquoteExpr e@(FloatLit _)  = Just e
+unquoteExpr e@(SizedInt {})  = Just e
+unquoteExpr e@(SizedFloat {}) = Just e
 unquoteExpr e@(StringLit _) = Just e
 unquoteExpr e@(Name _)      = Just e
 unquoteExpr e@(ListLit _)   = Just e  -- unreduced list literal passes through
@@ -1004,6 +1031,9 @@ matchPat :: Pat -> Expr -> Maybe [(Text, Expr)]
 matchPat (PVar v) e = Just [(v, e)]
 matchPat PWild    _ = Just []
 matchPat (PLit (IntLit a)) (IntLit b)
+  | a == b    = Just []
+  | otherwise = Nothing
+matchPat (PLit (IntLit a)) (SizedInt b _ _)
   | a == b    = Just []
   | otherwise = Nothing
 matchPat (PLit (StringLit a)) (StringLit b)

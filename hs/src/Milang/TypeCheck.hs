@@ -271,7 +271,7 @@ inferExpr env (App f x) =
     _ -> TAny
 inferExpr env (Lam p body) =
   -- Can't infer arg type without annotation; infer body with param as TAny
-  let env' = Map.insert p TAny env
+  let env' = Map.insert (lamParamName p) TAny env
   in TFun TAny (inferExpr env' body)
 inferExpr env (Record tag fields) =
   TRecord tag [(bindName b, inferExpr env (bindBody b)) | b <- fields]

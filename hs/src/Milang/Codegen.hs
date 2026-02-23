@@ -185,7 +185,7 @@ exprToC st (App f x) = do
 
 exprToC st (Lam param body) = do
   bc <- exprToC st body
-  pure $ "mi_expr_lam(\"" ++ T.unpack param ++ "\", " ++ bc ++ ")"
+  pure $ "mi_expr_lam(\"" ++ T.unpack (lamParamName param) ++ "\", " ++ bc ++ ")"
 
 exprToC st (With body bindings) = do
   bc <- exprToC st body
@@ -228,8 +228,10 @@ exprToC st (CFunction hdr cname retTy paramTys) = do
   nativeCode <- cfunctionToC st (T.unpack cname) retTy paramTys
   pure $ "mi_expr_val(" ++ nativeCode ++ ")"
 
-exprToC _ (Quote _) = error "Quote (#) not resolved at compile time — this is a compiler bug"
-exprToC _ (Splice _) = error "Splice ($) not resolved at compile time — this is a compiler bug"
+-- At runtime, quote/splice are identity: the #-param mechanism is compile-time only.
+-- Residual splices in lambda bodies become regular variable references.
+exprToC st (Quote e) = exprToC st e
+exprToC st (Splice e) = exprToC st e
 
 -- | Escape a string for C
 cStringLit :: String -> String

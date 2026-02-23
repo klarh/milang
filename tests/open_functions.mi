@@ -8,7 +8,7 @@ Maybe = {Nothing; Just val}
 truthy val = val -> Nothing = 0; Just = 1
 
 main world =
-  assert msg cond = if cond ~0 ~(world.io.println ("FAIL: " ++ msg))
+  assert msg cond = if cond 0 (world.io.println ("FAIL: " ++ msg))
 
   assert "Nothing is falsy" (truthy Nothing == 0)
   assert "Just is truthy" (truthy (Just 42) == 1)

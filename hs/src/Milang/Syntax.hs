@@ -83,6 +83,16 @@ data Alt = Alt
   , altBody  :: Expr
   } deriving (Show, Eq)
 
+-- | Get the binding name of a lambda parameter (strips # for quoted params)
+lamParamName :: Text -> Text
+lamParamName p
+  | Just p' <- T.stripPrefix "#" p = p'
+  | otherwise = p
+
+-- | Check if a lambda parameter is a quoted (auto-quote) parameter
+isQuotedParam :: Text -> Bool
+isQuotedParam = T.isPrefixOf "#"
+
 -- | Pretty-print an expression (for dump/debug)
 prettyExpr :: Int -> Expr -> String
 prettyExpr _ (IntLit n)      = show n

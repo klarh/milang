@@ -1,7 +1,7 @@
 /* User-defined operators and parse-domain features */
 
 /* Define a custom comparison operator */
-(<=>) a b = if (a == b) ~0 ~(if (a > b) ~1 ~(0 - 1))
+(<=>) a b = if (a == b) 0 (if (a > b) 1 (0 - 1))
 
 /* Set its precedence via parse domain */
 (<=>) :! {prec = 30; assoc = Left}

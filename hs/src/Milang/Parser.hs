@@ -270,8 +270,7 @@ pBindingAt ref = do
   startOff <- getOffset
   pos <- grabPos
   name <- pBindingName
-  params <- many (try pIdentifier)
-  -- Try -> (match on last param) or = / :=
+  params <- many (try pParam)
   matchForm <- optional (try (symbol "->"))
   case matchForm of
     Just _ | not (null params) -> do
@@ -845,7 +844,7 @@ pFloatLit = FloatLit <$> lexeme (L.signed (pure ()) L.float)
 pLambdaML :: Bool -> Parser Expr
 pLambdaML ml = do
   _ <- symbol "\\"
-  params <- some pIdentifier
+  params <- some pParam
   _ <- symbol "->"
   body <- if ml then pExprML else pExpr
   pure $ foldr Lam body params
@@ -882,6 +881,18 @@ pAnyIdentifier = lexeme $ do
   c <- letterChar <|> char '_'
   cs <- many (alphaNumChar <|> char '_' <|> char '\'')
   pure $ T.pack (c : cs)
+
+-- | A quoted parameter: #identifier (auto-quote argument at call site)
+pQuotedParam :: Parser Text
+pQuotedParam = try $ lexeme $ do
+  _ <- char '#'
+  c <- lowerChar <|> char '_'
+  cs <- many (alphaNumChar <|> char '_' <|> char '\'')
+  pure $ T.pack ('#' : c : cs)
+
+-- | A lambda/binding parameter: either a regular identifier or a quoted param
+pParam :: Parser Text
+pParam = pQuotedParam <|> pIdentifier
 
 -- ── Patterns ──────────────────────────────────────────────────────
 

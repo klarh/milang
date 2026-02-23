@@ -11,11 +11,11 @@ toString val = val ->
 eqMaybe a b = a.val == b.val
 eq a b = a ->
   Nothing = tag b == "Nothing"
-  Just = if (tag b == "Just") ~(eqMaybe a b) ~0
+  Just = if (tag b == "Just") (eqMaybe a b) 0
 
 main world =
   /* toString on primitives (falls through to _toString) */
-  assert msg cond = if cond ~0 ~(world.io.println ("FAIL: " + msg))
+  assert msg cond = if cond 0 (world.io.println ("FAIL: " + msg))
 
   assert "toString int" (toString 42 == "42")
   assert "toString float" (toString 3.14 == "3.14")
