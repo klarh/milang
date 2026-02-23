@@ -42,6 +42,37 @@ main world =
 
 This makes `greet` unable to access process or filesystem capabilities.
 
+## Handling Command-Line Arguments
+
+A more advanced "Hello World" might greet someone by name, using command-line arguments. The `world.argv` list contains the arguments. The following example, which you can save as `hello_argv.mi`, demonstrates this. It uses a helper function to safely get an argument or fall back to a default value.
+
+```milang,run
+-- main entrypoint
+main world =
+  name = fromMaybe "World" (get world.argv 1)
+  world.io.println ("Hello, " + name + "!")
+```
+
+Run this from your terminal:
+
+```bash
+# With no arguments
+./milang run hello_argv.mi
+# Expected output: Hello, World!
+
+# With an argument
+./milang run hello_argv.mi "Universe"
+# Expected output: Hello, Universe!
+```
+
+This example shows several concepts:
+
+- `world.argv`: A list of strings from the command line.
+- `get`: A standard library function to safely get an element from a list by index. It returns a `Maybe` value.
+- `fromMaybe`: A prelude function that unwraps a `Maybe`, returning a default value if `Nothing`.
+
+This pattern of using helpers to safely extract information is common in Milang.
+
 ## Script Mode (quick experiments)
 
 When a file does not define `main` that takes a parameter, `milang run` executes in script mode: every top-level binding is evaluated and printed. This is ideal for short tests and REPL-style exploration.
@@ -55,13 +86,24 @@ Script-mode output prints name/value pairs for top-level bindings (prelude/inter
 
 ## Printing non-strings and Maybe values
 
-Use `toString` to render non-string values. Many standard library functions return `Maybe` — e.g., `toInt`, `toFloat`, `charAt`, and `getField` — so pattern-match on `Just`/`Nothing` when appropriate.
+Use `toString` to render non-string values. Many standard library functions return `Maybe` to handle operations that might fail, like converting a string to a number. For example, `toInt` returns `Just(number)` on success and `Nothing` on failure.
+
+Use `toString` to safely print these `Maybe` values.
 
 ```milang,run
 main world =
   world.io.println (toString (toInt "42"))
   world.io.println (toString (toInt "abc"))
 ```
+
+This will print:
+
+```text
+Just(42)
+Nothing
+```
+
+The `Maybe` type is how Milang handles optional values, avoiding nulls and making error handling more explicit. You can use [pattern matching](../language/pattern-matching.md) to safely unwrap these values.
 
 ## Compiling to C
 
@@ -95,7 +137,7 @@ Example session:
 [1, 4, 9, 16]
 ```
 
-Bindings persist across lines; rethink and refine definitions live.
+Bindings persist across lines; you may rethink and refine definitions live. Many common functions like `map`, `filter`, and `fold` are available automatically because they are part of the prelude.
 
 ## Next Steps
 
