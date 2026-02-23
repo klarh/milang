@@ -6,3 +6,6 @@ milang
 tests/*.c
 !tests/lib/*.c
 docs-out/
+
+__pycache__
+docs/out.txt
