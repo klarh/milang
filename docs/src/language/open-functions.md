@@ -48,8 +48,8 @@ Result = {Err msg; Ok val}
 truthy val = val -> Err = 0; Ok = 1
 
 main world =
-  world.io.println (toString (if (Ok 42) ~"yes" ~"no"))
-  world.io.println (toString (if (Err "oops") ~"yes" ~"no"))
+  world.io.println (toString (if (Ok 42) "yes" "no"))
+  world.io.println (toString (if (Err "oops") "yes" "no"))
   world.io.println (toString (not (Err "fail")))
 ```
 

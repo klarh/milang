@@ -9,7 +9,7 @@ around exactly like any other function.
 Wrap the operator name in parentheses and define it as a normal function:
 
 ```milang,run
-(<=>) a b = if (a == b) ~0 ~(if (a > b) ~1 ~(0 - 1))
+(<=>) a b = if (a == b) 0 (if (a > b) 1 (0 - 1))
 cmp1 = 5 <=> 3
 cmp2 = 3 <=> 3
 cmp3 = 1 <=> 5

@@ -26,11 +26,10 @@ to prevent eager evaluation:
 
 ```milang
 -- Old style (still works, but no longer necessary):
-result = if (x > 5) ~(x * 2) ~(x * 3)
+result = if (x > 5) (x * 2) (x * 3)
 ```
 
-The current `if` uses **auto-quote parameters** (`#param`) so the compiler
-automatically quotes each branch at the call site. You can now write:
+The `if` conditional quotes its branches implicitly; write conditionals like this: 
 
 ```milang,run
 x = 10
@@ -70,7 +69,7 @@ for establishing declaration-order dependencies without paying upfront cost.
 
 | Situation | Mechanism |
 |---|---|
-| Conditional branches (`if`) | Auto-quote params handle this; `~` no longer needed |
+| Conditional branches (`if`) | Auto-quoted branch parameters handle this |
 | Short-circuit logic (`&&`, `\|\|`) | Auto-quote params handle the lazy operand |
 | Deferred expensive work | Lazy binding `:=` |
 | Controlling IO ordering | Thunks delay side effects until forced |

@@ -18,7 +18,7 @@ The `:!` annotation domain declares how the parser should handle a user-defined 
 
 ```milang,run
 (<=>) :! {prec = 30; assoc = Left}
-(<=>) a b = if (a == b) ~0 ~(if (a > b) ~1 ~(0 - 1))
+(<=>) a b = if (a == b) 0 (if (a > b) 1 (0 - 1))
 
 cmp1 = 5 <=> 3
 cmp2 = 3 <=> 3

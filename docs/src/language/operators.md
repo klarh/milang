@@ -148,6 +148,6 @@ associativity are set with the parse domain `:!`. See the
 chapters for details.
 
 ```milang
-(<=>) a b = if (a == b) ~0 ~(if (a > b) ~1 ~(0 - 1))
+(<=>) a b = if (a == b) 0 (if (a > b) 1 (0 - 1))
 (<=>) :! {prec = 30; assoc = Left}
 ```
