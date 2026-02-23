@@ -138,21 +138,32 @@ reduceD d env (App f x) =
            Lam p _ | isQuotedParam p -> reduceAppD d env f' x
            _ -> let x' = reduceD d env x in reduceAppD d env f' x'
 
-reduceD d env (Lam p b) =
+reduceD d env (Lam p b)
+  -- Auto-quote params: always alpha-rename to a fresh name.  Spliced expressions
+  -- in the body may introduce names that coincide with the param name; renaming
+  -- prevents the Lam from accidentally capturing those names.
+  | isQuotedParam p =
+    let pn = lamParamName p
+        allNames = Set.unions [ exprFreeVars b, Map.keysSet (envMap env)
+                              , Set.unions (map exprFreeVars (Map.elems (envMap env))) ]
+        fresh = freshName pn allNames
+        b' = substExpr pn (Name fresh) b
+        env' = envDelete fresh env
+    in Lam ("#" <> fresh) (reduceD d env' b')
   -- Check if any env value has the param's binding name as a free variable (capture risk)
-  let pn = lamParamName p
-      envFVs = Set.unions (map exprFreeVars (Map.elems (envMap env)))
-  in if pn `Set.member` envFVs
-     then -- Alpha-rename the lambda parameter to avoid capture
-       let allNames = Set.unions [envFVs, exprFreeVars b, Map.keysSet (envMap env)]
-           fresh = freshName pn allNames
-           b' = substExpr pn (Name fresh) b
-           newParam = if isQuotedParam p then "#" <> fresh else fresh
-           env' = envDelete fresh env
-       in Lam newParam (reduceD d env' b')
-     else
-       let env' = envDelete pn env
-       in Lam p (reduceD d env' b)
+  | otherwise =
+    let pn = lamParamName p
+        envFVs = Set.unions (map exprFreeVars (Map.elems (envMap env)))
+    in if pn `Set.member` envFVs
+       then -- Alpha-rename the lambda parameter to avoid capture
+         let allNames = Set.unions [envFVs, exprFreeVars b, Map.keysSet (envMap env)]
+             fresh = freshName pn allNames
+             b' = substExpr pn (Name fresh) b
+             env' = envDelete fresh env
+         in Lam fresh (reduceD d env' b')
+       else
+         let env' = envDelete pn env
+         in Lam p (reduceD d env' b)
 
 reduceD d env (With body bindings) =
   let env' = evalBindingsD d env bindings
@@ -516,11 +527,21 @@ reduceAppD d env (Name "not") arg =
     IntLit _ -> IntLit 0
     other    -> App (Name "not") other
 -- Quoted parameter: auto-quote the argument (don't evaluate it)
+-- Alpha-rename the parameter if its name appears free in the arg, to avoid
+-- the splice $param resolving the arg's free variable instead of the param.
 reduceAppD d env (Lam p body) arg
   | isQuotedParam p =
     let realName = lamParamName p
-        quoted = quoteExpr arg
-    in reduceD (d - 1) (envInsert realName quoted env) body
+        argFV = exprFreeVars arg
+    in if realName `Set.member` argFV
+       then -- Alpha-rename to avoid capture
+         let allNames = Set.unions [argFV, exprFreeVars body, Map.keysSet (envMap env)]
+             fresh = freshName realName allNames
+             body' = substExpr realName (Name fresh) body
+             quoted = quoteExpr arg
+         in reduceD (d - 1) (envInsert fresh quoted env) body'
+       else let quoted = quoteExpr arg
+            in reduceD (d - 1) (envInsert realName quoted env) body
 -- Beta reduction: (\x -> body) arg → substitute x with arg in body
 -- Uses full environment so recursive calls and outer bindings are available
 reduceAppD d env (Lam p body) arg =

@@ -284,6 +284,8 @@ pBindingAt ref = do
       pure $ Binding name False params children (Just pos) Nothing Nothing Nothing srcText
     _ -> do
       lazy <- pBindOp
+      -- Allow backslash-newline continuation after = or :=
+      _ <- many (try $ char '\\' *> newline *> sc)
       body <- try pExpr <|> pure (IntLit 0)
       mMatch <- optional (try pMatchArrow)
       let body' = case mMatch of
@@ -899,12 +901,24 @@ pParam = pQuotedParam <|> pIdentifier
 pPattern :: Parser Pat
 pPattern = choice
   [ pPatRecord
+  , pPatConstructor
   , pPatList
   , pPatLitInt
   , pPatLitStr
   , pPatWild
   , pPatVar
-  , pPatBareConstructor
+  ]
+
+-- Atomic patterns: used as positional args to constructors (no ambiguous nesting)
+pPatAtom :: Parser Pat
+pPatAtom = choice
+  [ pPatRecord
+  , pPatList
+  , pPatLitInt
+  , pPatLitStr
+  , pPatWild
+  , try (between (symbol "(") (symbol ")") pPattern)
+  , pPatVar
   ]
 
 -- Tag {x; y} or Tag {x = pat; y = pat}
@@ -972,10 +986,13 @@ pPatWild = PWild <$ symbol "_"
 pPatVar :: Parser Pat
 pPatVar = PVar <$> pIdentifier
 
--- Bare uppercase name as zero-field constructor pattern: Point = ...
-pPatBareConstructor :: Parser Pat
-pPatBareConstructor = try $ do
+-- Uppercase Tag followed by zero or more positional arg patterns
+pPatConstructor :: Parser Pat
+pPatConstructor = try $ do
   tag <- pAnyIdentifier
   if not (T.null tag) && isUpper (T.head tag)
-    then pure $ PRec tag []
+    then do
+      args <- many (try pPatAtom)
+      let fields = zipWith (\i p -> (T.pack ("_" ++ show i), p)) [(0::Int)..] args
+      pure $ PRec tag fields
     else fail "expected uppercase constructor"

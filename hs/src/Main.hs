@@ -35,7 +35,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    ["run", file]            -> cmdRun file
+    ("run" : file : userArgs)   -> cmdRun file userArgs
     ["compile", file]        -> cmdCompile file Nothing
     ["compile", file, outf]  -> cmdCompile file (Just outf)
     ["dump", file]           -> cmdDump file
@@ -195,8 +195,8 @@ cmdCompile file mout = do
       hPutStrLn stderr $ "Wrote " ++ outf
 
 -- | run: compile to C, invoke gcc, run the binary
-cmdRun :: FilePath -> IO ()
-cmdRun file = do
+cmdRun :: FilePath -> [String] -> IO ()
+cmdRun file userArgs = do
   result <- loadAndReduce file
   case result of
     Left err       -> hPutStrLn stderr err >> exitFailure
@@ -217,7 +217,7 @@ cmdRun file = do
           hPutStrLn stderr cerr
           exitFailure
         ExitSuccess ->
-          callProcess binFile []
+          callProcess binFile userArgs
 
 -- | pin: fetch URL imports, print sha256 hashes, rewrite file with hashes
 cmdPin :: FilePath -> IO ()
