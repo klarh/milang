@@ -151,9 +151,10 @@ compute x = result
 
 -- Without body expression (scope returns implicit record)
 makeVec x y =
-  magnitude = sqrt (x**2 + y**2)
-  normalized = {x = x / magnitude; y = y / magnitude}
--- Returns: {magnitude = 5.0, normalized = {x = 0.6, y = 0.8}}
+  dx = x ** 2
+  dy = y ** 2
+  sumSquares = dx + dy
+-- Returns: {dx = 49, dy = 9, sumSquares = 58}
 
 -- Bare expressions in scopes evaluate for effect, not included in record
 main world =
@@ -263,7 +264,7 @@ add :? """
 distance :? "Euclidean distance"
 distance :: Point : Point : Num
 distance :~ pure
-distance p1 p2 = sqrt ((p2.x - p1.x)**2 + (p2.y - p1.y)**2)
+distance p1 p2 = (p2.x - p1.x)**2 + (p2.y - p1.y)**2
 ```
 
 ## Thunks & Laziness

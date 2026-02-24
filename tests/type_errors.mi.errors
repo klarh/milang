@@ -14,8 +14,8 @@ bad5: expected List, got Int
 bad6: expected List, got Str
 
 # Operand type errors (reducer + type checker merged)
-cannot multiply string; bad7: operator *
-cannot subtract from string; bad8: operator -
+cannot multiply string; bad7: expected Str, got Int
+cannot subtract from string; bad8: expected Str, got Int
 
 # Record field type mismatch
 p: expected Int, got Str

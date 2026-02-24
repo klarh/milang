@@ -139,7 +139,7 @@ Functions for inspecting and modifying record structure at runtime:
 | `&&` | `a : a : Num` | Short-circuit logical AND (via `truthy`). |
 | `\|\|` | `a : a : Num` | Short-circuit logical OR (via `truthy`). |
 | `:` | `a : List : List` | Cons (prepend element to list). |
-| `+` `-` `*` `/` `%` `**` | `Num : Num : Num` | Arithmetic (`+` also concatenates strings). |
+| `+` `-` `*` `/` `%` `**` | `Num : Num : Num` | Arithmetic (`+` also concatenates strings; `**` takes an integer exponent). |
 | `==` `/=` `<` `>` `<=` `>=` | `a : a : Num` | Comparison (structural equality for records). |
 
 ## Maybe examples

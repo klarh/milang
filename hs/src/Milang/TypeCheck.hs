@@ -177,20 +177,21 @@ peelParams env (_:ps) ty =
   peelParams env ps ty
 
 -- | Walk an expression and report operand type mismatches.
--- E.g. "hello" * 3 → Str used with arithmetic operator
+-- Looks up operator types from the type environment (prelude annotations)
+-- and uses the generic checkCompat machinery.
 checkOperands :: TypeEnv -> Maybe SrcPos -> Text -> Expr -> [TypeError]
 checkOperands env pos name = go
   where
-    go (BinOp op l r)
-      | op `elem` ["-", "*", "/", "^", "%"] =
-        let lt = inferExpr env l
-            rt = inferExpr env r
-            errs = checkNumericOp op lt rt
-        in errs ++ go l ++ go r
-      | op `elem` ["<", ">", "<=", ">="] =
-        -- Comparison: allow same-type (Num/Num, Str/Str, Float/Float)
-        go l ++ go r
-      | otherwise = go l ++ go r
+    go (BinOp op l r) =
+      let lt = inferExpr env l
+          rt = inferExpr env r
+          opErrs = case Map.lookup op env of
+            Just (TFun argL (TFun argR _)) ->
+              let (subst1, errs1) = checkCompatWith Map.empty pos name argL lt
+                  (_,      errs2) = checkCompatWith subst1    pos name argR rt
+              in errs1 ++ errs2
+            _ -> []
+      in opErrs ++ go l ++ go r
     go (App f x) =
       let fty = inferExpr env f
           xty = inferExpr env x
@@ -204,20 +205,6 @@ checkOperands env pos name = go
     go (Record _ bs) = concatMap (go . bindBody) bs
     go (Thunk e) = go e
     go _ = []
-
-    checkNumericOp op lt rt
-      | lt == TStr = [mkOpErr op "Str" "numeric"]
-      | rt == TStr = [mkOpErr op "Str" "numeric"]
-      | lt == TRecord "" [] || rt == TRecord "" [] = []
-      | otherwise = []  -- Num, Float, TAny, TVar all OK
-
-    mkOpErr op actual expected = TypeError
-      { tePos = pos
-      , teName = name
-      , teExpected = TAny
-      , teActual = TAny
-      , teMessage = "operator " <> op <> ": " <> actual <> " used where " <> expected <> " expected"
-      }
 
 -- | Bidirectional check: push expected type into expression.
 -- Pushes function types into nested lambdas, binding param types in env.
@@ -244,7 +231,7 @@ inferExpr env (Name n) =
     Just t  -> t
     Nothing -> TAny
 inferExpr env (BinOp op l r)
-  | op `elem` ["-", "*", "/", "^", "%"] =
+  | op `elem` ["-", "*", "/", "^", "%", "**"] =
     let lt = inferExpr env l
         rt = inferExpr env r
     in case (lt, rt) of
@@ -324,26 +311,38 @@ inferExpr _ _ = TAny
 -- Type variables in expected type match anything, with consistency checking.
 -- TAny in either position is always compatible.
 checkCompat :: Maybe SrcPos -> Text -> MiType -> MiType -> [TypeError]
-checkCompat pos name expected actual =
-  case go Map.empty expected actual of
-    (_, errs) -> errs
+checkCompat pos name expected actual = snd (checkCompatWith Map.empty pos name expected actual)
+
+-- | Like checkCompat but threads a type variable substitution map through,
+-- returning the updated map. Used to check multiple arguments sharing type vars.
+checkCompatWith :: Map.Map Text MiType -> Maybe SrcPos -> Text -> MiType -> MiType -> (Map.Map Text MiType, [TypeError])
+checkCompatWith subst0 pos name expected actual =
+  go subst0 expected actual
   where
+    -- Follow type variable substitution chain to a concrete type or unbound var
+    resolve subst (TVar v) =
+      case Map.lookup v subst of
+        Just t@(TVar v') | v' /= v -> resolve subst t
+        Just t@(TVar _)            -> t  -- self-referential, return as-is
+        Just t                     -> t  -- concrete type
+        Nothing                    -> TVar v  -- unbound
+    resolve _ t = t
+
     go subst TAny _ = (subst, [])
     go subst _ TAny = (subst, [])
     go subst (TVar v) act =
-      case Map.lookup v subst of
-        Just prev -> go subst prev act  -- check consistency with previous binding
-        Nothing   -> (Map.insert v act subst, [])  -- bind type var
+      let resolved = resolve subst (TVar v)
+      in case resolved of
+           TVar v' | v' == v ->
+             -- Unbound or self-referential: bind to actual
+             (Map.insert v act subst, [])
+           _ -> go subst resolved act  -- check resolved type against actual
     go subst _ (TVar _) = (subst, [])  -- actual is a type var, compatible
     go subst (TInt _) (TInt _) = (subst, [])        -- all int widths compatible
     go subst (TUInt _) (TUInt _) = (subst, [])      -- all uint widths compatible
     go subst (TFloat _) (TFloat _) = (subst, [])    -- all float widths compatible
-    go subst (TInt _) (TFloat _) = (subst, [])       -- numeric compatibility
-    go subst (TFloat _) (TInt _) = (subst, [])
-    go subst (TInt _) (TUInt _) = (subst, [])
+    go subst (TInt _) (TUInt _) = (subst, [])        -- signed/unsigned compatible
     go subst (TUInt _) (TInt _) = (subst, [])
-    go subst (TUInt _) (TFloat _) = (subst, [])
-    go subst (TFloat _) (TUInt _) = (subst, [])
     go subst (TFun ea er) (TFun aa ar) =
       let (subst', errs1) = go subst ea aa
           (subst'', errs2) = go subst' er ar

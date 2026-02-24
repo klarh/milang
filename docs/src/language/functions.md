@@ -18,10 +18,11 @@ When the body needs local bindings, indent them under an explicit result
 expression:
 
 ```milang,run
-hypotenuse x y = result
-  squared = x ** 2 + y ** 2
-  result = squared ** 0.5
-a = hypotenuse 3.0 4.0
+distance x1 y1 x2 y2 = result
+  dx = (x2 - x1) ** 2
+  dy = (y2 - y1) ** 2
+  result = dx + dy
+a = distance 0 0 3 4
 ```
 
 ## Application

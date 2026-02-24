@@ -13,7 +13,7 @@ be used infix with backtick syntax.
 | `*`      | Multiplication |
 | `/`      | Division (integer for ints, float for floats) |
 | `%`      | Modulo (integers only) |
-| `**`     | Exponentiation |
+| `**`     | Exponentiation (integer exponent) |
 
 ```milang,run
 a = 2 + 3

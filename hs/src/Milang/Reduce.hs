@@ -186,7 +186,12 @@ reduceD d env (FieldAccess e field) =
 
 reduceD d env (Namespace bindings) =
   let expanded = concatMap expandUnion bindings
-      merged   = mergeOpenDefs expanded
+      -- Filter out type-only annotations before merging/reducing
+      isTypeOnly b = case (bindType b, bindParams b, bindBody b) of
+        (Just _, [], IntLit 0) -> True
+        _                      -> False
+      valued   = filter (not . isTypeOnly) expanded
+      merged   = mergeOpenDefs valued
       env'     = evalBindingsD d env bindings
       bs'      = map (reduceBindD d env') merged
   in Namespace bs'
@@ -236,9 +241,17 @@ evalBindings = evalBindingsD maxReduceDepth
 evalBindingsD :: Int -> Env -> [Binding] -> Env
 evalBindingsD d env bindings =
   let expanded = concatMap expandUnion bindings
+      -- Filter out type-only annotations (no value body) so they don't
+      -- shadow builtins in the reducer.  These have bindType = Just _
+      -- and bindBody = IntLit 0 from the parser, with no matching
+      -- value binding merged in.
+      isTypeOnly b = case (bindType b, bindParams b, bindBody b) of
+        (Just _, [], IntLit 0) -> True
+        _                      -> False
+      valued = filter (not . isTypeOnly) expanded
       -- Merge same-named bindings in list order (open function chaining).
       -- Later definitions with Case (no catch-all) extend earlier ones.
-      merged = mergeOpenDefs expanded
+      merged = mergeOpenDefs valued
       bindNames = Set.fromList [bindName b | b <- merged]
       nodes = [ (b, bindName b,
                  Set.toList $ Set.intersection bindNames
@@ -429,13 +442,14 @@ reduceBinOp "*" l r | Just a <- intVal l, Just b <- intVal r = sizedIntResult (a
 reduceBinOp "/" l r | Just a <- intVal l, Just b <- intVal r, b /= 0 = sizedIntResult (a `div` b) l r
 reduceBinOp "%" l r | Just a <- intVal l, Just b <- intVal r, b /= 0 = sizedIntResult (a `mod` b) l r
 reduceBinOp "**" l r | Just a <- intVal l, Just b <- intVal r, b >= 0 = sizedIntResult (a ^ b) l r
+-- Float ** integer exponent: loop multiply (no libm needed)
+reduceBinOp "**" l r | Just a <- floatVal l, Just b <- intVal r, b >= 0 = sizedFloatResult (a ^ b) l r
 
 -- Float × Float (handles both FloatLit and SizedFloat)
 reduceBinOp "+" l r | Just a <- floatVal l, Just b <- floatVal r = sizedFloatResult (a + b) l r
 reduceBinOp "-" l r | Just a <- floatVal l, Just b <- floatVal r = sizedFloatResult (a - b) l r
 reduceBinOp "*" l r | Just a <- floatVal l, Just b <- floatVal r = sizedFloatResult (a * b) l r
 reduceBinOp "/" l r | Just a <- floatVal l, Just b <- floatVal r, b /= 0 = sizedFloatResult (a / b) l r
-reduceBinOp "**" l r | Just a <- floatVal l, Just b <- floatVal r = sizedFloatResult (a ** b) l r
 
 -- Int/Float promotion
 reduceBinOp op l r | isIntExpr l, isFloatExpr r = reduceBinOp op (promoteToFloat l) r
@@ -596,7 +610,13 @@ reduceAppD _ _ (Name "_toString") (FloatLit n) = StringLit (T.pack (show n))
 reduceAppD _ _ (Name "_toString") (SizedInt n _ _) = StringLit (T.pack (show n))
 reduceAppD _ _ (Name "_toString") (SizedFloat n _) = StringLit (T.pack (show n))
 reduceAppD _ _ (Name "_toString") (StringLit s) = StringLit s
--- toInt / toFloat → Just val or Nothing
+-- Direct coercions (infallible)
+reduceAppD _ _ (Name "float") e | Just n <- intVal e = FloatLit (fromInteger n)
+reduceAppD _ _ (Name "float") e | Just n <- floatVal e = FloatLit n
+reduceAppD _ _ (Name "round") e | Just n <- floatVal e = IntLit (Prelude.round n)
+reduceAppD _ _ (Name "floor") e | Just n <- floatVal e = IntLit (Prelude.floor n)
+reduceAppD _ _ (Name "ceil") e  | Just n <- floatVal e = IntLit (Prelude.ceiling n)
+-- toInt / toFloat → Just val or Nothing (parsing)
 reduceAppD _ _ (Name "toInt") e | Just n <- intVal e = justExpr (IntLit n)
 reduceAppD _ _ (Name "toInt") e | Just n <- floatVal e = justExpr (IntLit (truncate n))
 reduceAppD _ _ (Name "toInt") (StringLit s) =

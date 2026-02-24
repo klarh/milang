@@ -223,7 +223,7 @@ cmdRun file userArgs = do
           extraSrcs  = nub (linkSources li)
           extraIncls = nub (map ("-I" ++) (linkIncludes li))
           gccArgs = ["-O2", "-o", binFile, cFile, "-I" ++ cwd]
-                    ++ extraIncls ++ extraSrcs ++ extraFlags ++ ["-lm"]
+                    ++ extraIncls ++ extraSrcs ++ extraFlags
       withFile cFile WriteMode (\h -> codegen h preludeNames ast)
       (ec, _, cerr) <- readProcessWithExitCode "gcc" gccArgs ""
       case ec of
@@ -428,7 +428,7 @@ replPrint env names = withSystemTempDirectory "milang-repl" $ \tmpDir -> do
   let cFile = tmpDir </> "repl.c"
       binFile = tmpDir </> "repl"
   withFile cFile WriteMode (\h -> codegen h hidden ast)
-  (ec, _out, cerr) <- readProcessWithExitCode "gcc" ["-O2", "-o", binFile, cFile, "-lm"] ""
+  (ec, _out, cerr) <- readProcessWithExitCode "gcc" ["-O2", "-o", binFile, cFile] ""
   case ec of
     ExitFailure _ -> hPutStrLn stderr $ "compile error: " ++ cerr
     ExitSuccess -> do
