@@ -21,6 +21,7 @@ import Milang.Syntax (prettySrcPos)
 import Milang.Codegen (codegen)
 import Milang.Prelude (preludeBindings)
 import Milang.TypeCheck (typeCheck, TypeError(..))
+import Milang.TraitCheck (traitCheck, TraitError(..))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 
@@ -91,11 +92,17 @@ loadAndReduce file = do
       let postTypeErrs = case reduced of
             Namespace bs -> typeCheck bs
             _            -> []
+      -- Trait check post-reduction (effect validation)
+      let traitErrs = case astWithPrelude of
+            Namespace bs -> filterPreludeTrait (traitCheck bs)
+            _            -> []
       -- Unify all errors and deduplicate by source line
       let warnMsgs = [(warnPos w, warnMsg w) | w <- ws]
           tyMsgs  = [(tePos te, T.unpack (teName te) ++ ": " ++ T.unpack (teMessage te))
                      | te <- filterPrelude preTypeErrs ++ filterPrelude postTypeErrs]
-          allMsgs = dedupByLine (warnMsgs ++ tyMsgs)
+          trMsgs  = [(traitPos te, T.unpack (traitName te) ++ ": " ++ T.unpack (traitMessage te))
+                     | te <- traitErrs]
+          allMsgs = dedupByLine (warnMsgs ++ tyMsgs ++ trMsgs)
           fmtErr (pos, msg) = "error: " ++ fmtLoc file pos ++ ": " ++ msg
       mapM_ (hPutStrLn stderr . fmtErr) allMsgs
       if not (null allMsgs)
@@ -109,6 +116,14 @@ filterPrelude :: [TypeError] -> [TypeError]
 filterPrelude = filter (not . isPrelude)
   where
     isPrelude te = case tePos te of
+      Just pos -> "<prelude>" `isPrefixOf` srcFile pos
+      Nothing  -> False
+
+-- | Filter out trait errors originating from prelude definitions
+filterPreludeTrait :: [TraitError] -> [TraitError]
+filterPreludeTrait = filter (not . isPrelude)
+  where
+    isPrelude te = case traitPos te of
       Just pos -> "<prelude>" `isPrefixOf` srcFile pos
       Nothing  -> False
 

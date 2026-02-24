@@ -1,0 +1,33 @@
+/* Trait validation test — verifies trait checker catches effect violations */
+
+-- Define effect groups
+io :~ [console]
+pure :~ []
+readwrite :~ [fs.read, fs.write]
+
+-- Correct: pure function declared pure
+distance :~ pure
+distance x1 y1 x2 y2 = (x2 - x1)**2 + (y2 - y1)**2
+
+-- Correct: IO function declared io
+greet :~ io
+greet world = world.io.println "hello"
+
+-- VIOLATION: declared pure but calls greet (which is io)
+bad1 :~ pure
+bad1 world = greet world
+
+-- VIOLATION: declared pure but calls IO transitively through helper
+helper world = greet world
+bad2 :~ pure
+bad2 world = helper world
+
+-- Correct: declared io and calls io
+runner :~ io
+runner world = greet world
+
+-- VIOLATION: declared pure but directly uses world.io
+bad3 :~ pure
+bad3 world = world.io.println "test"
+
+main = distance 0 0 3 4

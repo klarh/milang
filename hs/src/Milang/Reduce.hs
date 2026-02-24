@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
-module Milang.Reduce (reduce, Env, emptyEnv, envImpure, warnings, Warning(..)) where
+module Milang.Reduce (reduce, Env, emptyEnv, envImpure, warnings, Warning(..), exprFreeVars) where
 
 import Data.Text (Text)
 import qualified Data.Text as T

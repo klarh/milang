@@ -1,0 +1,10 @@
+# Expected trait errors
+
+# Direct violation: pure function calls io-annotated function
+bad1: effect violation: bad1 declared :~ [] but uses [console]
+
+# Transitive violation: pure function calls unannotated helper that uses io
+bad2: effect violation: bad2 declared :~ [] but uses [console]
+
+# Direct world.io usage: pure function directly accesses world.io
+bad3: effect violation: bad3 declared :~ [] but uses [console]
