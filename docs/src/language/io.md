@@ -17,9 +17,12 @@ main world =
 
 | Path | Description |
 |------|-------------|
-| `world.io` | Console and file IO |
+| `world.io` | Console IO (println, print, readLine) |
+| `world.fs.read` | Read-only filesystem (file, exists) |
+| `world.fs.write` | Write filesystem (file, append, remove) |
+| `world.fs` | Full filesystem access (read + write) |
 | `world.process` | Process execution and exit |
-| `world.argv` | Command-line arguments (a list of strings) |
+| `world.argv` | Command-line arguments (pure — no effect) |
 | `world.getEnv` | Read environment variables |
 
 ## Console IO
@@ -32,12 +35,15 @@ line = world.io.readLine      -- read one line from stdin
 
 ## File IO
 
+File operations are split by capability: `world.fs.read` for reading and
+`world.fs.write` for writing. This enables fine-grained trait annotations.
+
 ```milang
-content = world.io.readFile "data.txt"
-world.io.writeFile "out.txt" content
-world.io.appendFile "log.txt" "new line\n"
-exists = world.io.exists "data.txt"       -- returns 1 or 0
-world.io.remove "tmp.txt"
+content = world.fs.read.file "data.txt"
+world.fs.write.file "out.txt" content
+world.fs.write.append "log.txt" "new line\n"
+exists = world.fs.read.exists "data.txt"     -- returns 1 or 0
+world.fs.write.remove "tmp.txt"
 ```
 
 ## Process

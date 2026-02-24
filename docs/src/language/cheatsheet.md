@@ -173,18 +173,18 @@ IO uses capability-based design. `main` receives `world`:
 
 ```milang,run
 main world =
-  world.io.println "hello"           -- print line
-  world.io.print "no newline"        -- print without newline
-  line = world.io.readLine           -- read line from stdin
-  contents = world.io.readFile "f"   -- read file
-  world.io.writeFile "f" "data"      -- write file
-  world.io.appendFile "f" "more"     -- append to file
-  exists = world.io.exists "f"       -- check file exists
-  world.io.remove "f"               -- delete file
-  result = world.process.exec "ls"   -- run shell command
-  world.process.exit 1               -- exit with code
-  args = world.argv                  -- command-line args (list)
-  val = world.getEnv "PATH"          -- environment variable
+  world.io.println "hello"              -- print line
+  world.io.print "no newline"           -- print without newline
+  line = world.io.readLine              -- read line from stdin
+  contents = world.fs.read.file "f"     -- read file
+  world.fs.write.file "f" "data"        -- write file
+  world.fs.write.append "f" "more"      -- append to file
+  exists = world.fs.read.exists "f"     -- check file exists
+  world.fs.write.remove "f"             -- delete file
+  result = world.process.exec "ls"      -- run shell command
+  world.process.exit 1                  -- exit with code
+  args = world.argv                     -- command-line args (list)
+  val = world.getEnv "PATH"             -- environment variable
   0
 
 -- Pass restricted capabilities to helpers

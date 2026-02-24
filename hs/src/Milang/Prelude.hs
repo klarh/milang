@@ -16,6 +16,12 @@ preludeSrc = T.unlines
   , "UInt = UInt' 64"
   , "Float = Float' 64"
   , "Byte = UInt' 8"
+  -- Trait group aliases (world capability → effect mapping)
+  , "console :~ [console]"
+  , "io :~ [console]"
+  , "fs :~ [fs.read, fs.write]"
+  , "process :~ [process]"
+  , "env :~ [env]"
   , "if cond #t #e = (truthy cond) -> 0 = $e; _ = $t"
   , "truthy val = val -> False = 0; Nil = 0; Nothing = 0; 0 = 0; \"\" = 0; _ = 1"
   , "toString val = val -> True = \"True\"; False = \"False\"; Nil = \"[]\"; Nothing = \"Nothing\"; Just x = \"Just(\" + toString x + \")\"; _ = _toString val"
