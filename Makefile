@@ -1,6 +1,10 @@
 .PHONY: all clean test test-hs docs docs-serve
 
 all:
+	@echo 'module Core.Version (version) where' > core/src/Core/Version.hs
+	@echo '' >> core/src/Core/Version.hs
+	@echo 'version :: String' >> core/src/Core/Version.hs
+	@echo 'version = "'$$(date +%Y%m%d%H%M%S)-$$(git rev-parse --short HEAD)'"' >> core/src/Core/Version.hs
 	cd core && cabal build
 	ln -sf $$(cd core && cabal list-bin milang-core) milang
 

@@ -1,5 +1,6 @@
 hs/dist-newstyle/
 core/dist-newstyle/
+core/src/Core/Version.hs
 milang
 /tmp/milang_out*
 

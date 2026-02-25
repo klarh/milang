@@ -26,6 +26,7 @@ import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
 import Core.CHeader (parseCHeader, CFunSig(..))
 import Core.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
+import Core.Version (version)
 
 -- | Link info accumulated during import resolution
 data LinkInfo = LinkInfo
@@ -66,8 +67,8 @@ main = do
     ["raw-reduce", file]         -> cmdRawReduce file
     ["pin", file]                -> cmdPin file
     ["repl"]                     -> cmdRepl
-    ["--version"]                -> putStrLn "milang 0.1.0"
-    ["-v"]                       -> putStrLn "milang 0.1.0"
+    ["--version"]                -> putStrLn $ "milang " ++ version
+    ["-v"]                       -> putStrLn $ "milang " ++ version
     ["--help"]                   -> printHelp
     ["-h"]                       -> printHelp
     []                           -> printHelp
