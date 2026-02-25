@@ -386,6 +386,38 @@ reduceApp d env (App (App (Name "setField") rec) (StringLit name)) val =
                                     , bindBody = val, bindDomain = Value, bindPos = Nothing }]
       in Record tag bs'
     r -> App (App (App (Name "setField") r) (StringLit name)) val
+-- Builtin: replace str old new
+reduceApp _ _ (App (App (Name "replace") (StringLit s)) (StringLit old)) (StringLit new) =
+  StringLit (T.replace old new s)
+-- Builtin: slice str start end
+reduceApp _ _ (App (App (Name "slice") (StringLit s)) (IntLit i)) (IntLit j) =
+  StringLit (T.take (fromIntegral (j - i)) (T.drop (fromIntegral i) s))
+-- Builtin: indexOf str substr
+reduceApp _ _ (App (Name "indexOf") (StringLit s)) (StringLit sub) =
+  case T.breakOn sub s of
+    (before, match) | T.null match -> IntLit (-1)
+                    | otherwise    -> IntLit (fromIntegral (T.length before))
+-- Builtin: charAt str index
+reduceApp _ _ (App (Name "charAt") (StringLit s)) (IntLit i)
+  | i >= 0 && fromIntegral i < T.length s =
+    Record "Just" [Binding { bindName = "val", bindParams = []
+                           , bindBody = StringLit (T.singleton (T.index s (fromIntegral i)))
+                           , bindDomain = Value, bindPos = Nothing }]
+  | otherwise = Record "Nothing" []
+-- Builtin: split str delim
+reduceApp _ _ (App (Name "split") (StringLit s)) (StringLit delim) =
+  let parts = if T.null delim
+              then map (StringLit . T.singleton) (T.unpack s)
+              else map StringLit (T.splitOn delim s)
+  in listToCons parts
+-- Builtin: join delim list
+reduceApp _ _ (App (Name "join") (StringLit delim)) lst
+  | Just strs <- consToStrings lst = StringLit (T.intercalate delim strs)
+  where
+    consToStrings (Record "Nil" _) = Just []
+    consToStrings (Record "Cons" [hd, tl])
+      | StringLit s <- bindBody hd = (s :) <$> consToStrings (bindBody tl)
+    consToStrings _ = Nothing
 reduceApp _ _ f x = App f x
 
 -- Builtins that should fire before env lookup (by original name)
@@ -393,6 +425,34 @@ tryBuiltin1 :: Int -> Env -> Text -> Expr -> Maybe Expr
 tryBuiltin1 d env "len" x = case reduceD d env x of
   StringLit s -> Just $ IntLit (fromIntegral (T.length s))
   _           -> Nothing  -- fall through to prelude len for lists
+tryBuiltin1 d env "trim" x = case reduceD d env x of
+  StringLit s -> Just $ StringLit (T.strip s)
+  _           -> Nothing
+tryBuiltin1 d env "toUpper" x = case reduceD d env x of
+  StringLit s -> Just $ StringLit (T.toUpper s)
+  _           -> Nothing
+tryBuiltin1 d env "toLower" x = case reduceD d env x of
+  StringLit s -> Just $ StringLit (T.toLower s)
+  _           -> Nothing
+tryBuiltin1 d env "toString" x = case reduceD d env x of
+  IntLit n    -> Just $ StringLit (T.pack (show n))
+  FloatLit f  -> Just $ StringLit (T.pack (show f))
+  StringLit s -> Just $ StringLit s
+  _           -> Nothing
+tryBuiltin1 d env "toInt" x = case reduceD d env x of
+  StringLit s -> case reads (T.unpack s) of
+    ((n,""):_) -> Just $ Record "Just" [Binding { bindName = "val", bindParams = []
+                   , bindBody = IntLit n, bindDomain = Value, bindPos = Nothing }]
+    _          -> Just $ Record "Nothing" []
+  FloatLit f  -> Just $ Record "Just" [Binding { bindName = "val", bindParams = []
+                   , bindBody = IntLit (truncate f), bindDomain = Value, bindPos = Nothing }]
+  _           -> Nothing
+tryBuiltin1 d env "toFloat" x = case reduceD d env x of
+  StringLit s -> case reads (T.unpack s) of
+    ((f,""):_) -> Just $ Record "Just" [Binding { bindName = "val", bindParams = []
+                   , bindBody = FloatLit f, bindDomain = Value, bindPos = Nothing }]
+    _          -> Just $ Record "Nothing" []
+  _           -> Nothing
 tryBuiltin1 _ _ _ _ = Nothing
 
 -- ── Binary operator reduction ─────────────────────────────────────

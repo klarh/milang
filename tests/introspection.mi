@@ -47,5 +47,5 @@ r19 = setField p "w" 99
 r20 = setField (setField p "x" 10) "y" 20
 
 -- generic mapFields using introspection
-mapFields f rec = fold (\acc name -> setField acc name (f (getField acc name))) rec (fieldNames rec)
+mapFields f rec = fold (\acc name -> setField acc name (f ((getField acc name).val))) rec (fieldNames rec)
 r21 = mapFields (\x -> x * 2) p

@@ -650,8 +650,8 @@ reduceAppD _ _ (App (App (Name "slice") (StringLit s)) startE) endE
   | Just start <- intVal startE, Just end <- intVal endE =
     let s' = T.take (fromIntegral (end - start)) (T.drop (fromIntegral start) s)
     in StringLit s'
--- replace old new string
-reduceAppD _ _ (App (App (Name "replace") (StringLit old)) (StringLit new)) (StringLit s) =
+-- replace str old new
+reduceAppD _ _ (App (App (Name "replace") (StringLit s)) (StringLit old)) (StringLit new) =
   StringLit (T.replace old new s)
 -- Residual
 reduceAppD _ _ f x = App f x
