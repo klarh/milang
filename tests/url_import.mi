@@ -1,0 +1,14 @@
+-- Test URL import with pinned sha256
+-- Imports mymath.mi from the public milang repo
+math = import' "https://raw.githubusercontent.com/klarh/milang/refs/heads/master/tests/lib/mymath.mi" ({sha256 = "13af7e573237beae2a4739ecb01b9a025c8d5f8a99ede0e398d747991366e1f2"})
+
+-- Use imported pure functions
+area5 = math.circle_area 5
+area10 = math.circle_area 10
+
+main1 :~ [console]
+main1 = world.io.println area5
+main2 :~ [console]
+main2 = world.io.println area10
+main3 :~ [console]
+main3 = world.io.println math.pi
