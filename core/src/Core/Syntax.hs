@@ -33,6 +33,8 @@ data Domain
 data Expr
   = IntLit !Integer
   | FloatLit !Double
+  | SizedInt !Integer !Integer !Bool  -- value, bit width, isSigned
+  | SizedFloat !Double !Integer       -- value, bit width
   | StringLit !Text
   | Name !Text
   | BinOp !Text Expr Expr
@@ -105,6 +107,8 @@ data Alt = Alt
 prettyExpr :: Int -> Expr -> String
 prettyExpr _ (IntLit n)      = show n
 prettyExpr _ (FloatLit d)    = show d
+prettyExpr _ (SizedInt n w s) = show n ++ " :: " ++ (if s then "Int' " else "UInt' ") ++ show w
+prettyExpr _ (SizedFloat d w) = show d ++ " :: Float' " ++ show w
 prettyExpr _ (StringLit s)   = show s
 prettyExpr _ (Name n)        = T.unpack n
 prettyExpr i (BinOp op l r)  =

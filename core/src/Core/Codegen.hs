@@ -173,6 +173,8 @@ cEscLoc (SrcPos f l c) = concatMap escChar f ++ ":" ++ show l ++ ":" ++ show c
 exprToC :: CGState -> Expr -> IO String
 exprToC _ (IntLit n) = pure $ "mi_expr_int(" ++ show n ++ ")"
 exprToC _ (FloatLit d) = pure $ "mi_expr_float(" ++ show d ++ ")"
+exprToC _ (SizedInt n _ _) = pure $ "mi_expr_int(" ++ show n ++ ")"
+exprToC _ (SizedFloat d _) = pure $ "mi_expr_float(" ++ show d ++ ")"
 exprToC _ (StringLit s) = pure $ "mi_expr_string(" ++ cStringLit (T.unpack s) ++ ")"
 exprToC _ (Name n)
   | "__mod_" `T.isPrefixOf` n && "__" `T.isSuffixOf` n =

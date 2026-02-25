@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitWith, ExitCode(..))
-import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout)
+import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (readProcessWithExitCode)
 import System.Directory (removeFile, doesFileExist, getCurrentDirectory)
 import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>))
@@ -15,10 +16,11 @@ import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
 import Data.List (nub, isPrefixOf, sort)
+import Control.Exception (catch, IOException)
 
 import Core.Syntax
-import Core.Parser (parseProgram)
-import Core.Reduce (reduce, emptyEnv, Warning(..))
+import Core.Parser (parseProgram, parseExpr)
+import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap)
 import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
 import Core.CHeader (parseCHeader, CFunSig(..))
@@ -61,9 +63,10 @@ main = do
     ["reduce", file]             -> cmdReduce file
     ["raw-reduce", file]         -> cmdRawReduce file
     ["pin", file]                -> cmdPin file
+    ["repl"]                     -> cmdRepl
     _ -> do
-      hPutStrLn stderr "Usage: milang-core <command> <file>"
-      hPutStrLn stderr "Commands: run, compile, dump, reduce, raw-reduce, pin"
+      hPutStrLn stderr "Usage: milang-core <command> [file]"
+      hPutStrLn stderr "Commands: run, compile, dump, reduce, raw-reduce, pin, repl"
       exitFailure
 
 -- | Load and parse a file
@@ -607,3 +610,68 @@ cmdRun file runArgs = do
   putStr runOut
   if not (null runErr) then hPutStrLn stderr runErr else pure ()
   exitWith runExit
+
+-- ── REPL ─────────────────────────────────────────────────────────
+
+cmdRepl :: IO ()
+cmdRepl = do
+  hSetBuffering stdout LineBuffering
+  putStrLn "milang REPL (type :q to quit, :env to show bindings)"
+  -- Bootstrap with prelude
+  let preludeNS = Namespace preludeBindings
+      (preludeEnv, _, _) = reduceWithEnv emptyEnv preludeNS
+  replLoop preludeEnv
+
+replLoop :: Env -> IO ()
+replLoop env = do
+  putStr "λ> "
+  hFlush stdout
+  mLine <- (Just <$> getLine) `catch` (\(_ :: IOException) -> pure Nothing)
+  case mLine of
+    Nothing -> putStrLn "" -- EOF
+    Just line
+      | line == ":q" || line == ":quit" -> pure ()
+      | line == ":env" -> do
+          let binds = Map.toAscList (envMap env)
+              userBinds = filter (\(k,_) -> not (Set.member k preludeNames)) binds
+          mapM_ (\(k,v) -> putStrLn $ T.unpack k ++ " = " ++ prettyExpr 0 v) userBinds
+          replLoop env
+      | T.null (T.strip (T.pack line)) -> replLoop env
+      | otherwise -> do
+          let src = T.pack line
+          -- Try as bindings (namespace) first, then as expression
+          case parseProgram "<repl>" src of
+            Right ns@(Namespace _) -> do
+              let (env', reduced, ws) = reduceWithEnv env ns
+              printWarnings "<repl>" ws
+              -- Print any value bindings that were just defined
+              case reduced of
+                Namespace bs -> mapM_ (\b ->
+                  when (bindDomain b == Value && bindName b /= "_") $
+                    putStrLn $ T.unpack (bindName b) ++ " = " ++ prettyExpr 0 (bindBody b)
+                  ) bs
+                _ -> pure ()
+              replLoop env'
+            _ -> case parseExpr "<repl>" src of
+              Right expr -> do
+                let (_, result, ws) = reduceWithEnv env expr
+                printWarnings "<repl>" ws
+                putStrLn (prettyExpr 0 result)
+                replLoop env
+              Left err -> do
+                hPutStrLn stderr $ show err
+                replLoop env
+  where
+    when True a = a
+    when False _ = pure ()
+
+printWarnings :: String -> [Warning] -> IO ()
+printWarnings file ws = do
+  let userWarns = filter (not . isPreludeWarning) ws
+      fmtWarn (TypeWarning pos name msg) =
+        (pos, T.unpack name ++ ": " ++ T.unpack msg)
+      fmtWarn (TraitWarning pos name msg) =
+        (pos, T.unpack name ++ ": " ++ T.unpack msg)
+      fmtWarn (GeneralWarning pos msg) = (pos, T.unpack msg)
+      msgs = dedupByLine (map fmtWarn userWarns)
+  mapM_ (\(pos, msg) -> hPutStrLn stderr $ "warning: " ++ fmtLoc file pos ++ ": " ++ msg) msgs

@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 module Core.Reduce
-  ( reduce, Env, emptyEnv
+  ( reduce, reduceWithEnv, Env, emptyEnv
   , Warning(..), warnings
   , exprFreeVars
+  , envInsert, envMap, envLookup
   ) where
 
 import Data.Text (Text)
@@ -76,21 +77,25 @@ minRecDepth :: Int
 minRecDepth = 8
 
 isResidual :: Expr -> Bool
-isResidual (IntLit _)    = False
-isResidual (FloatLit _)  = False
-isResidual (StringLit _) = False
-isResidual (Record _ _)  = False
-isResidual _             = True
+isResidual (IntLit _)      = False
+isResidual (FloatLit _)    = False
+isResidual (SizedInt {})   = False
+isResidual (SizedFloat {}) = False
+isResidual (StringLit _)   = False
+isResidual (Record _ _)    = False
+isResidual _               = True
 
 isConcrete :: Expr -> Bool
-isConcrete (IntLit _)     = True
-isConcrete (FloatLit _)   = True
-isConcrete (StringLit _)  = True
-isConcrete (Lam _ _)      = True
-isConcrete (Record _ bs)  = all (isConcrete . bindBody) bs
-isConcrete (Namespace bs) = all (isConcrete . bindBody) bs
-isConcrete (CFunction {}) = True
-isConcrete _              = False
+isConcrete (IntLit _)      = True
+isConcrete (FloatLit _)    = True
+isConcrete (SizedInt {})   = True
+isConcrete (SizedFloat {}) = True
+isConcrete (StringLit _)   = True
+isConcrete (Lam _ _)       = True
+isConcrete (Record _ bs)   = all (isConcrete . bindBody) bs
+isConcrete (Namespace bs)  = all (isConcrete . bindBody) bs
+isConcrete (CFunction {})  = True
+isConcrete _               = False
 
 isWorldTainted :: Env -> Expr -> Bool
 isWorldTainted env expr =
@@ -123,11 +128,30 @@ reduce env e = case e of
     nsBindings (Namespace bs) = bs
     nsBindings _ = []
 
+-- | Reduce an expression within an env, returning the updated env, result, and warnings.
+-- Used by the REPL to accumulate state across inputs.
+reduceWithEnv :: Env -> Expr -> (Env, Expr, [Warning])
+reduceWithEnv env e = case e of
+  Namespace _ ->
+    let env' = evalBindings maxDepth env (nsBindings e)
+        expanded = concatMap expandUnion (nsBindings e)
+        (valueBs, annotBs) = partitionBindings expanded
+        mergedValues = mergeOpenDefs valueBs
+        valBs' = map (reduceBind maxDepth env') mergedValues
+        annBs' = map (reduceBind maxDepth env') annotBs
+    in (env', Namespace (valBs' ++ annBs'), reverse (envWarns env'))
+  _ -> (env, reduceD maxDepth env e, [])
+  where
+    nsBindings (Namespace bs) = bs
+    nsBindings _ = []
+
 reduceD :: Int -> Env -> Expr -> Expr
-reduceD _ _ e@(IntLit _)    = e
-reduceD _ _ e@(FloatLit _)  = e
-reduceD _ _ e@(StringLit _) = e
-reduceD _ _ e@(Error _)     = e
+reduceD _ _ e@(IntLit _)      = e
+reduceD _ _ e@(FloatLit _)    = e
+reduceD _ _ e@(SizedInt {})   = e
+reduceD _ _ e@(SizedFloat {}) = e
+reduceD _ _ e@(StringLit _)   = e
+reduceD _ _ e@(Error _)       = e
 
 reduceD d env (Name n)
   | d <= 0    = Name n
@@ -352,9 +376,13 @@ evalSCC d env (AcyclicSCC b) =
             then bindBody b'
             else reduceD d env body
       env1 = if isWorldTainted env body then envMarkImpure name env else env
+      -- Emit warnings for Error nodes in reduced value
+      env2 = case val of
+        Error msg -> envAddWarning (GeneralWarning (bindPos b) (name <> ": " <> msg)) env1
+        _         -> env1
   in if isConcrete val || isNamespaceVal val
-     then envInsert name val env1
-     else env1
+     then envInsert name val env2
+     else env2
 
 evalSCC _ env (CyclicSCC bs) =
   let recNames = Set.fromList (map bindName bs)
@@ -488,16 +516,20 @@ tryBuiltin1 d env "toLower" x = case reduceD d env x of
   StringLit s -> Just $ StringLit (T.toLower s)
   _           -> Nothing
 tryBuiltin1 d env "toString" x = case reduceD d env x of
-  IntLit n    -> Just $ StringLit (T.pack (show n))
-  FloatLit f  -> Just $ StringLit (T.pack (show f))
-  StringLit s -> Just $ StringLit s
-  _           -> Nothing
+  IntLit n      -> Just $ StringLit (T.pack (show n))
+  FloatLit f    -> Just $ StringLit (T.pack (show f))
+  SizedInt n _ _ -> Just $ StringLit (T.pack (show n))
+  SizedFloat f _ -> Just $ StringLit (T.pack (show f))
+  StringLit s   -> Just $ StringLit s
+  _             -> Nothing
 tryBuiltin1 d env "toInt" x = case reduceD d env x of
   StringLit s -> case reads (T.unpack s) of
     ((n,""):_) -> Just $ Record "Just" [Binding { bindName = "val", bindParams = []
                    , bindBody = IntLit n, bindDomain = Value, bindPos = Nothing }]
     _          -> Just $ Record "Nothing" []
   FloatLit f  -> Just $ Record "Just" [Binding { bindName = "val", bindParams = []
+                   , bindBody = IntLit (truncate f), bindDomain = Value, bindPos = Nothing }]
+  SizedFloat f _ -> Just $ Record "Just" [Binding { bindName = "val", bindParams = []
                    , bindBody = IntLit (truncate f), bindDomain = Value, bindPos = Nothing }]
   _           -> Nothing
 tryBuiltin1 d env "toFloat" x = case reduceD d env x of
@@ -507,12 +539,15 @@ tryBuiltin1 d env "toFloat" x = case reduceD d env x of
     _          -> Just $ Record "Nothing" []
   _           -> Nothing
 tryBuiltin1 d env "abs" x = case reduceD d env x of
-  IntLit n   -> Just $ IntLit (Prelude.abs n)
-  FloatLit f -> Just $ FloatLit (Prelude.abs f)
-  _          -> Nothing
+  IntLit n      -> Just $ IntLit (Prelude.abs n)
+  FloatLit f    -> Just $ FloatLit (Prelude.abs f)
+  SizedInt n w s -> Just $ SizedInt (Prelude.abs n) w s
+  SizedFloat f w -> Just $ SizedFloat (Prelude.abs f) w
+  _             -> Nothing
 tryBuiltin1 d env "float" x = case reduceD d env x of
-  IntLit n -> Just $ FloatLit (fromIntegral n)
-  _        -> Nothing
+  IntLit n       -> Just $ FloatLit (fromIntegral n)
+  SizedInt n _ _ -> Just $ FloatLit (fromInteger n)
+  _              -> Nothing
 tryBuiltin1 d env "round" x = case reduceD d env x of
   FloatLit f -> Just $ IntLit (Prelude.round f)
   _          -> Nothing
@@ -527,44 +562,90 @@ tryBuiltin1 _ _ _ _ = Nothing
 -- ── Binary operator reduction ─────────────────────────────────────
 
 reduceBinOp :: Text -> Expr -> Expr -> Expr
--- Int ops
-reduceBinOp "+" (IntLit a) (IntLit b)  = IntLit (a + b)
-reduceBinOp "-" (IntLit a) (IntLit b)  = IntLit (a - b)
-reduceBinOp "*" (IntLit a) (IntLit b)  = IntLit (a * b)
-reduceBinOp "/" (IntLit a) (IntLit b)  | b /= 0 = IntLit (div a b)
-reduceBinOp "%" (IntLit a) (IntLit b)  | b /= 0 = IntLit (mod a b)
-reduceBinOp "**" (IntLit a) (IntLit b) | b >= 0  = IntLit (a ^ b)
--- Float ops
-reduceBinOp "+" (FloatLit a) (FloatLit b) = FloatLit (a + b)
-reduceBinOp "-" (FloatLit a) (FloatLit b) = FloatLit (a - b)
-reduceBinOp "*" (FloatLit a) (FloatLit b) = FloatLit (a * b)
-reduceBinOp "/" (FloatLit a) (FloatLit b) | b /= 0 = FloatLit (a / b)
+-- Int × Int (handles both IntLit and SizedInt)
+reduceBinOp "+"  l r | Just a <- intVal l, Just b <- intVal r = sizedIntResult (a + b) l r
+reduceBinOp "-"  l r | Just a <- intVal l, Just b <- intVal r = sizedIntResult (a - b) l r
+reduceBinOp "*"  l r | Just a <- intVal l, Just b <- intVal r = sizedIntResult (a * b) l r
+reduceBinOp "/"  l r | Just a <- intVal l, Just b <- intVal r, b /= 0 = sizedIntResult (div a b) l r
+reduceBinOp "%"  l r | Just a <- intVal l, Just b <- intVal r, b /= 0 = sizedIntResult (mod a b) l r
+reduceBinOp "**" l r | Just a <- intVal l, Just b <- intVal r, b >= 0  = sizedIntResult (a ^ b) l r
+-- Float × Float (handles both FloatLit and SizedFloat)
+reduceBinOp "+"  l r | Just a <- floatVal l, Just b <- floatVal r = sizedFloatResult (a + b) l r
+reduceBinOp "-"  l r | Just a <- floatVal l, Just b <- floatVal r = sizedFloatResult (a - b) l r
+reduceBinOp "*"  l r | Just a <- floatVal l, Just b <- floatVal r = sizedFloatResult (a * b) l r
+reduceBinOp "/"  l r | Just a <- floatVal l, Just b <- floatVal r, b /= 0 = sizedFloatResult (a / b) l r
 -- String concat
 reduceBinOp "+" (StringLit a) (StringLit b) = StringLit (a <> b)
--- Comparisons
-reduceBinOp "==" (IntLit a) (IntLit b)     = IntLit (if a == b then 1 else 0)
-reduceBinOp "/=" (IntLit a) (IntLit b)     = IntLit (if a /= b then 1 else 0)
-reduceBinOp "<"  (IntLit a) (IntLit b)     = IntLit (if a < b then 1 else 0)
-reduceBinOp ">"  (IntLit a) (IntLit b)     = IntLit (if a > b then 1 else 0)
-reduceBinOp "<=" (IntLit a) (IntLit b)     = IntLit (if a <= b then 1 else 0)
-reduceBinOp ">=" (IntLit a) (IntLit b)     = IntLit (if a >= b then 1 else 0)
-reduceBinOp "==" (FloatLit a) (FloatLit b) = IntLit (if a == b then 1 else 0)
-reduceBinOp "/=" (FloatLit a) (FloatLit b) = IntLit (if a /= b then 1 else 0)
-reduceBinOp "<"  (FloatLit a) (FloatLit b) = IntLit (if a < b then 1 else 0)
-reduceBinOp ">"  (FloatLit a) (FloatLit b) = IntLit (if a > b then 1 else 0)
-reduceBinOp "<=" (FloatLit a) (FloatLit b) = IntLit (if a <= b then 1 else 0)
-reduceBinOp ">=" (FloatLit a) (FloatLit b) = IntLit (if a >= b then 1 else 0)
+-- Int comparisons
+reduceBinOp "==" l r | Just a <- intVal l, Just b <- intVal r = IntLit (if a == b then 1 else 0)
+reduceBinOp "/=" l r | Just a <- intVal l, Just b <- intVal r = IntLit (if a /= b then 1 else 0)
+reduceBinOp "<"  l r | Just a <- intVal l, Just b <- intVal r = IntLit (if a < b then 1 else 0)
+reduceBinOp ">"  l r | Just a <- intVal l, Just b <- intVal r = IntLit (if a > b then 1 else 0)
+reduceBinOp "<=" l r | Just a <- intVal l, Just b <- intVal r = IntLit (if a <= b then 1 else 0)
+reduceBinOp ">=" l r | Just a <- intVal l, Just b <- intVal r = IntLit (if a >= b then 1 else 0)
+-- Float comparisons
+reduceBinOp "==" l r | Just a <- floatVal l, Just b <- floatVal r = IntLit (if a == b then 1 else 0)
+reduceBinOp "/=" l r | Just a <- floatVal l, Just b <- floatVal r = IntLit (if a /= b then 1 else 0)
+reduceBinOp "<"  l r | Just a <- floatVal l, Just b <- floatVal r = IntLit (if a < b then 1 else 0)
+reduceBinOp ">"  l r | Just a <- floatVal l, Just b <- floatVal r = IntLit (if a > b then 1 else 0)
+reduceBinOp "<=" l r | Just a <- floatVal l, Just b <- floatVal r = IntLit (if a <= b then 1 else 0)
+reduceBinOp ">=" l r | Just a <- floatVal l, Just b <- floatVal r = IntLit (if a >= b then 1 else 0)
+-- String comparison
 reduceBinOp "==" (StringLit a) (StringLit b) = IntLit (if a == b then 1 else 0)
 reduceBinOp "/=" (StringLit a) (StringLit b) = IntLit (if a /= b then 1 else 0)
--- String comparison
 reduceBinOp "<"  (StringLit a) (StringLit b) = IntLit (if a < b then 1 else 0)
 reduceBinOp ">"  (StringLit a) (StringLit b) = IntLit (if a > b then 1 else 0)
 reduceBinOp "<=" (StringLit a) (StringLit b) = IntLit (if a <= b then 1 else 0)
 reduceBinOp ">=" (StringLit a) (StringLit b) = IntLit (if a >= b then 1 else 0)
 -- Cons
 reduceBinOp ":" hd tl = Record "Cons" [mkBind "head" hd, mkBind "tail" tl]
+-- Division by zero
+reduceBinOp "/" l r | Just _ <- intVal l, Just 0 <- intVal r = Error "division by zero"
+reduceBinOp "%" l r | Just _ <- intVal l, Just 0 <- intVal r = Error "division by zero"
+reduceBinOp "/" l r | Just _ <- floatVal l, Just 0 <- floatVal r = Error "division by zero"
+-- Type mismatch (string + number, number + string)
+reduceBinOp "+" (StringLit _) r | Just _ <- intVal r   = Error "type mismatch: cannot add String and Int"
+reduceBinOp "+" (StringLit _) r | Just _ <- floatVal r = Error "type mismatch: cannot add String and Float"
+reduceBinOp "+" l (StringLit _) | Just _ <- intVal l   = Error "type mismatch: cannot add Int and String"
+reduceBinOp "+" l (StringLit _) | Just _ <- floatVal l = Error "type mismatch: cannot add Float and String"
 -- Residual
 reduceBinOp op l r = BinOp op l r
+
+-- | Extract integer value from IntLit or SizedInt
+intVal :: Expr -> Maybe Integer
+intVal (IntLit n)       = Just n
+intVal (SizedInt n _ _) = Just n
+intVal _                = Nothing
+
+-- | Extract float value from FloatLit or SizedFloat
+floatVal :: Expr -> Maybe Double
+floatVal (FloatLit d)    = Just d
+floatVal (SizedFloat d _) = Just d
+floatVal _               = Nothing
+
+-- | Produce a sized int result preserving width/signedness
+sizedIntResult :: Integer -> Expr -> Expr -> Expr
+sizedIntResult v (SizedInt _ w1 s1) (SizedInt _ w2 s2) =
+  let w = max w1 w2; s = s1 || s2
+  in SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
+sizedIntResult v (SizedInt _ w s) _ = SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
+sizedIntResult v _ (SizedInt _ w s) = SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
+sizedIntResult v _ _ = IntLit v
+
+-- | Produce a sized float result preserving width
+sizedFloatResult :: Double -> Expr -> Expr -> Expr
+sizedFloatResult v (SizedFloat _ w1) (SizedFloat _ w2) = SizedFloat v (max w1 w2)
+sizedFloatResult v (SizedFloat _ w) _ = SizedFloat v w
+sizedFloatResult v _ (SizedFloat _ w) = SizedFloat v w
+sizedFloatResult v _ _ = FloatLit v
+
+-- | Clamp to signed range
+clampSigned :: Integer -> Integer -> Integer
+clampSigned w v = let half = 2 ^ (w - 1) in ((v + half) `mod` (2 * half)) - half
+
+-- | Clamp to unsigned range
+clampUnsigned :: Integer -> Integer -> Integer
+clampUnsigned w v = v `mod` (2 ^ w)
 
 -- ── Field access ──────────────────────────────────────────────────
 
@@ -625,7 +706,9 @@ matchPat :: Pat -> Expr -> Maybe [(Text, Expr)]
 matchPat PWild _ = Just []
 matchPat (PVar v) e = Just [(v, e)]
 matchPat (PLit (IntLit a)) (IntLit b)       | a == b = Just []
+matchPat (PLit (IntLit a)) (SizedInt b _ _) | a == b = Just []
 matchPat (PLit (FloatLit a)) (FloatLit b)   | a == b = Just []
+matchPat (PLit (FloatLit a)) (SizedFloat b _) | a == b = Just []
 matchPat (PLit (StringLit a)) (StringLit b) | a == b = Just []
 matchPat (PRec tag fields) (Record rtag bs)
   | tag == rtag || T.null tag =
@@ -736,6 +819,8 @@ chainBodies new old = case (new, old) of
 exprFreeVars :: Expr -> Set.Set Text
 exprFreeVars (IntLit _)      = Set.empty
 exprFreeVars (FloatLit _)    = Set.empty
+exprFreeVars (SizedInt {})   = Set.empty
+exprFreeVars (SizedFloat {}) = Set.empty
 exprFreeVars (StringLit _)   = Set.empty
 exprFreeVars (Name n)        = Set.singleton n
 exprFreeVars (BinOp _ l r)   = Set.union (exprFreeVars l) (exprFreeVars r)
@@ -789,6 +874,8 @@ substExpr var replacement = go
                 | otherwise = Name n
     go (IntLit n)    = IntLit n
     go (FloatLit d)  = FloatLit d
+    go e@(SizedInt {})  = e
+    go e@(SizedFloat {}) = e
     go (StringLit s) = StringLit s
     go (BinOp op l r) = BinOp op (go l) (go r)
     go (App f x)     = App (go f) (go x)
@@ -826,6 +913,11 @@ freshName base used = head [n | i <- [0::Int ..],
 quoteExpr :: Expr -> Expr
 quoteExpr (IntLit n)     = Record "Int" [mkBind "val" (IntLit n)]
 quoteExpr (FloatLit f)   = Record "Float" [mkBind "val" (FloatLit f)]
+quoteExpr (SizedInt n w s) = Record "SizedInt" [mkBind "val" (IntLit n),
+                                                 mkBind "width" (IntLit w),
+                                                 mkBind "signed" (IntLit (if s then 1 else 0))]
+quoteExpr (SizedFloat d w) = Record "SizedFloat" [mkBind "val" (FloatLit d),
+                                                    mkBind "width" (IntLit w)]
 quoteExpr (StringLit s)  = Record "String" [mkBind "val" (StringLit s)]
 quoteExpr (Name n)       = Record "Var" [mkBind "name" (StringLit n)]
 quoteExpr (BinOp op l r) = Record "Op"
@@ -869,6 +961,15 @@ quoteExpr e              = Record "Unknown" [mkBind "val" e]
 spliceExprM :: Expr -> Maybe Expr
 spliceExprM (Record "Int" bs)    = fieldLookup "val" bs
 spliceExprM (Record "Float" bs)  = fieldLookup "val" bs
+spliceExprM (Record "SizedInt" bs) = do
+  IntLit val    <- fieldLookup "val" bs
+  IntLit width  <- fieldLookup "width" bs
+  IntLit signed <- fieldLookup "signed" bs
+  Just (SizedInt val width (signed /= 0))
+spliceExprM (Record "SizedFloat" bs) = do
+  FloatLit val <- fieldLookup "val" bs
+  IntLit width <- fieldLookup "width" bs
+  Just (SizedFloat val width)
 spliceExprM (Record "String" bs) = fieldLookup "val" bs
 spliceExprM (Record "Var" bs)    = case fieldLookup "name" bs of
   Just (StringLit n) -> Just (Name n)
