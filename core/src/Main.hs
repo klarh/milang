@@ -106,6 +106,8 @@ resolveExpr cache dir (Thunk e) = Thunk <$> resolveExpr cache dir e
 resolveExpr cache dir (ListLit es) = ListLit <$> mapM (resolveExpr cache dir) es
 resolveExpr cache dir (With e bs) =
   With <$> resolveExpr cache dir e <*> mapM (resolveBinding cache dir) bs
+resolveExpr cache dir (Quote e) = Quote <$> resolveExpr cache dir e
+resolveExpr cache dir (Splice e) = Splice <$> resolveExpr cache dir e
 resolveExpr _ _ e = pure e  -- literals, names, errors
 
 resolveBinding :: IORef (Map.Map FilePath Expr) -> FilePath -> Binding -> IO Binding

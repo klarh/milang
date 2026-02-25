@@ -46,6 +46,8 @@ data Expr
   | ListLit [Expr]              -- [a, b, c]
   | With Expr [Binding]         -- expr <- { bindings } (record update)
   | Import !Text                -- import "path": file import
+  | Quote Expr                  -- #expr: reify syntax as data (AST records)
+  | Splice Expr                 -- $expr: interpret data as syntax and reduce
   | Error !Text                 -- reduction error (type error, trait violation, etc.)
   deriving (Show, Eq)
 
@@ -110,6 +112,8 @@ prettyExpr i (ListLit es)    = "[" ++ intercalate ", " (map (prettyExpr i) es) +
 prettyExpr i (With e bs)     =
   prettyExpr i e ++ " <- {" ++ prettyBindings i bs ++ "}"
 prettyExpr _ (Import path)   = "import \"" ++ T.unpack path ++ "\""
+prettyExpr i (Quote e)       = "#(" ++ prettyExpr i e ++ ")"
+prettyExpr i (Splice e)      = "$(" ++ prettyExpr i e ++ ")"
 prettyExpr _ (Error msg)     = "<error: " ++ T.unpack msg ++ ">"
 
 prettyBindings :: Int -> [Binding] -> String

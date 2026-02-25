@@ -233,6 +233,14 @@ reduceD d env (ListLit es) = listToCons (map (reduceD d env) es)
 -- Import should have been resolved before reduction; if not, leave as-is
 reduceD _ _ e@(Import _) = e
 
+-- Quote: reify syntax as data (AST records), don't evaluate the body
+reduceD _ _ (Quote e) = quoteExpr e
+
+-- Splice: reduce the body to a record, interpret as AST, then reduce
+reduceD d env (Splice e) =
+  let val = reduceD d env e
+  in reduceD d env (spliceExpr val)
+
 reduceD _ _ (Error msg) = Error msg
 
 -- ── Binding evaluation (unified) ──────────────────────────────────
@@ -591,6 +599,8 @@ exprFreeVars (Thunk e)       = exprFreeVars e
 exprFreeVars (ListLit es)    = Set.unions (map exprFreeVars es)
 exprFreeVars (With e bs)     = Set.union (bindingsFreeVars bs) (exprFreeVars e)
 exprFreeVars (Import _)      = Set.empty
+exprFreeVars (Quote e)       = exprFreeVars e
+exprFreeVars (Splice e)      = exprFreeVars e
 exprFreeVars (Error _)       = Set.empty
 
 bindingFreeVars :: Binding -> Set.Set Text
@@ -642,6 +652,8 @@ substExpr var replacement = go
     go (ListLit es)    = ListLit (map go es)
     go (With e bs)     = With (go e) (map goBind bs)
     go e@(Import _)    = e
+    go (Quote e)       = Quote (go e)
+    go (Splice e)      = Splice (go e)
     go e@(Error _)     = e
 
     goBind b = b { bindBody = go (bindBody b) }
@@ -655,3 +667,67 @@ freshName :: Text -> Set.Set Text -> Text
 freshName base used = head [n | i <- [0::Int ..],
                             let n = base <> T.pack (show i),
                             not (Set.member n used)]
+
+-- ── Quote / Splice ──────────────────────────────────────────────
+
+-- | Convert an expression to its AST record representation (without evaluating)
+quoteExpr :: Expr -> Expr
+quoteExpr (IntLit n)     = Record "Int" [mkBind "val" (IntLit n)]
+quoteExpr (FloatLit f)   = Record "Float" [mkBind "val" (FloatLit f)]
+quoteExpr (StringLit s)  = Record "String" [mkBind "val" (StringLit s)]
+quoteExpr (Name n)       = Record "Var" [mkBind "name" (StringLit n)]
+quoteExpr (BinOp op l r) = Record "Op"
+  [ mkBind "op" (StringLit op)
+  , mkBind "left" (quoteExpr l)
+  , mkBind "right" (quoteExpr r) ]
+quoteExpr (App f x)      = Record "App"
+  [ mkBind "fn" (quoteExpr f)
+  , mkBind "arg" (quoteExpr x) ]
+quoteExpr (Lam p b)      = Record "Lam"
+  [ mkBind "param" (StringLit p)
+  , mkBind "body" (quoteExpr b) ]
+quoteExpr (Record t bs)  = Record "Rec"
+  [ mkBind "tag" (StringLit t)
+  , mkBind "fields" (listToCons [Record "" [mkBind "name" (StringLit (bindName b)),
+                                            mkBind "val" (quoteExpr (bindBody b))] | b <- bs]) ]
+quoteExpr (Case s alts)  = Record "Case"
+  [ mkBind "scrutinee" (quoteExpr s)
+  , mkBind "alts" (listToCons [quoteExpr (altBody a) | a <- alts]) ]
+quoteExpr (ListLit es)   = Record "List"
+  [ mkBind "items" (listToCons (map quoteExpr es)) ]
+quoteExpr (Thunk e)      = Record "Thunk" [mkBind "body" (quoteExpr e)]
+quoteExpr (Quote e)      = Record "Quote" [mkBind "body" (quoteExpr e)]
+quoteExpr (Splice e)     = Record "Splice" [mkBind "body" (quoteExpr e)]
+quoteExpr e              = Record "Unknown" [mkBind "val" e]
+
+-- | Convert an AST record representation back to an expression
+spliceExpr :: Expr -> Expr
+spliceExpr (Record "Int" bs)    = maybe (Error "splice: Int missing val") id (fieldLookup "val" bs)
+spliceExpr (Record "Float" bs)  = maybe (Error "splice: Float missing val") id (fieldLookup "val" bs)
+spliceExpr (Record "String" bs) = maybe (Error "splice: String missing val") id (fieldLookup "val" bs)
+spliceExpr (Record "Var" bs)    = case fieldLookup "name" bs of
+  Just (StringLit n) -> Name n
+  _                  -> Error "splice: Var missing name"
+spliceExpr (Record "Op" bs)     =
+  case (fieldLookup "op" bs, fieldLookup "left" bs, fieldLookup "right" bs) of
+    (Just (StringLit op), Just l, Just r) -> BinOp op (spliceExpr l) (spliceExpr r)
+    _ -> Error "splice: Op missing fields"
+spliceExpr (Record "App" bs)    =
+  case (fieldLookup "fn" bs, fieldLookup "arg" bs) of
+    (Just f, Just x) -> App (spliceExpr f) (spliceExpr x)
+    _ -> Error "splice: App missing fields"
+spliceExpr (Record "Lam" bs)    =
+  case (fieldLookup "param" bs, fieldLookup "body" bs) of
+    (Just (StringLit p), Just b) -> Lam p (spliceExpr b)
+    _ -> Error "splice: Lam missing fields"
+-- Raw values pass through (for manual AST construction like r9)
+spliceExpr e@(IntLit _)    = e
+spliceExpr e@(FloatLit _)  = e
+spliceExpr e@(StringLit _) = e
+spliceExpr e               = e  -- anything else passes through
+
+-- | Look up a field by name in a record's bindings
+fieldLookup :: Text -> [Binding] -> Maybe Expr
+fieldLookup name bs = case [bindBody b | b <- bs, bindName b == name] of
+  (v:_) -> Just v
+  []    -> Nothing

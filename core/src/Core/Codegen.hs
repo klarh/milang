@@ -225,6 +225,8 @@ exprToC st (ListLit es) = exprToC st (listLitToCons es)
 
 exprToC _ (Error msg) = pure $ "mi_expr_string(" ++ cStringLit (T.unpack msg) ++ ")"
 exprToC _ (Import path) = pure $ "mi_expr_string(" ++ cStringLit ("unresolved import: " ++ T.unpack path) ++ ")"
+exprToC st (Quote e) = exprToC st e   -- should be reduced to records already
+exprToC st (Splice e) = exprToC st e  -- should be reduced away already
 
 -- | Escape a string for C
 cStringLit :: String -> String

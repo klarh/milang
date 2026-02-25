@@ -412,14 +412,14 @@ pDotChain e = do
 
 pAtomML :: Bool -> Parser Expr
 pAtomML ml = choice
-  [ pParens, pListLit, pThunk, pImport
+  [ pParens, pListLit, pThunk, pQuote, pSplice, pImport
   , try pStringLit, try pFloatLit, pIntLit
   , pLambdaML ml, try pUnionDecl, try pAnonRecord, pNameOrRecord
   ]
 
 pAtomNoRecordML :: Bool -> Parser Expr
 pAtomNoRecordML ml = choice
-  [ pParens, pListLit, pThunk, pImport
+  [ pParens, pListLit, pThunk, pQuote, pSplice, pImport
   , try pStringLit, try pFloatLit, pIntLit
   , pLambdaML ml, try pUnionDecl, pNameOrRecord
   ]
@@ -439,6 +439,12 @@ pParens = do
 
 pThunk :: Parser Expr
 pThunk = symbol "~" *> (Thunk <$> pAtomDot False)
+
+pQuote :: Parser Expr
+pQuote = symbol "#" *> (Quote <$> pAtomDot False)
+
+pSplice :: Parser Expr
+pSplice = symbol "$" *> (Splice <$> pAtomDot False)
 
 pImport :: Parser Expr
 pImport = do
