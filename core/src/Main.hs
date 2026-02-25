@@ -88,7 +88,7 @@ stripDeepModules :: Int -> Expr -> Expr
 stripDeepModules maxD = go False 0
   where
     go _ d (Namespace bs)
-      | d >= maxD && circular = StringLit "<circular>"
+      | d >= maxD && circular = StringLit "<closure>"
       | otherwise = Namespace (map (goB circular' (d + 1)) bs)
       where circular = hasCircularRef (Namespace bs)
             circular' = circular
@@ -105,7 +105,7 @@ stripDeepModules maxD = go False 0
     goB circ d b =
       let body' = go circ d (bindBody b)
       in if d >= maxD && circ && not (isSimpleVal body')
-         then b { bindBody = StringLit "<circular>" }
+         then b { bindBody = StringLit "<closure>" }
          else b { bindBody = body' }
     isSimpleVal (IntLit _)    = True
     isSimpleVal (FloatLit _)  = True

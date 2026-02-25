@@ -176,7 +176,7 @@ exprToC _ (FloatLit d) = pure $ "mi_expr_float(" ++ show d ++ ")"
 exprToC _ (StringLit s) = pure $ "mi_expr_string(" ++ cStringLit (T.unpack s) ++ ")"
 exprToC _ (Name n)
   | "__mod_" `T.isPrefixOf` n && "__" `T.isSuffixOf` n =
-    pure "mi_expr_string(\"<circular>\")"  -- circular module reference placeholder
+    pure "mi_expr_string(\"<closure>\")"  -- circular module reference placeholder
   | otherwise = pure $ "mi_expr_name(\"" ++ T.unpack n ++ "\")"
 
 exprToC st (BinOp op l r)
