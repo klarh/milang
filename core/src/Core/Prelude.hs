@@ -37,7 +37,7 @@ preludeSrc = T.unlines
   , "contains lst x = any (\\el -> el == x) lst"
   , "range start end = range_helper start end []"
   , "range_helper start end acc = if (start >= end) acc (range_helper start (end - 1) (Cons (end - 1) acc))"
-  , "zip a b = if (null a) [] (if (null b) [] (Cons [head a, head b] (zip (tail a) (tail b))))"
+  , "zip a b = if (null a) [] (if (null b) [] (Cons [a.head, b.head] (zip a.tail b.tail)))"
   , "last lst = lst -> Nil = Nothing; Cons h t = if (null t) (Just h) (last t)"
   , "init lst = lst -> Nil = Nothing; Cons h t = if (null t) (Just []) (Just (Cons h (fromMaybe [] (init t))))"
   , "reverse lst = fold (\\acc x -> Cons x acc) [] lst"
