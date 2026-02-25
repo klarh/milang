@@ -7,12 +7,14 @@ import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout)
 import System.Process (readProcessWithExitCode)
 import System.Directory (removeFile, doesFileExist, getCurrentDirectory)
 import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>))
+import Control.Monad (unless)
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
-import Data.List (nub, isPrefixOf)
+import Data.List (nub, isPrefixOf, sort)
 
 import Core.Syntax
 import Core.Parser (parseProgram)
@@ -20,6 +22,7 @@ import Core.Reduce (reduce, emptyEnv, Warning(..))
 import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
 import Core.CHeader (parseCHeader, CFunSig(..))
+import Core.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
 
 -- | Link info accumulated during import resolution
 data LinkInfo = LinkInfo
@@ -37,6 +40,16 @@ mergeLinkInfo a b = LinkInfo
   (linkSources a ++ linkSources b)
   (linkIncludes a ++ linkIncludes b)
 
+-- | Resolution context for import resolution
+data ResCtx = ResCtx
+  { rcCache      :: IORef (Map.Map String Expr)     -- resolved imports by path/URL
+  , rcInProgress :: IORef (Set.Set String)           -- circular import detection
+  , rcCircRefs   :: IORef (Set.Set String)           -- detected circular refs
+  , rcLinkRef    :: IORef LinkInfo                   -- accumulated link info
+  , rcMerkle     :: IORef (Map.Map String String)    -- URL -> Merkle hash
+  , rcHashErrs   :: IORef [(String, String, String)] -- (path, expected, actual)
+  }
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -47,9 +60,10 @@ main = do
     ["dump", file]               -> cmdDump file
     ["reduce", file]             -> cmdReduce file
     ["raw-reduce", file]         -> cmdRawReduce file
+    ["pin", file]                -> cmdPin file
     _ -> do
       hPutStrLn stderr "Usage: milang-core <command> <file>"
-      hPutStrLn stderr "Commands: run, compile, dump, reduce, raw-reduce"
+      hPutStrLn stderr "Commands: run, compile, dump, reduce, raw-reduce, pin"
       exitFailure
 
 -- | Load and parse a file
@@ -181,117 +195,231 @@ hasCircularRef _              = False
 -- Circular imports are replaced with Name references to top-level module bindings.
 resolveImports :: String -> Expr -> IO (Expr, LinkInfo)
 resolveImports file expr = do
-  cache      <- newIORef (Map.empty :: Map.Map FilePath Expr)
-  inProgress <- newIORef (Set.empty :: Set.Set FilePath)
-  circRefs   <- newIORef (Set.empty :: Set.Set FilePath)
+  result <- resolveAndPin file expr
+  case result of
+    Left err -> do
+      hPutStrLn stderr err
+      exitFailure
+    Right (ast, li, _) -> pure (ast, li)
+
+-- | Like resolveImports but also returns the Merkle hash map (URL → hash).
+resolveAndPin :: String -> Expr -> IO (Either String (Expr, LinkInfo, Map.Map String String))
+resolveAndPin file expr = do
+  cache      <- newIORef Map.empty
+  inProgress <- newIORef Set.empty
+  circRefs   <- newIORef Set.empty
   linkRef    <- newIORef emptyLinkInfo
-  resolved <- resolveExpr cache inProgress circRefs linkRef (takeDirectory file) expr
-  -- Lift circular-referenced modules as top-level bindings
-  circSet  <- readIORef circRefs
-  cacheMap <- readIORef cache
-  li       <- readIORef linkRef
-  let result = if Set.null circSet
-        then resolved
-        else
-          let modBinds = [ Binding { bindDomain = Value
-                                   , bindName   = moduleRefName p
-                                   , bindParams = []
-                                   , bindBody   = content
-                                   , bindPos    = Nothing
-                                   }
-                         | p <- Set.toList circSet
-                         , Just content <- [Map.lookup p cacheMap]
-                         ]
-          in case resolved of
-               Namespace bs -> Namespace (modBinds ++ bs)
-               _ -> resolved
-  pure (result, li)
+  merkle     <- newIORef Map.empty
+  hashErrs   <- newIORef []
+  let ctx = ResCtx cache inProgress circRefs linkRef merkle hashErrs
+  resolved <- resolveExpr ctx (takeDirectory file) expr
+  -- Check for hash verification errors
+  errs <- readIORef hashErrs
+  case errs of
+    (_:_) -> do
+      mapM_ (\(path, expected, actual) -> do
+        hPutStrLn stderr $ "Hash mismatch for " ++ path
+        hPutStrLn stderr $ "  expected: " ++ expected
+        hPutStrLn stderr $ "  actual:   " ++ actual
+        ) (reverse errs)
+      pure $ Left $ "sha256 verification failed for " ++ show (length errs) ++ " import(s)"
+    [] -> do
+      -- Lift circular-referenced modules as top-level bindings
+      circSet  <- readIORef circRefs
+      cacheMap <- readIORef cache
+      li       <- readIORef linkRef
+      mh       <- readIORef merkle
+      let result = if Set.null circSet
+            then resolved
+            else
+              let modBinds = [ Binding { bindDomain = Value
+                                       , bindName   = moduleRefName p
+                                       , bindParams = []
+                                       , bindBody   = content
+                                       , bindPos    = Nothing
+                                       }
+                             | p <- Set.toList circSet
+                             , Just content <- [Map.lookup p cacheMap]
+                             ]
+              in case resolved of
+                   Namespace bs -> Namespace (modBinds ++ bs)
+                   _ -> resolved
+      pure $ Right (result, li, mh)
 
 -- | Generate a stable reference name for a module file path
 moduleRefName :: FilePath -> T.Text
 moduleRefName path = "__mod_" <> T.pack (map sanitize path) <> "__"
   where sanitize '/' = '_'; sanitize '.' = '_'; sanitize '-' = '_'; sanitize c = c
 
-resolveExpr :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> IORef LinkInfo -> FilePath -> Expr -> IO Expr
+resolveExpr :: ResCtx -> String -> Expr -> IO Expr
 -- Handle import' "path" ({opts}) — 2-arg import with options
-resolveExpr cache inProg circRefs linkRef dir (App (App (Name "import'") (StringLit path)) (Record _ opts)) = do
-  importOpts <- extractImportOpts dir opts
-  modifyIORef linkRef (mergeLinkInfo importOpts)
-  resolveExpr cache inProg circRefs linkRef dir (Import path)
--- Handle regular imports
-resolveExpr cache inProg circRefs linkRef dir (Import path) = do
+resolveExpr ctx dir (App (App (Name "import'") (StringLit path)) (Record _ opts)) = do
   let pathStr = T.unpack path
-      relPath = dir </> pathStr
-  cached <- readIORef cache
+      sha256  = extractSha256 opts
+  -- For local imports, extract link info
+  unless (isURL pathStr) $ do
+    importOpts <- extractImportOpts dir opts
+    modifyIORef (rcLinkRef ctx) (mergeLinkInfo importOpts)
+  resolveImport ctx dir pathStr sha256
+-- Handle regular imports
+resolveExpr ctx dir (Import path) =
+  resolveImport ctx dir (T.unpack path) Nothing
+resolveExpr ctx dir (Namespace bs) =
+  Namespace <$> mapM (resolveBinding ctx dir) bs
+resolveExpr ctx dir (App f x) =
+  App <$> resolveExpr ctx dir f <*> resolveExpr ctx dir x
+resolveExpr ctx dir (BinOp op l r) =
+  BinOp op <$> resolveExpr ctx dir l <*> resolveExpr ctx dir r
+resolveExpr ctx dir (Lam p b) =
+  Lam p <$> resolveExpr ctx dir b
+resolveExpr ctx dir (Record t bs) =
+  Record t <$> mapM (resolveBinding ctx dir) bs
+resolveExpr ctx dir (FieldAccess e f) =
+  (\e' -> FieldAccess e' f) <$> resolveExpr ctx dir e
+resolveExpr ctx dir (Case s alts) =
+  Case <$> resolveExpr ctx dir s <*> mapM (resolveAlt ctx dir) alts
+resolveExpr ctx dir (Thunk e) = Thunk <$> resolveExpr ctx dir e
+resolveExpr ctx dir (ListLit es) = ListLit <$> mapM (resolveExpr ctx dir) es
+resolveExpr ctx dir (With e bs) =
+  With <$> resolveExpr ctx dir e <*> mapM (resolveBinding ctx dir) bs
+resolveExpr ctx dir (Quote e) = Quote <$> resolveExpr ctx dir e
+resolveExpr ctx dir (Splice e) = Splice <$> resolveExpr ctx dir e
+resolveExpr _ _ e = pure e  -- literals, names, errors
+
+-- | Unified import resolution: handles local files and URLs
+resolveImport :: ResCtx -> String -> String -> Maybe String -> IO Expr
+resolveImport ctx dir pathStr expectedHash
+  | isURL pathStr = resolveURLImport ctx pathStr expectedHash
+  | isURL dir     = resolveURLImport ctx (resolveURL dir pathStr) expectedHash
+  | otherwise     = resolveLocalImport ctx dir pathStr expectedHash
+
+-- | Resolve a local file import
+resolveLocalImport :: ResCtx -> String -> String -> Maybe String -> IO Expr
+resolveLocalImport ctx dir pathStr _expectedHash = do
+  let relPath = dir </> pathStr
+  cached <- readIORef (rcCache ctx)
   case Map.lookup relPath cached of
     Just e  -> pure e
     Nothing -> case Map.lookup pathStr cached of
       Just e -> pure e
       Nothing -> do
-        -- Check for C header import
         if takeExtension pathStr == ".h"
           then do
-            let fullPath = if head pathStr == '/' then pathStr else relPath
+            let fullPath = if not (null pathStr) && head pathStr == '/' then pathStr else relPath
             autoInfo <- autoLinkInfo fullPath
-            modifyIORef linkRef (mergeLinkInfo autoInfo)
+            modifyIORef (rcLinkRef ctx) (mergeLinkInfo autoInfo)
             result <- loadCHeader fullPath
             case result of
               Left err -> pure $ Error (T.pack err)
               Right ns -> do
-                modifyIORef cache (Map.insert relPath ns)
+                modifyIORef (rcCache ctx) (Map.insert relPath ns)
                 pure ns
           else do
-            progress <- readIORef inProg
+            progress <- readIORef (rcInProgress ctx)
             if Set.member relPath progress
               then do
-                modifyIORef circRefs (Set.insert relPath)
+                modifyIORef (rcCircRefs ctx) (Set.insert relPath)
                 pure $ Name (moduleRefName relPath)
               else do
                 exists <- doesFileExist relPath
                 if not exists
-                  then pure $ Error ("import not found: " <> path)
+                  then pure $ Error ("import not found: " <> T.pack pathStr)
                   else do
                     src <- TIO.readFile relPath
                     case parseProgram relPath src of
                       Left err -> pure $ Error (T.pack (show err))
                       Right ast -> do
-                        modifyIORef inProg (Set.insert relPath)
-                        resolved <- resolveExpr cache inProg circRefs linkRef (takeDirectory relPath) ast
-                        modifyIORef cache (Map.insert relPath resolved)
-                        modifyIORef inProg (Set.delete relPath)
+                        modifyIORef (rcInProgress ctx) (Set.insert relPath)
+                        resolved <- resolveExpr ctx (takeDirectory relPath) ast
+                        modifyIORef (rcCache ctx) (Map.insert relPath resolved)
+                        modifyIORef (rcInProgress ctx) (Set.delete relPath)
                         pure resolved
-resolveExpr cache ip cr lr dir (Namespace bs) =
-  Namespace <$> mapM (resolveBinding cache ip cr lr dir) bs
-resolveExpr cache ip cr lr dir (App f x) =
-  App <$> resolveExpr cache ip cr lr dir f <*> resolveExpr cache ip cr lr dir x
-resolveExpr cache ip cr lr dir (BinOp op l r) =
-  BinOp op <$> resolveExpr cache ip cr lr dir l <*> resolveExpr cache ip cr lr dir r
-resolveExpr cache ip cr lr dir (Lam p b) =
-  Lam p <$> resolveExpr cache ip cr lr dir b
-resolveExpr cache ip cr lr dir (Record t bs) =
-  Record t <$> mapM (resolveBinding cache ip cr lr dir) bs
-resolveExpr cache ip cr lr dir (FieldAccess e f) =
-  (\e' -> FieldAccess e' f) <$> resolveExpr cache ip cr lr dir e
-resolveExpr cache ip cr lr dir (Case s alts) =
-  Case <$> resolveExpr cache ip cr lr dir s <*> mapM (resolveAlt cache ip cr lr dir) alts
-resolveExpr cache ip cr lr dir (Thunk e) = Thunk <$> resolveExpr cache ip cr lr dir e
-resolveExpr cache ip cr lr dir (ListLit es) = ListLit <$> mapM (resolveExpr cache ip cr lr dir) es
-resolveExpr cache ip cr lr dir (With e bs) =
-  With <$> resolveExpr cache ip cr lr dir e <*> mapM (resolveBinding cache ip cr lr dir) bs
-resolveExpr cache ip cr lr dir (Quote e) = Quote <$> resolveExpr cache ip cr lr dir e
-resolveExpr cache ip cr lr dir (Splice e) = Splice <$> resolveExpr cache ip cr lr dir e
-resolveExpr _ _ _ _ _ e = pure e  -- literals, names, errors
 
-resolveBinding :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> IORef LinkInfo -> FilePath -> Binding -> IO Binding
-resolveBinding cache ip cr lr dir b = do
-  body' <- resolveExpr cache ip cr lr dir (bindBody b)
+-- | Resolve a URL import with Merkle hash computation
+resolveURLImport :: ResCtx -> String -> Maybe String -> IO Expr
+resolveURLImport ctx url expectedHash = do
+  -- Check Merkle cache first
+  merkleMap <- readIORef (rcMerkle ctx)
+  case Map.lookup url merkleMap of
+    Just _ -> do
+      cached <- Map.lookup url <$> readIORef (rcCache ctx)
+      case cached of
+        Just expr -> pure expr
+        Nothing   -> pure $ Error (T.pack $ "internal error: Merkle cached but not import cached: " ++ url)
+    Nothing -> do
+      result <- fetchRemote url
+      case result of
+        Left err -> pure $ Error (T.pack err)
+        Right localPath -> do
+          src <- TIO.readFile localPath
+          case parseProgram localPath src of
+            Left err -> pure $ Error (T.pack (show err))
+            Right parsedAST -> do
+              let baseDir = urlDirName url
+                  subURLs = collectImportURLs baseDir parsedAST
+              -- Resolve recursively
+              resolved <- resolveExpr ctx baseDir parsedAST
+              -- Compute Merkle hash
+              contentHash <- hashFile localPath
+              merkleMap' <- readIORef (rcMerkle ctx)
+              let subHashes = sort [ h | u <- subURLs
+                                       , Just h <- [Map.lookup u merkleMap'] ]
+                  merkleInput = contentHash ++ concat subHashes
+                  merkleHash = hashBytes (BS8.pack merkleInput)
+              modifyIORef (rcMerkle ctx) (Map.insert url merkleHash)
+              modifyIORef (rcCache ctx) (Map.insert url resolved)
+              -- Verify against expected hash
+              case expectedHash of
+                Nothing -> do
+                  hPutStrLn stderr $ "WARNING: no sha256 for import \"" ++ url ++ "\""
+                  hPutStrLn stderr $ "  sha256 = \"" ++ merkleHash ++ "\""
+                Just expected
+                  | expected == merkleHash -> pure ()
+                  | otherwise ->
+                      modifyIORef (rcHashErrs ctx) ((url, expected, merkleHash) :)
+              pure resolved
+
+-- | Collect import URLs from a parsed AST (for Merkle hash computation)
+collectImportURLs :: String -> Expr -> [String]
+collectImportURLs base = go
+  where
+    resolve p = if isURL p then p else resolveURL base p
+    go (App (App (Name "import'") (StringLit path)) (Record _ _)) =
+      let p = T.unpack path
+      in if isURL p || not ("/" `isPrefixOf` p) then [resolve p] else []
+    go (Import path) =
+      let p = T.unpack path
+      in if isURL p || not ("/" `isPrefixOf` p) then [resolve p] else []
+    go (BinOp _ l r)      = go l ++ go r
+    go (App f x)          = go f ++ go x
+    go (Lam _ b)          = go b
+    go (With e bs)        = go e ++ concatMap (go . bindBody) bs
+    go (Record _ bs)      = concatMap (go . bindBody) bs
+    go (FieldAccess e _)  = go e
+    go (Namespace bs)     = concatMap (go . bindBody) bs
+    go (Case s as)        = go s ++ concatMap (\a -> maybe [] go (altGuard a) ++ go (altBody a)) as
+    go (Thunk b)          = go b
+    go (ListLit es)       = concatMap go es
+    go (Quote b)          = go b
+    go (Splice b)         = go b
+    go _                  = []
+
+-- | Extract sha256 from import options
+extractSha256 :: [Binding] -> Maybe String
+extractSha256 bs = case [T.unpack v | Binding { bindName = "sha256", bindBody = StringLit v } <- bs] of
+  (h:_) -> Just h
+  []    -> Nothing
+
+resolveBinding :: ResCtx -> String -> Binding -> IO Binding
+resolveBinding ctx dir b = do
+  body' <- resolveExpr ctx dir (bindBody b)
   pure b { bindBody = body' }
 
-resolveAlt :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> IORef LinkInfo -> FilePath -> Alt -> IO Alt
-resolveAlt cache ip cr lr dir (Alt p g body) = do
-  body' <- resolveExpr cache ip cr lr dir body
+resolveAlt :: ResCtx -> String -> Alt -> IO Alt
+resolveAlt ctx dir (Alt p g body) = do
+  body' <- resolveExpr ctx dir body
   g' <- case g of
-    Just ge -> Just <$> resolveExpr cache ip cr lr dir ge
+    Just ge -> Just <$> resolveExpr ctx dir ge
     Nothing -> pure Nothing
   pure $ Alt p g' body'
 
@@ -362,6 +490,70 @@ cmdRawReduce file = do
   ast <- loadAndParse file
   let (reduced, _) = reduce emptyEnv ast
   putStrLn (prettyExpr 0 reduced)
+
+-- | pin: find unpinned URL imports, fetch them, compute Merkle hashes, rewrite source
+cmdPin :: String -> IO ()
+cmdPin file = do
+  ast <- loadAndParse file
+  -- Find URL imports that are unpinned
+  let urlImports = findURLImports ast
+  if null urlImports
+    then putStrLn "No URL imports found."
+    else do
+      -- Resolve all imports to compute Merkle hashes
+      result <- resolveAndPin file (injectPrelude True ast)
+      case result of
+        Left err -> do
+          hPutStrLn stderr err
+          exitFailure
+        Right (_, _, merkleMap) -> do
+          -- Rewrite the source file, adding sha256 hashes
+          src <- TIO.readFile file
+          let updates = [ (url, hash)
+                        | (url, currentHash) <- urlImports
+                        , Nothing <- [currentHash]
+                        , Just hash <- [Map.lookup url merkleMap]
+                        ]
+          if null updates
+            then putStrLn "All URL imports are already pinned."
+            else do
+              let src' = foldl (\s (url, hash) -> pinImport s url hash) src updates
+              TIO.writeFile file src'
+              mapM_ (\(url, hash) -> putStrLn $ "Pinned: " ++ url ++ " sha256=\"" ++ hash ++ "\"") updates
+
+-- | Rewrite a source text to add sha256 to an import
+pinImport :: T.Text -> String -> String -> T.Text
+pinImport src url hash =
+  let urlT = T.pack url
+      hashT = T.pack hash
+      -- Pattern: import "url" → import' "url" ({sha256 = "hash"})
+      importPat = "import \"" <> urlT <> "\""
+      replacement = "import' \"" <> urlT <> "\" ({sha256 = \"" <> hashT <> "\"})"
+  in T.replace importPat replacement src
+
+-- | Find URL imports in a parsed AST, returning (url, Maybe existing_hash)
+findURLImports :: Expr -> [(String, Maybe String)]
+findURLImports = go
+  where
+    go (App (App (Name "import'") (StringLit path)) (Record _ opts)) =
+      let p = T.unpack path
+      in if isURL p then [(p, extractSha256 opts)] else concatMap (go . bindBody) opts
+    go (Import path) =
+      let p = T.unpack path
+      in if isURL p then [(p, Nothing)] else []
+    go (Namespace bs)     = concatMap (go . bindBody) bs
+    go (App f x)          = go f ++ go x
+    go (BinOp _ l r)      = go l ++ go r
+    go (Lam _ b)          = go b
+    go (Record _ bs)      = concatMap (go . bindBody) bs
+    go (FieldAccess e _)  = go e
+    go (Case s as)        = go s ++ concatMap (\a -> maybe [] go (altGuard a) ++ go (altBody a)) as
+    go (With e bs)        = go e ++ concatMap (go . bindBody) bs
+    go (Thunk b)          = go b
+    go (ListLit es)       = concatMap go es
+    go (Quote b)          = go b
+    go (Splice b)         = go b
+    go _                  = []
 
 -- | dump: show parsed AST
 cmdDump :: String -> IO ()
