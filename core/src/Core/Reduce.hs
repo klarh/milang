@@ -603,13 +603,25 @@ reduceBinOp ":" hd tl = Record "Cons" [mkBind "head" hd, mkBind "tail" tl]
 reduceBinOp "/" l r | Just _ <- intVal l, Just 0 <- intVal r = Error "division by zero"
 reduceBinOp "%" l r | Just _ <- intVal l, Just 0 <- intVal r = Error "division by zero"
 reduceBinOp "/" l r | Just _ <- floatVal l, Just 0 <- floatVal r = Error "division by zero"
--- Type mismatch (string + number, number + string)
-reduceBinOp "+" (StringLit _) r | Just _ <- intVal r   = Error "type mismatch: cannot add String and Int"
-reduceBinOp "+" (StringLit _) r | Just _ <- floatVal r = Error "type mismatch: cannot add String and Float"
-reduceBinOp "+" l (StringLit _) | Just _ <- intVal l   = Error "type mismatch: cannot add Int and String"
-reduceBinOp "+" l (StringLit _) | Just _ <- floatVal l = Error "type mismatch: cannot add Float and String"
+-- Type mismatches: string with arithmetic operators
+reduceBinOp op (StringLit _) r | isArith op, Just _ <- intVal r   = Error (T.concat ["cannot ", opVerb op, " string"])
+reduceBinOp op (StringLit _) r | isArith op, Just _ <- floatVal r = Error (T.concat ["cannot ", opVerb op, " string"])
+reduceBinOp op l (StringLit _) | isArith op, Just _ <- intVal l   = Error (T.concat ["cannot ", opVerb op, " string"])
+reduceBinOp op l (StringLit _) | isArith op, Just _ <- floatVal l = Error (T.concat ["cannot ", opVerb op, " string"])
 -- Residual
 reduceBinOp op l r = BinOp op l r
+
+isArith :: Text -> Bool
+isArith op = op `elem` ["+", "-", "*", "/", "%", "**"]
+
+opVerb :: Text -> Text
+opVerb "+" = "add"
+opVerb "-" = "subtract from"
+opVerb "*" = "multiply"
+opVerb "/" = "divide"
+opVerb "%" = "modulo"
+opVerb "**" = "exponentiate"
+opVerb _ = "operate on"
 
 -- | Extract integer value from IntLit or SizedInt
 intVal :: Expr -> Maybe Integer

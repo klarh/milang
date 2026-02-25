@@ -1,10 +1,11 @@
-.PHONY: all clean test docs docs-serve
+.PHONY: all clean test test-hs docs docs-serve
 
 all:
-	cd hs && cabal build
-	ln -sf $$(cd hs && cabal list-bin milang) milang
+	cd core && cabal build
+	ln -sf $$(cd core && cabal list-bin milang-core) milang
 
 clean:
+	cd core && cabal clean
 	cd hs && cabal clean
 	rm -f milang
 
@@ -40,6 +41,11 @@ test: all
 	rm -rf "$$TMPDIR"; \
 	echo "Passed: $$PASS, Failed: $$FAIL"; \
 	[ $$FAIL -eq 0 ]
+
+test-hs:
+	cd hs && cabal build
+	ln -sf $$(cd hs && cabal list-bin milang) milang
+	$(MAKE) test
 
 docs:
 	cd docs && mdbook build

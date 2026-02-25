@@ -20,6 +20,7 @@ import Control.Exception (catch, IOException)
 
 import Core.Syntax
 import Core.Parser (parseProgram, parseExpr)
+import Text.Megaparsec (errorBundlePretty)
 import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap)
 import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
@@ -59,24 +60,53 @@ main = do
     ("run" : file : runArgs)     -> cmdRun file runArgs
     ["compile", file]            -> cmdCompile file Nothing
     ["compile", file, out]       -> cmdCompile file (Just out)
+    ["compile", file, "-o", out] -> cmdCompile file (Just out)
     ["dump", file]               -> cmdDump file
     ["reduce", file]             -> cmdReduce file
     ["raw-reduce", file]         -> cmdRawReduce file
     ["pin", file]                -> cmdPin file
     ["repl"]                     -> cmdRepl
+    ["--version"]                -> putStrLn "milang 0.1.0"
+    ["-v"]                       -> putStrLn "milang 0.1.0"
+    ["--help"]                   -> printHelp
+    ["-h"]                       -> printHelp
+    []                           -> printHelp
     _ -> do
-      hPutStrLn stderr "Usage: milang-core <command> [file]"
-      hPutStrLn stderr "Commands: run, compile, dump, reduce, raw-reduce, pin, repl"
+      hPutStrLn stderr $ "milang: unknown command '" ++ unwords args ++ "'"
+      hPutStrLn stderr "Run 'milang --help' for usage information."
       exitFailure
+
+printHelp :: IO ()
+printHelp = do
+  putStrLn "milang — the milang compiler"
+  putStrLn ""
+  putStrLn "Usage: milang <command> [options]"
+  putStrLn ""
+  putStrLn "Commands:"
+  putStrLn "  run <file> [args]       Compile and run a .mi file"
+  putStrLn "  compile <file> [-o out] Compile to C (default: <file>.c)"
+  putStrLn "  reduce <file>           Show reduced AST (with prelude)"
+  putStrLn "  dump <file>             Show parsed AST (no reduction)"
+  putStrLn "  raw-reduce <file>       Show reduced AST (no prelude)"
+  putStrLn "  pin <file>              Add sha256 hashes to URL imports"
+  putStrLn "  repl                    Interactive REPL"
+  putStrLn ""
+  putStrLn "Options:"
+  putStrLn "  --help, -h              Show this help message"
+  putStrLn "  --version, -v           Show version"
 
 -- | Load and parse a file
 loadAndParse :: String -> IO Expr
 loadAndParse file = do
+  exists <- doesFileExist file
+  unless exists $ do
+    hPutStrLn stderr $ "error: file not found: " ++ file
+    exitFailure
   src <- TIO.readFile file
   case parseProgram file src of
     Right expr -> pure expr
     Left err -> do
-      hPutStrLn stderr (show err)
+      hPutStrLn stderr $ errorBundlePretty err
       exitFailure
 
 -- | Inject prelude bindings before user bindings
@@ -330,7 +360,7 @@ resolveLocalImport ctx dir pathStr _expectedHash = do
                   else do
                     src <- TIO.readFile relPath
                     case parseProgram relPath src of
-                      Left err -> pure $ Error (T.pack (show err))
+                      Left err -> pure $ Error (T.pack (errorBundlePretty err))
                       Right ast -> do
                         modifyIORef (rcInProgress ctx) (Set.insert relPath)
                         resolved <- resolveExpr ctx (takeDirectory relPath) ast
@@ -356,7 +386,7 @@ resolveURLImport ctx url expectedHash = do
         Right localPath -> do
           src <- TIO.readFile localPath
           case parseProgram localPath src of
-            Left err -> pure $ Error (T.pack (show err))
+            Left err -> pure $ Error (T.pack (errorBundlePretty err))
             Right parsedAST -> do
               let baseDir = urlDirName url
                   subURLs = collectImportURLs baseDir parsedAST
@@ -600,8 +630,9 @@ cmdRun file runArgs = do
   (gccExit, _, gccErr) <- readProcessWithExitCode "gcc" gccArgs ""
   case gccExit of
     ExitSuccess -> pure ()
-    ExitFailure _ -> do
-      hPutStrLn stderr $ "gcc failed:\n" ++ gccErr
+    ExitFailure code -> do
+      hPutStrLn stderr $ "error: C compilation failed (gcc exit " ++ show code ++ ")"
+      unless (null gccErr) $ hPutStrLn stderr gccErr
       removeFile cFile
       exitFailure
   (runExit, runOut, runErr) <- readProcessWithExitCode binFile runArgs ""
@@ -659,7 +690,7 @@ replLoop env = do
                 putStrLn (prettyExpr 0 result)
                 replLoop env
               Left err -> do
-                hPutStrLn stderr $ show err
+                hPutStrLn stderr $ errorBundlePretty err
                 replLoop env
   where
     when True a = a

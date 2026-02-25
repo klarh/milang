@@ -30,7 +30,12 @@ import Control.Monad.IO.Class (liftIO)
 
 -- | Names defined by the standard prelude (hidden from script output)
 preludeNames :: Set.Set T.Text
-preludeNames = Set.fromList (map bindName preludeBindings)
+preludeNames = Set.fromList names
+  where
+    names = concatMap expandName preludeBindings
+    expandName b = bindName b : case bindBody b of
+      Namespace ctors -> map bindName ctors
+      _ -> []
 
 main :: IO ()
 main = do

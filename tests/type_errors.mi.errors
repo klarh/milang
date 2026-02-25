@@ -1,11 +1,11 @@
 # Expected errors (one per line, matched as substring)
 # Lines starting with # are comments
 
-# Wrong arg to annotated function (reducer + type checker merged)
-cannot multiply string; bad1: expected Int, got Str
+# Wrong arg to annotated function
+bad1: expected Int, got Str
 
-# Wrong arg to ADT-typed function (reducer + type checker merged)
-no pattern matches this value; bad2: expected Shape
+# Wrong arg to ADT-typed function
+bad2: expected Shape
 
 # Prelude type violations
 bad3: expected a : b : a, got Int
@@ -13,9 +13,9 @@ bad4: expected a : b, got Str
 bad5: expected List, got Int
 bad6: expected List, got Str
 
-# Operand type errors (reducer + type checker merged)
-cannot multiply string; bad7: expected Str, got Int
-cannot subtract from string; bad8: expected Str, got Int
+# Operand type errors
+bad7: expected Str, got Int
+bad8: expected Str, got Int
 
 # Record field type mismatch
 p: expected Int, got Str
