@@ -3,6 +3,7 @@
 module Core.Reduce
   ( reduce, Env, emptyEnv
   , Warning(..), warnings
+  , exprFreeVars
   ) where
 
 import Data.Text (Text)
@@ -11,6 +12,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Char (isUpper)
 import Data.Graph (stronglyConnComp, SCC(..))
+import Data.List (isPrefixOf)
 import Text.Read (readMaybe)
 
 import Core.Syntax
@@ -104,8 +106,22 @@ isOperatorName t = not (T.null t) && T.all (`elem` ("+-*/^<>=!&|@%?:" :: String)
 
 -- ── Main reduce ───────────────────────────────────────────────────
 
-reduce :: Env -> Expr -> Expr
-reduce env e = reduceD maxDepth env e
+-- | Top-level reduce: returns (reduced expr, warnings).
+-- Type/trait checking is integrated into the unified reduction pass.
+reduce :: Env -> Expr -> (Expr, [Warning])
+reduce env e = case e of
+  Namespace _ ->
+    let env' = evalBindings maxDepth env (nsBindings e)
+        expanded = concatMap expandUnion (nsBindings e)
+        (valueBs, annotBs) = partitionBindings expanded
+        mergedValues = mergeOpenDefs valueBs
+        valBs' = map (reduceBind maxDepth env') mergedValues
+        annBs' = map (reduceBind maxDepth env') annotBs
+    in (Namespace (valBs' ++ annBs'), reverse (envWarns env'))
+  _ -> (reduceD maxDepth env e, [])
+  where
+    nsBindings (Namespace bs) = bs
+    nsBindings _ = []
 
 reduceD :: Int -> Env -> Expr -> Expr
 reduceD _ _ e@(IntLit _)    = e
@@ -271,7 +287,14 @@ evalBindings d env bindings =
                    (exprFreeVars (wrapLambda (bindParams b) (bindBody b))))
                | b <- merged ]
       sccs = stronglyConnComp nodes
-  in foldl (evalSCC d) env1 sccs
+      env2 = foldl (evalSCC d) env1 sccs
+      -- Type and trait checking integrated into the unified reducer
+      -- Use original bindings (not expanded) for type checking to avoid
+      -- expandUnion constructor bindings overriding detectUnion arity-0 types
+      typeWarns  = typeCheckBindings env2 bindings
+      traitWarns = traitCheckBindings env2 expanded
+      env3 = foldl (\e w -> envAddWarning w e) env2 (typeWarns ++ traitWarns)
+  in env3
 
 -- | Partition bindings into value/lazy vs annotation domains
 partitionBindings :: [Binding] -> ([Binding], [Binding])
@@ -284,10 +307,11 @@ partitionBindings = foldr go ([], [])
 
 -- | Process an annotation binding within the unified reducer.
 -- Type/Trait annotations get reduced and stored in their respective env maps.
+-- NOTE: Type annotations are NOT reduced through the normal reducer because
+-- the `:` operator means function arrow in the type domain, not cons.
 evalAnnotation :: Int -> Env -> Binding -> Env
 evalAnnotation d env b = case bindDomain b of
-  Type  -> let ty = reduceD d env (bindBody b)
-           in envInsertType (bindName b) ty env
+  Type  -> envInsertType (bindName b) (bindBody b) env  -- store raw
   Trait -> let tr = reduceD d env (bindBody b)
            in envInsertTrait (bindName b) tr env
   Doc   -> env  -- docs are informational; no effect on reduction
@@ -332,7 +356,7 @@ reduceBind :: Int -> Env -> Binding -> Binding
 reduceBind d env b = case bindDomain b of
   Value -> b { bindBody = reduceD d env (wrapLambda (bindParams b) (bindBody b)), bindParams = [] }
   Lazy  -> b { bindBody = reduceD d env (bindBody b) }
-  Type  -> b { bindBody = reduceD d env (bindBody b) }
+  Type  -> b  -- don't reduce type expressions (`:` means fn arrow, not cons)
   Trait -> b { bindBody = reduceD d env (bindBody b) }
   Doc   -> b
   Parse -> b
@@ -820,3 +844,483 @@ fieldLookup :: Text -> [Binding] -> Maybe Expr
 fieldLookup name bs = case [bindBody b | b <- bs, bindName b == name] of
   (v:_) -> Just v
   []    -> Nothing
+
+-- ══════════════════════════════════════════════════════════════════
+-- ── Type domain: checking :: annotations within the unified reducer
+-- ══════════════════════════════════════════════════════════════════
+
+-- | Internal type representation for checking
+data MiType
+  = TInt | TFloat | TStr
+  | TFun MiType MiType
+  | TRecord Text [(Text, MiType)]
+  | TUnion Text [Text]
+  | TVar Text
+  | TAny
+  deriving (Show, Eq)
+
+type TypeEnv = Map.Map Text MiType
+
+-- | Pretty-print a type for error messages
+prettyType :: MiType -> Text
+prettyType TInt     = "Int"
+prettyType TFloat   = "Float"
+prettyType TStr     = "Str"
+prettyType (TVar v) = v
+prettyType TAny     = "?"
+prettyType (TFun a b) = prettyType a <> " : " <> prettyType b
+prettyType (TUnion name _) = name
+prettyType (TRecord tag fields) =
+  let t = if T.null tag then "" else tag <> " "
+      fs = T.intercalate "; " [n <> " = " <> prettyType ty | (n, ty) <- fields]
+  in t <> "{" <> fs <> "}"
+
+-- | Built-in type environment for native functions
+builtinTypeEnv :: TypeEnv
+builtinTypeEnv = Map.fromList
+  [ ("len",        TFun TAny TInt)
+  , ("strlen",     TFun TStr TInt)
+  , ("slice",      TFun TAny (TFun TInt (TFun TInt TAny)))
+  , ("fields",     TFun TAny (TUnion "List" ["Nil", "Cons"]))
+  , ("fieldNames", TFun TAny (TUnion "List" ["Nil", "Cons"]))
+  , ("tag",        TFun TAny TStr)
+  , ("getField",   TFun TAny (TFun TStr TAny))
+  , ("setField",   TFun TAny (TFun TStr (TFun TAny TAny)))
+  ]
+
+-- | Convert a type annotation expression to MiType
+exprToType :: TypeEnv -> Expr -> MiType
+exprToType _ (Name "Num")   = TInt
+exprToType _ (Name "Int")   = TInt
+exprToType _ (Name "UInt")  = TInt
+exprToType _ (Name "Str")   = TStr
+exprToType _ (Name "Float") = TFloat
+exprToType _ (Name "String") = TStr
+exprToType env (Name n)
+  | not (T.null n) && isLower' (T.head n) = TVar n
+  | otherwise = Map.findWithDefault TAny n env
+  where isLower' c = c >= 'a' && c <= 'z'
+exprToType env (BinOp ":" l r) = TFun (exprToType env l) (exprToType env r)
+exprToType env (Record tag fields) =
+  TRecord tag [(bindName b, exprToType env (bindBody b)) | b <- fields]
+exprToType env (Namespace bindings) =
+  TRecord "" [(bindName b, exprToType env (bindBody b)) | b <- bindings]
+exprToType env (With (Name tag) fields)
+  | not (T.null tag) && isUpper (T.head tag) =
+    TRecord tag [(bindName b, exprToType env (bindBody b)) | b <- fields]
+exprToType env (With body bs) =
+  let env' = foldl (\acc b -> Map.insert (bindName b) (exprToType acc (bindBody b)) acc) env bs
+  in exprToType env' body
+exprToType env (App f x) =
+  case exprToType env f of
+    TFun _ ret -> ret
+    _          -> TAny
+exprToType _ (Lam _ _) = TAny
+exprToType _ _ = TAny
+
+-- | Detect if a binding is a union declaration
+detectUnion :: Binding -> Maybe (Text, [(Text, Int)])
+detectUnion b = case bindBody b of
+  Namespace ctors
+    | not (null ctors)
+    , all (\c -> let n = bindName c in not (T.null n) && isUpper (T.head n)) ctors ->
+      Just (bindName b, [(bindName c, length (bindParams c)) | c <- ctors])
+  _ -> Nothing
+
+-- | Build a TypeEnv from annotations and bindings.
+-- Prelude operator annotations are included for operand checking.
+-- But prelude annotations for names redefined by user code are skipped.
+collectTypeEnv :: Env -> [Binding] -> TypeEnv
+collectTypeEnv _env bindings =
+  let -- User value bindings: names redefined in non-prelude source
+      userValues = Set.fromList [bindName b
+                                | b <- bindings
+                                , bindDomain b == Value || bindDomain b == Lazy
+                                , not (isPreludePos (bindPos b))]
+      -- All annotations, tagged with whether they're from prelude
+      allAnnots = [(bindName b, bindBody b, isPreludePos (bindPos b))
+                  | b <- bindings, bindDomain b == Type]
+      annotMap = Map.fromList [(n, (e, fromPrelude)) | (n, e, fromPrelude) <- allAnnots]
+  in foldl (go userValues annotMap) builtinTypeEnv bindings
+  where
+    go userValues annotMap tenv b =
+      case Map.lookup (bindName b) annotMap of
+        -- Skip prelude annotation when user has redefined the name
+        Just (_, True) | Set.member (bindName b) userValues -> inferOrDetect tenv b
+        -- Use the annotation otherwise
+        Just (tyExpr, _) ->
+          Map.insert (bindName b) (exprToType tenv tyExpr) tenv
+        Nothing -> inferOrDetect tenv b
+    inferOrDetect tenv b =
+      case detectUnion b of
+        Just (uname, ctors) ->
+          let tags = map fst ctors
+              utype = TUnion uname tags
+              tenv' = Map.insert uname utype tenv
+              ctorType (tag, 0) = TRecord tag []
+              ctorType (tag, n) = foldr (\_ t -> TFun TAny t) (TRecord tag []) [1..n]
+          in foldl (\e ct -> Map.insert (fst ct) (ctorType ct) e) tenv' ctors
+        Nothing ->
+          let bodyTy = inferExpr tenv b
+          in case bodyTy of
+               TAny -> tenv
+               _    -> Map.insert (bindName b) bodyTy tenv
+
+-- | Infer the type of a binding's body (with params wrapped as function types)
+inferExpr :: TypeEnv -> Binding -> MiType
+inferExpr tenv b =
+  let bodyTy = inferExprE tenv (bindBody b)
+  in foldr (\_ ty -> TFun TAny ty) bodyTy (bindParams b)
+
+-- | Infer the type of an expression
+inferExprE :: TypeEnv -> Expr -> MiType
+inferExprE _ (IntLit _)    = TInt
+inferExprE _ (FloatLit _)  = TFloat
+inferExprE _ (StringLit _) = TStr
+inferExprE tenv (Name n) = Map.findWithDefault TAny n tenv
+inferExprE tenv (BinOp op l r)
+  | op `elem` ["-", "*", "/", "^", "%", "**"] =
+    case (inferExprE tenv l, inferExprE tenv r) of
+      (TFloat, _) -> TFloat
+      (_, TFloat) -> TFloat
+      _           -> TInt
+  | op == "+" =
+    case (inferExprE tenv l, inferExprE tenv r) of
+      (TStr, _)   -> TStr
+      (_, TStr)   -> TStr
+      (TFloat, _) -> TFloat
+      (_, TFloat) -> TFloat
+      _           -> TInt
+  | op `elem` ["==", "/=", "<", ">", "<=", ">="] = TInt
+  | op == ":" =
+    let ht = inferExprE tenv l
+    in TRecord "Cons" [("head", ht), ("tail", TAny)]
+  | otherwise = TAny
+inferExprE tenv (App f x) =
+  case inferExprE tenv f of
+    TFun _ ret -> ret
+    _          -> TAny
+inferExprE tenv (Lam p body) =
+  let tenv' = Map.insert p TAny tenv
+  in TFun TAny (inferExprE tenv' body)
+inferExprE tenv (Record tag fields) =
+  TRecord tag [(bindName b, inferExprE tenv (bindBody b)) | b <- fields]
+inferExprE tenv (FieldAccess e field) =
+  case inferExprE tenv e of
+    TRecord _ fields ->
+      case lookup field fields of
+        Just t  -> t
+        Nothing -> TAny
+    _ -> TAny
+inferExprE tenv (With e bs) =
+  case e of
+    Name tag | not (T.null tag) && isUpper (T.head tag) ->
+      TRecord tag [(bindName b, inferExprE tenv (bindBody b)) | b <- bs]
+    _ -> let tenv' = foldl (\acc b -> Map.insert (bindName b) (inferExprE acc (bindBody b)) acc) tenv bs
+         in inferExprE tenv' e
+inferExprE tenv (ListLit es) =
+  case es of
+    (e:_) -> TRecord "Cons" [("head", inferExprE tenv e), ("tail", TAny)]
+    []    -> TRecord "Nil" []
+inferExprE tenv (Case _ alts) =
+  let altTypes = [inferExprE tenv (altBody a) | a <- alts]
+      concreteTypes = filter (/= TAny) altTypes
+  in case concreteTypes of
+       (t:_) -> t
+       []    -> TAny
+inferExprE _ (Thunk e) = inferExprE Map.empty e
+inferExprE _ _ = TAny
+
+-- | Check type compatibility with type variable threading
+checkCompatWith :: Map.Map Text MiType -> Maybe SrcPos -> Text -> MiType -> MiType
+               -> (Map.Map Text MiType, [Warning])
+checkCompatWith subst0 pos name expected actual = go subst0 expected actual
+  where
+    resolve subst (TVar v) =
+      case Map.lookup v subst of
+        Just t@(TVar v') | v' /= v -> resolve subst t
+        Just t@(TVar _) -> t
+        Just t           -> t
+        Nothing          -> TVar v
+    resolve _ t = t
+
+    go subst TAny _ = (subst, [])
+    go subst _ TAny = (subst, [])
+    go subst (TVar v) act =
+      let resolved = resolve subst (TVar v)
+      in case resolved of
+           TVar v' | v' == v -> (Map.insert v act subst, [])
+           _ -> go subst resolved act
+    go subst _ (TVar _) = (subst, [])
+    go subst TInt TInt     = (subst, [])
+    go subst TFloat TFloat = (subst, [])
+    go subst TStr TStr     = (subst, [])
+    go subst TInt TFloat   = (subst, [])   -- numeric compat
+    go subst TFloat TInt   = (subst, [])
+    go subst (TFun ea er) (TFun aa ar) =
+      let (subst', errs1) = go subst ea aa
+          (subst'', errs2) = go subst' er ar
+      in (subst'', errs1 ++ errs2)
+    go subst (TUnion _ tags) (TRecord atag _)
+      | atag `elem` tags = (subst, [])
+      | otherwise = (subst, [mkErr ("expected one of " <> T.intercalate "/" tags <> ", got " <> showTag atag)])
+    go subst (TUnion n1 _) (TUnion n2 _)
+      | n1 == n2 = (subst, [])
+    go subst (TRecord etag efields) (TRecord atag afields)
+      | etag /= "" && atag /= "" && etag /= atag =
+        (subst, [mkErr ("tag mismatch: expected " <> etag <> ", got " <> atag)])
+      | otherwise =
+        foldl (\(s, errs) (ename, etype) ->
+          case lookup ename afields of
+            Just atype -> let (s', e') = go s etype atype in (s', errs ++ e')
+            Nothing    -> (s, errs ++ [mkErr ("missing field: " <> ename)])
+          ) (subst, []) efields
+    go subst e a =
+      if e == a then (subst, [])
+      else (subst, [mkErr ("expected " <> prettyType e <> ", got " <> prettyType a)])
+
+    showTag t = if T.null t then "(untagged)" else t
+    mkErr msg = TypeWarning pos name msg
+
+-- | Check a binding's body against its LOCAL type annotation
+checkTypeBinding :: TypeEnv -> Map.Map Text Expr -> Binding -> [Warning]
+checkTypeBinding tenv localAnnots b =
+  let annotErrs = case Map.lookup (bindName b) localAnnots of
+        Nothing -> []
+        Just tyExpr ->
+          case bindBody b of
+            IntLit 0 | null (bindParams b) -> []  -- skip zero-field constructors
+            _ ->
+              let expectedType = exprToType tenv tyExpr
+                  (tenv', bodyType) = peelParams tenv (bindParams b) expectedType
+              in checkExprAgainst tenv' (bindPos b) (bindName b) bodyType (bindBody b)
+      operandErrs = checkOperands tenv (bindPos b) (bindName b) (bindBody b)
+  in annotErrs ++ operandErrs
+
+-- | Peel function type layers for parameters
+peelParams :: TypeEnv -> [Text] -> MiType -> (TypeEnv, MiType)
+peelParams tenv [] ty = (tenv, ty)
+peelParams tenv (p:ps) (TFun argTy retTy) =
+  peelParams (Map.insert p argTy tenv) ps retTy
+peelParams tenv (_:ps) ty = peelParams tenv ps ty
+
+-- | Bidirectional check: push expected type into expression
+checkExprAgainst :: TypeEnv -> Maybe SrcPos -> Text -> MiType -> Expr -> [Warning]
+checkExprAgainst tenv pos name (TFun argTy retTy) (Lam p body) =
+  let tenv' = Map.insert p argTy tenv
+  in checkExprAgainst tenv' pos name retTy body
+checkExprAgainst tenv pos name expected expr =
+  let actual = inferExprE tenv expr
+  in snd (checkCompatWith Map.empty pos name expected actual)
+
+-- | Walk an expression and report operand type mismatches
+checkOperands :: TypeEnv -> Maybe SrcPos -> Text -> Expr -> [Warning]
+checkOperands tenv pos name = go
+  where
+    go (BinOp op l r) =
+      let lt = inferExprE tenv l
+          rt = inferExprE tenv r
+          opErrs = case Map.lookup op tenv of
+            Just (TFun argL (TFun argR _)) ->
+              let (subst1, errs1) = checkCompatWith Map.empty pos name argL lt
+                  (_,      errs2) = checkCompatWith subst1    pos name argR rt
+              in errs1 ++ errs2
+            _ -> []
+      in opErrs ++ go l ++ go r
+    go (App f x) =
+      let fty = inferExprE tenv f
+          xty = inferExprE tenv x
+          argErrs = case fty of
+            TFun argTy _ -> snd (checkCompatWith Map.empty pos name argTy xty)
+            _ -> []
+      in argErrs ++ go f ++ go x
+    go (Lam _ body)   = go body
+    go (With body bs)  = go body ++ concatMap (go . bindBody) bs
+    go (Case _ alts)   = concatMap (\(Alt _ _ body) -> go body) alts
+    go (Record _ bs)   = concatMap (go . bindBody) bs
+    go (Thunk e)       = go e
+    go _               = []
+
+-- | Run type checking on all value bindings.
+-- Called at the end of evalBindings to integrate type checking into the unified reducer.
+typeCheckBindings :: Env -> [Binding] -> [Warning]
+typeCheckBindings env bindings =
+  let -- Local type annotations: only from user code, not prelude
+      localAnnots = Map.fromList [(bindName b, bindBody b)
+                                 | b <- bindings, bindDomain b == Type
+                                 , not (isPreludePos (bindPos b))]
+      tenv = collectTypeEnv env bindings
+      -- Only check value/lazy bindings, not annotation bindings
+      valueBinds = filter (\b -> bindDomain b == Value || bindDomain b == Lazy) bindings
+  in concatMap (checkTypeBinding tenv localAnnots) valueBinds
+
+isPreludePos :: Maybe SrcPos -> Bool
+isPreludePos (Just pos) = "<prelude>" `isPrefixOf` srcFile pos
+isPreludePos Nothing    = False
+
+-- ══════════════════════════════════════════════════════════════════
+-- ── Trait domain: checking :~ annotations within the unified reducer
+-- ══════════════════════════════════════════════════════════════════
+
+type Effects = Set.Set Text
+type TraitEnv = Map.Map Text Effects
+
+-- | World capability map (leaf effects)
+worldCapabilities :: [([Text], Effects)]
+worldCapabilities =
+  [ (["io", "println"],         Set.singleton "console")
+  , (["io", "print"],           Set.singleton "console")
+  , (["io", "readLine"],        Set.singleton "console")
+  , (["fs", "read", "file"],    Set.singleton "fs.read")
+  , (["fs", "read", "exists"],  Set.singleton "fs.read")
+  , (["fs", "write", "file"],   Set.singleton "fs.write")
+  , (["fs", "write", "append"], Set.singleton "fs.write")
+  , (["fs", "write", "remove"], Set.singleton "fs.write")
+  , (["process", "exec"],       Set.singleton "process")
+  , (["process", "exit"],       Set.singleton "process")
+  , (["getEnv"],                Set.singleton "env")
+  , (["argv"],                  Set.empty)
+  ]
+
+-- | Derived alias map: prefix → union of matching effects
+worldAliases :: Map.Map Text Effects
+worldAliases =
+  Map.fromListWith Set.union
+    [ (T.intercalate "." prefix, effs)
+    | (path, effs) <- worldCapabilities
+    , prefix <- tail (inits path)
+    ]
+  where
+    inits :: [a] -> [[a]]
+    inits []     = [[]]
+    inits (x:xs) = [] : map (x:) (inits xs)
+
+-- | Collect trait declarations into effect sets
+collectTraitEnv :: Env -> [Binding] -> TraitEnv
+collectTraitEnv env bindings =
+  let raw = [(bindName b, ty) | b <- bindings, Just ty <- [Map.lookup (bindName b) (envTraits env)]]
+  in foldl (\tenv (name, expr) -> Map.insert name (resolveEffects tenv expr) tenv) Map.empty raw
+
+-- | Resolve a trait expression to a set of effect names
+resolveEffects :: TraitEnv -> Expr -> Effects
+resolveEffects tenv (ListLit es)     = Set.unions (map (resolveEffects tenv) es)
+resolveEffects tenv (Record "Nil" _) = Set.empty
+resolveEffects tenv (Record "Cons" bs) =
+  let hd = case [bindBody b | b <- bs, bindName b == "head"] of
+              [e] -> resolveEffects tenv e
+              _   -> Set.empty
+      tl = case [bindBody b | b <- bs, bindName b == "tail"] of
+              [e] -> resolveEffects tenv e
+              _   -> Set.empty
+  in Set.union hd tl
+resolveEffects tenv (Name n) = resolveEffectName tenv n
+resolveEffects tenv (FieldAccess e f) = resolveEffectName tenv (dotName e f)
+resolveEffects _ _ = Set.empty
+
+resolveEffectName :: TraitEnv -> Text -> Effects
+resolveEffectName tenv n =
+  case Map.lookup n tenv of
+    Just effects -> effects
+    Nothing -> case Map.lookup n worldAliases of
+      Just effects -> effects
+      Nothing      -> Set.singleton n
+
+dotName :: Expr -> Text -> Text
+dotName (Name n) f        = n <> "." <> f
+dotName (FieldAccess e f1) f2 = dotName e f1 <> "." <> f2
+dotName _ f               = f
+
+-- | Check trait annotations on bindings
+traitCheckBindings :: Env -> [Binding] -> [Warning]
+traitCheckBindings env bindings =
+  let traitEnv = collectTraitEnv env bindings
+      bindingMap = Map.fromList [(bindName b, b) | b <- bindings]
+      -- Only check value/lazy bindings
+      valueBinds = filter (\b -> bindDomain b == Value || bindDomain b == Lazy) bindings
+  in concatMap (checkTrait traitEnv bindingMap valueBinds) valueBinds
+
+-- | Check a single binding against its trait annotation
+checkTrait :: TraitEnv -> Map.Map Text Binding -> [Binding] -> Binding -> [Warning]
+checkTrait traitEnv bindingMap allBindings b =
+  case Map.lookup (bindName b) traitEnv of
+    Nothing -> []
+    Just declared ->
+      let inferred = inferBindingEffects traitEnv bindingMap allBindings b
+          excess = Set.difference inferred declared
+      in if Set.null excess
+         then []
+         else [TraitWarning (bindPos b) (bindName b)
+                ("effect violation: " <> bindName b
+                 <> " declared :~ " <> formatEffects declared
+                 <> " but uses " <> formatEffects excess)]
+
+-- | Infer effects of a binding body
+inferBindingEffects :: TraitEnv -> Map.Map Text Binding -> [Binding] -> Binding -> Effects
+inferBindingEffects traitEnv bindingMap allBindings b =
+  let body = wrapLambda (bindParams b) (bindBody b)
+      fvs = exprFreeVars body
+      directEffects = Set.unions
+        [ case Map.lookup fv traitEnv of
+            Just effects -> effects
+            Nothing      -> Set.empty
+        | fv <- Set.toList fvs ]
+      worldEffects = inferWorldEffects (bindBody b)
+      transitiveEffects = inferTransitive traitEnv bindingMap (Set.singleton (bindName b)) fvs
+  in Set.unions [directEffects, worldEffects, transitiveEffects]
+
+-- | Walk expression for world.* field access chains
+inferWorldEffects :: Expr -> Effects
+inferWorldEffects = go
+  where
+    go (FieldAccess e f) =
+      case worldChain e f of
+        Just path ->
+          let key = T.intercalate "." path
+          in case Map.lookup key worldAliases of
+               Just effs -> effs
+               Nothing   -> Set.empty
+        Nothing -> go e
+    go (App f x)       = Set.union (go f) (go x)
+    go (BinOp _ l r)   = Set.union (go l) (go r)
+    go (Lam _ body)    = go body
+    go (With body bs)  = Set.union (go body) (Set.unions (map (go . bindBody) bs))
+    go (Case s alts)   = Set.union (go s) (Set.unions [go b | Alt _ _ b <- alts])
+    go (Record _ bs)   = Set.unions (map (go . bindBody) bs)
+    go (Namespace bs)  = Set.unions (map (go . bindBody) bs)
+    go (Thunk e)       = go e
+    go (ListLit es)    = Set.unions (map go es)
+    go (Splice e)      = go e
+    go _               = Set.empty
+
+    worldChain :: Expr -> Text -> Maybe [Text]
+    worldChain (Name "world") field = Just [field]
+    worldChain (FieldAccess inner f) field =
+      case worldChain inner f of
+        Just path -> Just (path ++ [field])
+        Nothing   -> Nothing
+    worldChain _ _ = Nothing
+
+-- | Follow calls through non-annotated functions for transitive effects
+inferTransitive :: TraitEnv -> Map.Map Text Binding -> Set.Set Text -> Set.Set Text -> Effects
+inferTransitive traitEnv bindingMap visited fvs =
+  let toFollow = [ b | fv <- Set.toList fvs
+                     , not (Map.member fv traitEnv)
+                     , not (Set.member fv visited)
+                     , Just b <- [Map.lookup fv bindingMap] ]
+  in Set.unions
+       [ let body = wrapLambda (bindParams b) (bindBody b)
+             innerFVs = exprFreeVars body
+             visited' = Set.insert (bindName b) visited
+             direct = Set.unions [ case Map.lookup fv traitEnv of
+                                     Just effects -> effects
+                                     Nothing      -> Set.empty
+                                 | fv <- Set.toList innerFVs ]
+             worldEffs = inferWorldEffects (bindBody b)
+             transitive = inferTransitive traitEnv bindingMap visited' innerFVs
+         in Set.unions [direct, worldEffs, transitive]
+       | b <- toFollow ]
+
+formatEffects :: Effects -> Text
+formatEffects es
+  | Set.null es = "[]"
+  | otherwise   = "[" <> T.intercalate ", " (Set.toList es) <> "]"

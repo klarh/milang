@@ -12,11 +12,11 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
-import Data.List (nub)
+import Data.List (nub, isPrefixOf)
 
 import Core.Syntax
 import Core.Parser (parseProgram)
-import Core.Reduce (reduce, emptyEnv, Env, warnings, Warning(..))
+import Core.Reduce (reduce, emptyEnv, Warning(..))
 import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
 import Core.CHeader (parseCHeader, CFunSig(..))
@@ -69,16 +69,54 @@ injectPrelude True e = Namespace (preludeBindings ++ [mkBind "_main" e])
 injectPrelude False e = e
 
 -- | Load, parse, inject prelude, and reduce
-loadAndReduce :: String -> IO (Expr, Env, LinkInfo)
+loadAndReduce :: String -> IO (Expr, LinkInfo)
 loadAndReduce file = do
   ast <- loadAndParse file
   (resolved, li) <- resolveImports file ast
   let withPrelude = injectPrelude True resolved
-      env = emptyEnv
-      reduced = reduce env withPrelude
-      ws = warnings env
-  mapM_ (printWarning file) ws
-  pure (reduced, env, li)
+      (reduced, ws) = reduce emptyEnv withPrelude
+      -- Filter out prelude-origin errors
+      userWarns = filter (not . isPreludeWarning) ws
+      -- Dedup and format errors
+      fmtWarn (TypeWarning pos name msg) =
+        (pos, T.unpack name <> ": " <> T.unpack msg)
+      fmtWarn (TraitWarning pos name msg) =
+        (pos, T.unpack name <> ": " <> T.unpack msg)
+      fmtWarn (GeneralWarning pos msg) = (pos, T.unpack msg)
+      msgs = dedupByLine (map fmtWarn userWarns)
+  mapM_ (\(pos, msg) -> hPutStrLn stderr $ "error: " ++ fmtLoc file pos ++ ": " ++ msg) msgs
+  if not (null msgs)
+    then do
+      hPutStrLn stderr $ show (length msgs) ++ " error(s)"
+      exitFailure
+    else pure (reduced, li)
+
+-- | Check if a warning originates from the prelude
+isPreludeWarning :: Warning -> Bool
+isPreludeWarning (TypeWarning pos _ _) = isPosPrelude pos
+isPreludeWarning (TraitWarning pos _ _) = isPosPrelude pos
+isPreludeWarning (GeneralWarning pos _) = isPosPrelude pos
+
+isPosPrelude :: Maybe SrcPos -> Bool
+isPosPrelude (Just pos) = "<prelude>" `isPrefixOf` srcFile pos
+isPosPrelude Nothing    = False
+
+-- | Format a source location for error messages
+fmtLoc :: FilePath -> Maybe SrcPos -> String
+fmtLoc file Nothing    = file
+fmtLoc _    (Just pos) = prettySrcPos pos
+
+-- | Deduplicate errors: merge same-line errors into one message
+dedupByLine :: [(Maybe SrcPos, String)] -> [(Maybe SrcPos, String)]
+dedupByLine msgs =
+  let lineKey (Just p)  = Just (srcFile p, srcLine p)
+      lineKey Nothing   = Nothing
+      -- Group by source line, dedup messages within each group
+      grouped = Map.fromListWith (\new old -> old ++ "; " ++ new)
+                  [(lineKey pos, msg) | (pos, msg) <- msgs]
+      -- Reconstruct with original positions
+      posMap = Map.fromList [(lineKey pos, pos) | (pos, _) <- msgs]
+  in [(Map.findWithDefault Nothing k posMap, msg) | (k, msg) <- Map.toList grouped]
 
 -- | Strip deeply nested Namespace content from circular imports for codegen.
 -- Only strips Namespace nesting that contains circular module references
@@ -309,17 +347,6 @@ extractImportOpts dir bs = do
     textVal (StringLit t) = t
     textVal _ = ""
 
-printWarning :: String -> Warning -> IO ()
-printWarning _file (TypeWarning pos name msg) =
-  hPutStrLn stderr $ maybe "" (\p -> prettySrcPos p ++ ": ") pos
-                   ++ "type warning: " ++ T.unpack name ++ ": " ++ T.unpack msg
-printWarning _file (TraitWarning pos name msg) =
-  hPutStrLn stderr $ maybe "" (\p -> prettySrcPos p ++ ": ") pos
-                   ++ "trait warning: " ++ T.unpack name ++ ": " ++ T.unpack msg
-printWarning _file (GeneralWarning pos msg) =
-  hPutStrLn stderr $ maybe "" (\p -> prettySrcPos p ++ ": ") pos
-                   ++ "warning: " ++ T.unpack msg
-
 -- | Set of prelude names to hide in script mode output
 preludeNames :: Set.Set T.Text
 preludeNames = Set.fromList names
@@ -333,7 +360,7 @@ preludeNames = Set.fromList names
 cmdRawReduce :: String -> IO ()
 cmdRawReduce file = do
   ast <- loadAndParse file
-  let reduced = reduce emptyEnv ast
+  let (reduced, _) = reduce emptyEnv ast
   putStrLn (prettyExpr 0 reduced)
 
 -- | dump: show parsed AST
@@ -345,13 +372,13 @@ cmdDump file = do
 -- | reduce: show AST after partial evaluation
 cmdReduce :: String -> IO ()
 cmdReduce file = do
-  (reduced, _, _) <- loadAndReduce file
+  (reduced, _) <- loadAndReduce file
   putStrLn (prettyExpr 0 reduced)
 
 -- | compile: emit C
 cmdCompile :: String -> Maybe String -> IO ()
 cmdCompile file mOut = do
-  (reduced, _, _) <- loadAndReduce file
+  (reduced, _) <- loadAndReduce file
   let stripped = stripDeepModules 3 reduced
       outFile = case mOut of
         Just "-" -> Nothing  -- stdout
@@ -365,7 +392,7 @@ cmdCompile file mOut = do
 cmdRun :: String -> [String] -> IO ()
 cmdRun file runArgs = do
   cwd <- getCurrentDirectory
-  (reduced, _, li) <- loadAndReduce file
+  (reduced, li) <- loadAndReduce file
   let stripped = stripDeepModules 3 reduced
       cFile = dropExtension file ++ "_core.c"
       binFile = dropExtension file ++ "_core"
