@@ -68,4 +68,14 @@ add a b = a + b
 
 ## Current Status
 
-Traits annotations are parsed and stored on bindings, but they are currently informational. The compiler independently tracks impurity through its auto-monad spine (`world`-taint analysis), which guarantees that impure expressions execute in declaration order. In the future the compiler will verify that a function's inferred effects are a subset of its declared traits.
+Trait annotations are parsed, stored, and **enforced** by the compiler. The compiler performs taint analysis: it tracks the `world` value and any names that transitively reference it (via aliasing or closures), then infers the effect set of every binding. If a function's inferred effects are not a subset of its declared traits, the compiler emits an error.
+
+For example, declaring `:~ []` (pure) but calling `world.io.println` inside the body is a compile error:
+
+```milang
+pure_fn :~ []
+pure_fn world =
+  world.io.println "oops"  -- error: declared pure but uses [console]
+```
+
+Functions that do not have a `:~` annotation are unconstrained and may use any effects.

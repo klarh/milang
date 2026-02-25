@@ -46,7 +46,7 @@ All operators are just functions. Standard arithmetic, comparison, logical:
 == /= < > <= >=           -- comparison
 && ||                     -- logical (short-circuit)
 not x                     -- logical negation (function, not operator)
-+ ++                      -- string concat (+ or ++)
++ `+`                       -- string concat (use `+` for both numeric and string)
 :                         -- cons (right-assoc): 1 : 2 : [] = [1, 2]
 ```
 
@@ -70,7 +70,7 @@ point.x                       -- 3
 point._0                      -- 3 (first field)
 
 -- Record update
-point2 = point:{x = 10}      -- {x = 10, y = 4}
+point2 = point <- {x = 10}      -- {x = 10, y = 4}
 
 -- Nested access
 world.io.println              -- chained field access
@@ -334,6 +334,7 @@ f #param = $param       -- auto-quote param: compiler quotes arg at call site
 ```bash
 milang run file.mi          # compile + run
 milang compile file.mi o.c  # emit C code
-milang dump file.mi         # show reduced AST
+milang dump file.mi         # show parsed AST
+milang reduce file.mi       # show partially-evaluated AST
 milang repl                 # interactive REPL
 ```

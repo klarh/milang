@@ -8,101 +8,98 @@ The milang REPL (Read-Eval-Print Loop) lets you evaluate expressions and define 
 ./milang repl
 ```
 
-You'll see a `>` prompt. Type any expression and press Enter to evaluate it:
+You'll see a `λ>` prompt. Type any expression and press Enter to evaluate it:
 
 ```text
-> 2 + 3
+λ> 2 + 3
 5
-> "hello" + " " + "world"
-hello world
+λ> "hello" + " " + "world"
+"hello world"
 ```
 
-Press **Ctrl-D** to exit.
+Type `:q` or press **Ctrl-D** to exit.
 
 ## Defining Bindings
 
-Bindings persist across lines, so you can build up definitions:
+Bindings persist across inputs, so you can build up definitions incrementally:
 
-```milang
-> double x = x * 2
-> double 21
+```text
+λ> double x = x * 2
+double = (\x -> (x * 2))
+λ> double 21
 42
-> quadruple x = double (double x)
-> quadruple 5
+λ> quadruple x = double (double x)
+quadruple = (\x -> (double (double x)))
+λ> quadruple 5
 20
 ```
 
-You can also define records, ADTs, and use pattern matching:
+## Single-line Input
 
-```milang
-> Shape = {Circle radius; Rect width height}
-> area s = s -> Circle = 3.14 * s.radius * s.radius; Rect = s.width * s.height
-> area (Circle 5)
-78.5
+The REPL reads one line at a time. Each binding must fit on a single line. Use semicolons to separate alternatives within a `->` pattern match:
+
+```text
+λ> area s = s -> Circle = 3.14 * s.radius * s.radius; Rect = s.width * s.height
 ```
 
-## Multi-line Input
-
-The REPL automatically detects when a line is incomplete and waits for continuation. A line is considered incomplete when it:
-
-- Has unclosed delimiters: `(`, `[`, or `{`
-- Ends with an operator or `->`
-- Ends with a comma
-- Ends with a backslash `\`
-
-```milang
-> map (\x =
-|   x * 2
-| ) [1, 2, 3]
-[2, 4, 6]
-```
+Multi-line indented definitions must be written in a `.mi` file and loaded via `milang run`.
 
 ## Prelude Functions
 
 All standard prelude functions are available immediately — no imports needed:
 
-```milang
-> map (\x = x * x) [1, 2, 3, 4, 5]
-[1, 4, 9, 16, 25]
-> filter (\x = x > 3) [1, 2, 3, 4, 5]
-[4, 5]
-> foldl (\acc x = acc + x) 0 [1, 2, 3]
+```text
+λ> map (\x = x * x) [1, 2, 3, 4, 5]
+Cons {head = 1, tail = Cons {head = 4, tail = ...}}
+λ> filter (\x = x > 3) [1, 2, 3, 4, 5]
+Cons {head = 4, tail = Cons {head = 5, tail = Nil {}}}
+λ> fold (\acc x = acc + x) 0 [1, 2, 3]
 6
-> length [10, 20, 30]
+λ> len [10, 20, 30]
 3
 ```
+
+> **Note:** Lists are displayed as raw `Cons`/`Nil` record expressions — the REPL shows the partially-evaluated AST, not a pretty-printed representation.
 
 ## Type Annotations
 
 You can add type annotations to bindings:
 
-```milang
-> x :: Int
-> x = 42
+```text
+λ> x :: Int
+λ> x = 42
+x = 42
 ```
 
 The type is associated with the binding and checked when the value is defined.
 
+## Viewing Bindings
+
+Use `:env` to show all user-defined bindings (prelude bindings are hidden):
+
+```text
+λ> double x = x * 2
+double = (\x -> (x * 2))
+λ> :env
+double = (\x -> (x * 2))
+```
+
 ## How It Works
 
-Under the hood, each REPL input is:
+Each REPL input is:
 
-1. Parsed as either a binding or an expression
-2. Merged with all previous bindings
-3. Compiled to a temporary C file
-4. Compiled with `gcc` and executed
-5. The output is printed
+1. Parsed as either a binding (namespace) or a bare expression
+2. Reduced using the same partial evaluator as `milang reduce`
+3. The reduced form is printed
 
-Bare expressions (not bindings) are internally bound to `_it` and their value is displayed.
-
-## Command History
-
-The REPL saves command history to `~/.local/share/milang/history`, so previous inputs are available with the up/down arrow keys across sessions.
+New bindings extend the accumulated environment for all subsequent inputs. This is a **pure partial evaluator** — there is no C compilation or gcc invocation in the REPL. Residuals (expressions that cannot be further reduced) are printed as-is.
 
 ## Limitations
 
 - **No IO** — the REPL evaluates pure expressions only. There is no `world` value available, so `world.io.println` and similar IO operations cannot be used.
 - **No imports** — `import` declarations are not supported in the REPL.
-- **Compilation per input** — each line triggers a full compile-and-run cycle via gcc, so there is a small delay on each evaluation.
+- **No multi-line input** — each input must fit on a single line. Write multi-line programs in `.mi` files.
+- **No command history** — the up/down arrow keys do not recall previous inputs.
+- **Raw list output** — lists are printed as `Cons`/`Nil` record expressions, not `[1, 2, 3]`.
 
 For IO and imports, write a `.mi` file and use `milang run` instead.

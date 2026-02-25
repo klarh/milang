@@ -40,12 +40,12 @@ cd milang
 make
 ```
 
-`make` runs `cabal build` inside the `hs/` directory.
+`make` runs `cabal build` inside the `core/` directory.
 
 If you prefer to do it manually:
 
 ```bash
-cd hs
+cd core
 cabal update
 cabal build
 ```
@@ -58,10 +58,10 @@ Start the REPL to confirm everything works:
 ./milang repl
 ```
 
-You should see a `>` prompt. Try evaluating an expression:
+You should see a `λ>` prompt. Try evaluating an expression:
 
 ```text
-> 2 + 3
+λ> 2 + 3
 5
 ```
 

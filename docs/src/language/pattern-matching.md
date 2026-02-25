@@ -175,12 +175,23 @@ a = describe "shape" (Circle 5)
 b = describe "shape" (Rect 3 4)
 ```
 
-## Exhaustiveness Tips
+## Exhaustiveness
 
-Milang does not enforce exhaustive patterns at compile time. Always include a
-wildcard `_` or variable catch-all as the `last` alternative to avoid runtime
-match failures. Constructor-heavy code benefits from a final `_ = ...` branch
-as a safety net.
+When the compiler can determine the type of a scrutinee (e.g., from a `::` type annotation), it checks that all constructors of a union type are covered. If any constructor is missing and there is no wildcard `_` catch-all, the compiler emits a warning:
+
+```text
+warning: non-exhaustive patterns for Shape — missing: Rect
+```
+
+To silence the warning, either cover all constructors explicitly or add a wildcard branch:
+
+```milang
+area s = s ->
+  Circle = 3.14 * s.radius * s.radius
+  _ = 0  -- catch-all for all other shapes
+```
+
+Exhaustiveness checking only triggers when the scrutinee type is a known union type from a `::` annotation. Unannotated scrutinees without a catch-all will compile without warning but may fail at runtime if an unmatched constructor is encountered.
 
 ## Matching Maybe
 

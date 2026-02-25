@@ -108,8 +108,10 @@ Auto-quote parameters work with any function, not just `if`:
 
 ```milang
 -- A logging wrapper that only evaluates its message when enabled
-log_if enabled #msg = if enabled (world.io.println $msg) 0
+log_if enabled #msg world = if enabled (world.io.println $msg) 0
 ```
+
+Note that `world` must be threaded through explicitly: `world.io.println` requires the `world` value to be in scope, so any function calling IO must accept it as a parameter.
 
 ### How it works
 

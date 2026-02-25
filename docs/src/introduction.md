@@ -8,6 +8,8 @@ Milang is a minimalist functional programming language with:
 - **Capability-based IO** — side effects flow through an explicit `world` value
 - **Five annotation domains** — types (`::`) , traits (`:~`), docs (`:?`), parse declarations (`:!`), and values (`=`)
 
+Note: the lazy binding operator `:=` is a variant of the value domain (it creates a cached thunk) and is not a separate annotation domain.
+
 Milang is designed around three guiding principles: extreme simplicity, aggressive compile-time evaluation, and explicit capabilities for side effects.
 
 There are no special syntactic forms in Milang — control flow, conditionals, and data construction are expressed with ordinary functions and operators. This uniform surface makes programs concise and composable, and helps both authors and tooling reason about code consistently.
