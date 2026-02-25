@@ -65,6 +65,8 @@ answer = square 21
 
 Running `milang reduce` on this file would show `answer = 42` — the function call was evaluated at compile time.
 
+If you need to see reduction without the prelude injected, use `milang raw-reduce file.mi` to view the reduced AST for the file alone.
+
 ## `milang pin`
 
 ```bash
@@ -107,7 +109,7 @@ Script mode is ideal for quick calculations and testing small snippets. Prelude 
 
 ## Security Flags
 
-Milang supports flags to restrict what imported code can do:
+Milang supports flags to restrict what imported code can do (note: these flags are not currently implemented in the core compiler; see .github/ROADMAP.md):
 
 | Flag | Effect |
 |------|--------|

@@ -1,0 +1,15 @@
+/* Trait system correctness tests */
+
+/* === Fix 1: World aliasing should be detected === */
+printer w = w.io.println "aliased"
+should_fail :~ []
+should_fail world =
+  printer world
+
+/* === Fix 7: Rebound println should keep effect tracking === */
+rebind_test :~ []
+rebind_test world =
+  println "hello"
+
+main world =
+  world.io.println "trait tests"

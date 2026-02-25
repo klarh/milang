@@ -1,0 +1,13 @@
+/* Pattern exhaustiveness tests */
+
+Color = {Red; Green; Blue}
+
+/* Exhaustive — should be fine */
+name_all c = c -> Red = "red"; Green = "green"; Blue = "blue"
+
+/* Non-exhaustive — missing Blue */
+name_partial :: Color : Str
+name_partial c = c -> Red = "red"; Green = "green"
+
+main world =
+  world.io.println (name_all Red)

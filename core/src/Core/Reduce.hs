@@ -1103,6 +1103,20 @@ prettyType (TRecord tag fields) =
       fs = T.intercalate "; " [n <> " = " <> prettyType ty | (n, ty) <- fields]
   in t <> "{" <> fs <> "}"
 
+-- | Check if a type variable occurs in a type (for occurs check)
+occursIn :: Text -> MiType -> Bool
+occursIn v (TVar v')       = False  -- TVar-to-TVar is just aliasing, not recursive
+occursIn v (TFun a b)      = occursInAny v a || occursInAny v b
+occursIn v (TRecord _ fs)  = any (occursInAny v . snd) fs
+occursIn _ _               = False
+
+-- Helper that includes TVar matches (for sub-expression checking)
+occursInAny :: Text -> MiType -> Bool
+occursInAny v (TVar v')       = v == v'
+occursInAny v (TFun a b)      = occursInAny v a || occursInAny v b
+occursInAny v (TRecord _ fs)  = any (occursInAny v . snd) fs
+occursInAny _ _               = False
+
 -- | Built-in type environment for native functions
 builtinTypeEnv :: TypeEnv
 builtinTypeEnv = Map.fromList
@@ -1227,10 +1241,17 @@ inferExprE tenv (BinOp op l r)
 inferExprE tenv (App f x) =
   case inferExprE tenv f of
     TFun _ ret -> ret
-    _          -> TAny
+    -- If f is a Name, check the type env for its return type
+    _ -> case f of
+      Name n -> case Map.lookup n tenv of
+                  Just (TFun _ ret) -> ret
+                  _ -> TAny
+      _ -> TAny
 inferExprE tenv (Lam p body) =
-  let tenv' = Map.insert p TAny tenv
-  in TFun TAny (inferExprE tenv' body)
+  -- Use type env for the param if available (from annotation peeling)
+  let paramTy = Map.findWithDefault TAny p tenv
+      tenv' = Map.insert p paramTy tenv
+  in TFun paramTy (inferExprE tenv' body)
 inferExprE tenv (Record tag fields) =
   TRecord tag [(bindName b, inferExprE tenv (bindBody b)) | b <- fields]
 inferExprE tenv (FieldAccess e field) =
@@ -1277,7 +1298,10 @@ checkCompatWith subst0 pos name expected actual = go subst0 expected actual
     go subst (TVar v) act =
       let resolved = resolve subst (TVar v)
       in case resolved of
-           TVar v' | v' == v -> (Map.insert v act subst, [])
+           TVar v' | v' == v ->
+             if occursIn v act
+             then (subst, [mkErr ("infinite type: " <> v <> " occurs in " <> prettyType act)])
+             else (Map.insert v act subst, [])
            _ -> go subst resolved act
     go subst _ (TVar _) = (subst, [])
     go subst TInt TInt     = (subst, [])
@@ -1313,16 +1337,16 @@ checkCompatWith subst0 pos name expected actual = go subst0 expected actual
 -- | Check a binding's body against its LOCAL type annotation
 checkTypeBinding :: TypeEnv -> Map.Map Text Expr -> Binding -> [Warning]
 checkTypeBinding tenv localAnnots b =
-  let annotErrs = case Map.lookup (bindName b) localAnnots of
-        Nothing -> []
+  let (annotErrs, tenv') = case Map.lookup (bindName b) localAnnots of
+        Nothing -> ([], tenv)
         Just tyExpr ->
           case bindBody b of
-            IntLit 0 | null (bindParams b) -> []  -- skip zero-field constructors
+            IntLit 0 | null (bindParams b) -> ([], tenv)
             _ ->
               let expectedType = exprToType tenv tyExpr
-                  (tenv', bodyType) = peelParams tenv (bindParams b) expectedType
-              in checkExprAgainst tenv' (bindPos b) (bindName b) bodyType (bindBody b)
-      operandErrs = checkOperands tenv (bindPos b) (bindName b) (bindBody b)
+                  (peeledEnv, bodyType) = peelParams tenv (bindParams b) expectedType
+              in (checkExprAgainst peeledEnv (bindPos b) (bindName b) bodyType (bindBody b), peeledEnv)
+      operandErrs = checkOperands tenv' (bindPos b) (bindName b) (bindBody b)
   in annotErrs ++ operandErrs
 
 -- | Peel function type layers for parameters
@@ -1343,31 +1367,90 @@ checkExprAgainst tenv pos name expected expr =
 
 -- | Walk an expression and report operand type mismatches
 checkOperands :: TypeEnv -> Maybe SrcPos -> Text -> Expr -> [Warning]
-checkOperands tenv pos name = go
+checkOperands tenv pos name expr0 = snd (go 0 expr0)
   where
-    go (BinOp op l r) =
+    go c (BinOp op l r) =
       let lt = inferExprE tenv l
           rt = inferExprE tenv r
-          opErrs = case Map.lookup op tenv of
-            Just (TFun argL (TFun argR _)) ->
-              let (subst1, errs1) = checkCompatWith Map.empty pos name argL lt
-                  (_,      errs2) = checkCompatWith subst1    pos name argR rt
-              in errs1 ++ errs2
-            _ -> []
-      in opErrs ++ go l ++ go r
-    go (App f x) =
-      let fty = inferExprE tenv f
+          (opErrs, c1) = case Map.lookup op tenv of
+            Just opTy ->
+              let (freshTy, c') = freshenType c opTy
+              in case freshTy of
+                TFun argL (TFun argR _) ->
+                  let (subst1, errs1) = checkCompatWith Map.empty pos name argL lt
+                      (_,      errs2) = checkCompatWith subst1    pos name argR rt
+                  in (errs1 ++ errs2, c')
+                _ -> ([], c')
+            _ -> ([], c)
+          (c2, errs1) = go c1 l
+          (c3, errs2) = go c2 r
+      in (c3, opErrs ++ errs1 ++ errs2)
+    go c (App f x) =
+      let fty0 = inferExprE tenv f
           xty = inferExprE tenv x
+          (fty, c1) = freshenType c fty0
           argErrs = case fty of
             TFun argTy _ -> snd (checkCompatWith Map.empty pos name argTy xty)
             _ -> []
-      in argErrs ++ go f ++ go x
-    go (Lam _ body)   = go body
-    go (With body bs)  = go body ++ concatMap (go . bindBody) bs
-    go (Case _ alts)   = concatMap (\(Alt _ _ body) -> go body) alts
-    go (Record _ bs)   = concatMap (go . bindBody) bs
-    go (Thunk e)       = go e
-    go _               = []
+          (c2, errs1) = go c1 f
+          (c3, errs2) = go c2 x
+      in (c3, argErrs ++ errs1 ++ errs2)
+    go c (Lam _ body)   = go c body
+    go c (With body bs)  =
+      let (c1, e1) = go c body
+          (c2, e2) = foldl (\(ci, ei) b -> let (ci', ei') = go ci (bindBody b) in (ci', ei ++ ei')) (c1, []) bs
+      in (c2, e1 ++ e2)
+    go c (Case scrut alts) =
+      let (c1, bodyErrs) = foldl (\(ci, ei) (Alt _ _ body) -> let (ci', ei') = go ci body in (ci', ei ++ ei')) (c, []) alts
+          exhaustErrs = checkExhaustiveness tenv pos name scrut alts
+      in (c1, bodyErrs ++ exhaustErrs)
+    go c (Record _ bs) =
+      foldl (\(ci, ei) b -> let (ci', ei') = go ci (bindBody b) in (ci', ei ++ ei')) (c, []) bs
+    go c (Thunk e)       = go c e
+    go c _               = (c, [])
+
+-- | Freshen type variables with a counter to give each call site unique type vars
+freshenType :: Int -> MiType -> (MiType, Int)
+freshenType c ty =
+  let tvars = collectTVars ty
+  in if Set.null tvars then (ty, c)
+     else let pairs = zip (Set.toList tvars) [c..]
+              subst = Map.fromList [(v, TVar (v <> "$" <> T.pack (show i))) | (v, i) <- pairs]
+              c' = c + length pairs
+          in (applySubst subst ty, c')
+
+collectTVars :: MiType -> Set.Set Text
+collectTVars (TVar v)       = Set.singleton v
+collectTVars (TFun a b)     = Set.union (collectTVars a) (collectTVars b)
+collectTVars (TRecord _ fs) = Set.unions [collectTVars t | (_, t) <- fs]
+collectTVars _              = Set.empty
+
+applySubst :: Map.Map Text MiType -> MiType -> MiType
+applySubst s (TVar v)       = Map.findWithDefault (TVar v) v s
+applySubst s (TFun a b)     = TFun (applySubst s a) (applySubst s b)
+applySubst s (TRecord t fs) = TRecord t [(n, applySubst s ty) | (n, ty) <- fs]
+applySubst _ t              = t
+
+-- | Check pattern exhaustiveness for case expressions over known union types
+checkExhaustiveness :: TypeEnv -> Maybe SrcPos -> Text -> Expr -> [Alt] -> [Warning]
+checkExhaustiveness tenv pos name scrut alts =
+  -- If any alt has a wildcard/variable pattern, it's exhaustive
+  if any isWildcardAlt alts then []
+  else case inferExprE tenv scrut of
+    TUnion uname tags ->
+      let coveredTags = Set.fromList (concatMap altTags alts)
+          missingTags = filter (`Set.notMember` coveredTags) tags
+      in if null missingTags then []
+         else [GeneralWarning pos (name <> ": non-exhaustive pattern match on " <> uname
+               <> ", missing: " <> T.intercalate ", " missingTags)]
+    _ -> []
+  where
+    isWildcardAlt (Alt PWild _ _) = True
+    isWildcardAlt (Alt (PVar _) _ _) = True
+    isWildcardAlt _ = False
+    altTags (Alt (PRec tag _) _ _) = [tag]
+    altTags (Alt (PLit (StringLit tag)) _ _) = [tag]
+    altTags _ = []
 
 -- | Run type checking on all value bindings.
 -- Called at the end of evalBindings to integrate type checking into the unified reducer.
@@ -1484,7 +1567,7 @@ checkTrait traitEnv bindingMap allBindings b =
 
 -- | Infer effects of a binding body
 inferBindingEffects :: TraitEnv -> Map.Map Text Binding -> [Binding] -> Binding -> Effects
-inferBindingEffects traitEnv bindingMap allBindings b =
+inferBindingEffects traitEnv bindingMap _allBindings b =
   let body = wrapLambda (bindParams b) (bindBody b)
       fvs = exprFreeVars body
       directEffects = Set.unions
@@ -1492,13 +1575,85 @@ inferBindingEffects traitEnv bindingMap allBindings b =
             Just effects -> effects
             Nothing      -> Set.empty
         | fv <- Set.toList fvs ]
-      worldEffects = inferWorldEffects (bindBody b)
-      transitiveEffects = inferTransitive traitEnv bindingMap (Set.singleton (bindName b)) fvs
-  in Set.unions [directEffects, worldEffects, transitiveEffects]
+      -- Build a set of world-tainted names from bindings that reference world
+      taintedNames = inferTaintedNames bindingMap
+      worldEffects = inferWorldEffects taintedNames (bindBody b)
+      transitiveEffects = inferTransitive traitEnv bindingMap taintedNames (Set.singleton (bindName b)) fvs
+      -- Detect effects from passing world/tainted args to functions
+      argPassEffects = inferArgPassEffects taintedNames bindingMap (bindBody b)
+  in Set.unions [directEffects, worldEffects, transitiveEffects, argPassEffects]
+
+-- | Build transitive world-taint set: names that reference world directly or indirectly
+inferTaintedNames :: Map.Map Text Binding -> Set.Set Text
+inferTaintedNames bindingMap =
+  let directTainted = Map.keysSet $ Map.filter (\b ->
+        let fvs = exprFreeVars (wrapLambda (bindParams b) (bindBody b))
+        in "world" `Set.member` fvs) bindingMap
+  in fixpoint directTainted
+  where
+    fixpoint current =
+      let next = Map.foldlWithKey' (\acc name b ->
+            let fvs = exprFreeVars (wrapLambda (bindParams b) (bindBody b))
+            in if not (Set.member name acc) && any (`Set.member` acc) (Set.toList fvs)
+               then Set.insert name acc
+               else acc
+            ) current bindingMap
+      in if next == current then current else fixpoint next
+
+-- | Detect effects from passing world/tainted values as arguments.
+-- When `f world` or `f taintedVar` appears, inline f's body with the param substituted
+-- and check what world effects that produces.
+inferArgPassEffects :: Set.Set Text -> Map.Map Text Binding -> Expr -> Effects
+inferArgPassEffects tainted bindingMap = go
+  where
+    isWorldArg (Name "world") = True
+    isWorldArg (Name n)       = Set.member n tainted
+    isWorldArg _              = False
+
+    go (App (Name fn) arg)
+      | isWorldArg arg =
+        case Map.lookup fn bindingMap of
+          Just callee ->
+            let params = bindParams callee
+                -- Substitute the first param with "world" to detect effects
+                body' = case params of
+                  (p:_) -> substParam p (Name "world") (bindBody callee)
+                  []    -> bindBody callee
+            in inferWorldEffects tainted body'
+          Nothing -> Set.empty
+    go (App f x) = Set.union (go f) (go x)
+    go (Lam _ body) = go body
+    go (BinOp _ l r) = Set.union (go l) (go r)
+    go (With body bs) = Set.union (go body) (Set.unions (map (go . bindBody) bs))
+    go (Case _ alts) = Set.unions [go b | Alt _ _ b <- alts]
+    go (Record _ bs) = Set.unions (map (go . bindBody) bs)
+    go (Namespace bs) = Set.unions (map (go . bindBody) bs)
+    go (Thunk e) = go e
+    go (ListLit es) = Set.unions (map go es)
+    go _ = Set.empty
+
+-- | Simple expression substitution for trait analysis: replace Name occurrences
+substParam :: Text -> Expr -> Expr -> Expr
+substParam var replacement = go
+  where
+    go (Name n) | n == var = replacement
+    go (App f x) = App (go f) (go x)
+    go (Lam p body) | p == var = Lam p body  -- shadowed
+                     | otherwise = Lam p (go body)
+    go (BinOp op l r) = BinOp op (go l) (go r)
+    go (FieldAccess e f) = FieldAccess (go e) f
+    go (With body bs) = With (go body) [b { bindBody = go (bindBody b) } | b <- bs]
+    go (Case s alts) = Case (go s) [Alt p g (go body) | Alt p g body <- alts]
+    go (Record t bs) = Record t [b { bindBody = go (bindBody b) } | b <- bs]
+    go (Namespace bs) = Namespace [b { bindBody = go (bindBody b) } | b <- bs]
+    go (Thunk e) = Thunk (go e)
+    go (ListLit es) = ListLit (map go es)
+    go e = e
 
 -- | Walk expression for world.* field access chains
-inferWorldEffects :: Expr -> Effects
-inferWorldEffects = go
+-- Now also detects access through world-tainted names (w := world; w.io.println)
+inferWorldEffects :: Set.Set Text -> Expr -> Effects
+inferWorldEffects tainted = go
   where
     go (FieldAccess e f) =
       case worldChain e f of
@@ -1522,6 +1677,8 @@ inferWorldEffects = go
 
     worldChain :: Expr -> Text -> Maybe [Text]
     worldChain (Name "world") field = Just [field]
+    worldChain (Name n) field
+      | Set.member n tainted = Just [field]
     worldChain (FieldAccess inner f) field =
       case worldChain inner f of
         Just path -> Just (path ++ [field])
@@ -1529,8 +1686,8 @@ inferWorldEffects = go
     worldChain _ _ = Nothing
 
 -- | Follow calls through non-annotated functions for transitive effects
-inferTransitive :: TraitEnv -> Map.Map Text Binding -> Set.Set Text -> Set.Set Text -> Effects
-inferTransitive traitEnv bindingMap visited fvs =
+inferTransitive :: TraitEnv -> Map.Map Text Binding -> Set.Set Text -> Set.Set Text -> Set.Set Text -> Effects
+inferTransitive traitEnv bindingMap tainted visited fvs =
   let toFollow = [ b | fv <- Set.toList fvs
                      , not (Map.member fv traitEnv)
                      , not (Set.member fv visited)
@@ -1543,8 +1700,8 @@ inferTransitive traitEnv bindingMap visited fvs =
                                      Just effects -> effects
                                      Nothing      -> Set.empty
                                  | fv <- Set.toList innerFVs ]
-             worldEffs = inferWorldEffects (bindBody b)
-             transitive = inferTransitive traitEnv bindingMap visited' innerFVs
+             worldEffs = inferWorldEffects tainted (bindBody b)
+             transitive = inferTransitive traitEnv bindingMap tainted visited' innerFVs
          in Set.unions [direct, worldEffs, transitive]
        | b <- toFollow ]
 

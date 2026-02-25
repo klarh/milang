@@ -1,0 +1,19 @@
+/* Type system correctness tests */
+
+/* Fix 3: Lambda param types pushed from annotation */
+add :: Int : Int : Int
+add x y = x + y
+test_add = add 1 2
+
+/* Fix 8: Occurs check — id works correctly with simple types */
+id :: a : a
+id x = x
+test_id = id 42
+
+/* Fix 9: Type variable scope per call site */
+first :: a : b : a
+first x y = x
+test_tvar1 = first 1 "hello"
+test_tvar2 = first "world" 2
+
+main world = world.io.println (toString test_add)

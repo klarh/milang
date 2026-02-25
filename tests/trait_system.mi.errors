@@ -1,0 +1,7 @@
+# Expected trait errors (substring matches)
+
+# Fix 1: World aliasing detected
+should_fail: effect violation
+
+# Fix 7: Rebound println keeps effect tracking
+rebind_test: effect violation

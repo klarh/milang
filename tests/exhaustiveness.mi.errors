@@ -1,0 +1,4 @@
+# Expected exhaustiveness errors
+
+# Missing Blue constructor
+name_partial: non-exhaustive pattern match on Color, missing: Blue

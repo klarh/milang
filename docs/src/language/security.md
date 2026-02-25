@@ -42,7 +42,7 @@ does not.
 
 Milang can call C functions via its FFI. Native C code operates outside the
 capability model, so FFI is the one place where the structural guarantee can be
-bypassed. Two CLI flags let you lock this down:
+bypassed. Two CLI flags are described to let you lock this down (note: these flags are not currently implemented in the core compiler):
 
 - **`--no-ffi`** — disallow all C FFI imports. The program may only use pure
   milang and the built-in `world` capabilities.

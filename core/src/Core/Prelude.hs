@@ -70,6 +70,10 @@ preludeSrc = T.unlines
   , "fs :~ [fs.read, fs.write]"
   , "process :~ [process]"
   , "env :~ [env]"
+  -- IO function trait annotations (so rebound names keep effect tracking)
+  , "println :~ [console]"
+  , "print :~ [console]"
+  , "readLine :~ [console]"
   -- Math type annotations
   , "float :: Int : Float"
   , "round :: Float : Int"
