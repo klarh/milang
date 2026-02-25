@@ -181,23 +181,32 @@ reduceD d env (App f x) =
           _       -> let x' = reduceD d env x
                      in reduceApp d env f' x'
 
-reduceD d env (Lam p b) =
-  -- Alpha-rename if the param could be captured:
-  -- 1. p shadows an env key, OR
-  -- 2. p appears free in an env value that the body references
-  let bodyFVs = Set.delete p (exprFreeVars b)
-      envCapturesP = any (\fv -> case envLookup fv env of
-        Just v  -> p `Set.member` exprFreeVars v
-        Nothing -> False) (Set.toList bodyFVs)
-      needsRename = p `Map.member` envMap env || envCapturesP
-  in if needsRename
-     then let allNames = Set.union (Map.keysSet (envMap env)) (exprFreeVars b)
-              fresh = freshName p allNames
-              b' = substExpr p (Name fresh) b
-              env' = envDelete fresh env
-          in Lam fresh (reduceD d env' b')
-     else let env' = envDelete p env
-          in Lam p (reduceD d env' b)
+reduceD d env (Lam p b)
+  -- Quoted params: alpha-rename the real param name to prevent env capture.
+  -- The body may contain $param (splice) which references the real name.
+  | isQuotedParam p =
+    let pn = lamParamName p
+        allNames = Set.unions [ exprFreeVars b, Map.keysSet (envMap env)
+                              , Set.unions (map exprFreeVars (Map.elems (envMap env))) ]
+        fresh = freshName pn allNames
+        b' = substExpr pn (Name fresh) b
+        env' = envDelete fresh env
+    in Lam ("#" <> fresh) (reduceD d env' b')
+  -- Regular params: alpha-rename if the param could be captured
+  | otherwise =
+    let bodyFVs = Set.delete p (exprFreeVars b)
+        envCapturesP = any (\fv -> case envLookup fv env of
+          Just v  -> p `Set.member` exprFreeVars v
+          Nothing -> False) (Set.toList bodyFVs)
+        needsRename = p `Map.member` envMap env || envCapturesP
+    in if needsRename
+       then let allNames = Set.union (Map.keysSet (envMap env)) (exprFreeVars b)
+                fresh = freshName p allNames
+                b' = substExpr p (Name fresh) b
+                env' = envDelete fresh env
+            in Lam fresh (reduceD d env' b')
+       else let env' = envDelete p env
+            in Lam p (reduceD d env' b)
 
 reduceD d env (With body bindings) =
   -- First, evaluate bindings normally (handles SCC ordering, concrete values)
@@ -256,10 +265,15 @@ reduceD _ _ e@(Import _) = e
 -- Quote: reify syntax as data (AST records), don't evaluate the body
 reduceD _ _ (Quote e) = quoteExpr e
 
--- Splice: reduce the body to a record, interpret as AST, then reduce
+-- Splice: reduce the body; if it's an AST record, interpret as code and reduce.
+-- If the body is still an unresolved Name, keep as residual Splice.
 reduceD d env (Splice e) =
   let val = reduceD d env e
-  in reduceD d env (spliceExpr val)
+  in case val of
+       Name _ -> Splice val  -- residual: name not yet resolved
+       _ -> case spliceExprM val of
+              Just expr -> reduceD d env expr
+              Nothing   -> Splice val  -- can't splice non-AST value
 
 reduceD _ _ (Error msg) = Error msg
 
@@ -364,6 +378,21 @@ reduceBind d env b = case bindDomain b of
 -- ── Application reduction ─────────────────────────────────────────
 
 reduceApp :: Int -> Env -> Expr -> Expr -> Expr
+-- Quoted parameter: auto-quote the argument (don't evaluate it)
+reduceApp d env (Lam p body) arg
+  | isQuotedParam p =
+    let realName = lamParamName p
+        d' = d - 1
+        argFV = exprFreeVars arg
+    in if realName `Set.member` argFV
+       then -- Alpha-rename to avoid capture
+         let allNames = Set.unions [argFV, exprFreeVars body, Map.keysSet (envMap env)]
+             fresh = freshName realName allNames
+             body' = substExpr realName (Name fresh) body
+             quoted = quoteExpr arg
+         in reduceD d' (envInsert fresh quoted env) body'
+       else let quoted = quoteExpr arg
+            in reduceD d' (envInsert realName quoted env) body
 reduceApp d env (Lam p body) arg =
   let d' = d - 1
       argFVs = exprFreeVars arg
@@ -645,6 +674,16 @@ listToCons :: [Expr] -> Expr
 listToCons []     = Record "Nil" []
 listToCons (x:xs) = Record "Cons" [mkBind "head" x, mkBind "tail" (listToCons xs)]
 
+-- | Convert a Cons/Nil list back to a Haskell list
+consToList :: Expr -> Maybe [Expr]
+consToList (Record "Nil" _) = Just []
+consToList (Record "Cons" bs) = do
+  h <- fieldLookup "head" bs
+  t <- fieldLookup "tail" bs
+  rest <- consToList t
+  Just (h : rest)
+consToList _ = Nothing
+
 -- | Expand union declarations
 expandUnion :: Binding -> [Binding]
 expandUnion b = case bindBody b of
@@ -809,35 +848,111 @@ quoteExpr (Case s alts)  = Record "Case"
 quoteExpr (ListLit es)   = Record "List"
   [ mkBind "items" (listToCons (map quoteExpr es)) ]
 quoteExpr (Thunk e)      = Record "Thunk" [mkBind "body" (quoteExpr e)]
+quoteExpr (FieldAccess e f) = Record "Access"
+  [ mkBind "expr" (quoteExpr e)
+  , mkBind "field" (StringLit f) ]
+quoteExpr (With body bs) = Record "With"
+  [ mkBind "body" (quoteExpr body)
+  , mkBind "bindings" (listToCons [Record "" [mkBind "name" (StringLit (bindName b)),
+                                              mkBind "val" (quoteExpr (bindBody b))] | b <- bs]) ]
+quoteExpr (Namespace bs) = Record "Let"
+  [ mkBind "bindings" (listToCons [Record "" [mkBind "name" (StringLit (bindName b)),
+                                              mkBind "val" (quoteExpr (bindBody b))] | b <- bs]) ]
 quoteExpr (Quote e)      = Record "Quote" [mkBind "body" (quoteExpr e)]
 quoteExpr (Splice e)     = Record "Splice" [mkBind "body" (quoteExpr e)]
+quoteExpr (CFunction {}) = Record "CFunc" []
+quoteExpr (Error msg)    = Record "Error" [mkBind "msg" (StringLit msg)]
 quoteExpr e              = Record "Unknown" [mkBind "val" e]
 
 -- | Convert an AST record representation back to an expression
-spliceExpr :: Expr -> Expr
-spliceExpr (Record "Int" bs)    = maybe (Error "splice: Int missing val") id (fieldLookup "val" bs)
-spliceExpr (Record "Float" bs)  = maybe (Error "splice: Float missing val") id (fieldLookup "val" bs)
-spliceExpr (Record "String" bs) = maybe (Error "splice: String missing val") id (fieldLookup "val" bs)
-spliceExpr (Record "Var" bs)    = case fieldLookup "name" bs of
-  Just (StringLit n) -> Name n
-  _                  -> Error "splice: Var missing name"
-spliceExpr (Record "Op" bs)     =
+-- | Try to convert an AST record back to an expression (Maybe version)
+spliceExprM :: Expr -> Maybe Expr
+spliceExprM (Record "Int" bs)    = fieldLookup "val" bs
+spliceExprM (Record "Float" bs)  = fieldLookup "val" bs
+spliceExprM (Record "String" bs) = fieldLookup "val" bs
+spliceExprM (Record "Var" bs)    = case fieldLookup "name" bs of
+  Just (StringLit n) -> Just (Name n)
+  _                  -> Nothing
+spliceExprM (Record "Op" bs)     =
   case (fieldLookup "op" bs, fieldLookup "left" bs, fieldLookup "right" bs) of
-    (Just (StringLit op), Just l, Just r) -> BinOp op (spliceExpr l) (spliceExpr r)
-    _ -> Error "splice: Op missing fields"
-spliceExpr (Record "App" bs)    =
+    (Just (StringLit op), Just l, Just r) -> Just $ BinOp op (spliceExpr l) (spliceExpr r)
+    _ -> Nothing
+spliceExprM (Record "App" bs)    =
   case (fieldLookup "fn" bs, fieldLookup "arg" bs) of
-    (Just f, Just x) -> App (spliceExpr f) (spliceExpr x)
-    _ -> Error "splice: App missing fields"
-spliceExpr (Record "Lam" bs)    =
+    (Just f, Just x) -> Just $ App (spliceExpr f) (spliceExpr x)
+    _ -> Nothing
+spliceExprM (Record "Lam" bs)    =
   case (fieldLookup "param" bs, fieldLookup "body" bs) of
-    (Just (StringLit p), Just b) -> Lam p (spliceExpr b)
-    _ -> Error "splice: Lam missing fields"
--- Raw values pass through (for manual AST construction like r9)
-spliceExpr e@(IntLit _)    = e
-spliceExpr e@(FloatLit _)  = e
-spliceExpr e@(StringLit _) = e
-spliceExpr e               = e  -- anything else passes through
+    (Just (StringLit p), Just b) -> Just $ Lam p (spliceExpr b)
+    _ -> Nothing
+spliceExprM (Record "Splice" bs) =
+  case fieldLookup "body" bs of
+    Just b -> Just $ Splice (spliceExpr b)
+    _      -> Nothing
+spliceExprM (Record "Thunk" bs) =
+  case fieldLookup "body" bs of
+    Just b -> Just $ Thunk (spliceExpr b)
+    _      -> Nothing
+spliceExprM (Record "Access" bs) =
+  case (fieldLookup "expr" bs, fieldLookup "field" bs) of
+    (Just e, Just (StringLit f)) -> Just $ FieldAccess (spliceExpr e) f
+    _ -> Nothing
+spliceExprM (Record "With" bs)   = do
+  body   <- fieldLookup "body" bs
+  fields <- fieldLookup "bindings" bs >>= spliceBindings
+  Just (With (spliceExpr body) fields)
+spliceExprM (Record "Let" bs)    = do
+  fields <- fieldLookup "bindings" bs >>= spliceBindings
+  Just (Namespace fields)
+spliceExprM (Record "Quote" bs) =
+  case fieldLookup "body" bs of
+    Just b -> Just $ Quote (spliceExpr b)
+    _      -> Nothing
+spliceExprM (Record "List" bs) =
+  case fieldLookup "items" bs of
+    Just items -> case consToList items of
+      Just es -> Just $ listToCons (map spliceExpr es)
+      Nothing -> Just items
+    _          -> Nothing
+spliceExprM (Record "Rec" bs)  = do
+  StringLit tag <- fieldLookup "tag" bs
+  fields <- fieldLookup "fields" bs >>= spliceBindings
+  Just (Record tag fields)
+spliceExprM (Record "Case" bs) = do
+  scrut <- fieldLookup "scrutinee" bs
+  altsE <- fieldLookup "alts" bs
+  case consToList altsE of
+    Just es -> Just $ Case (spliceExpr scrut) [Alt PWild Nothing (spliceExpr e) | e <- es]
+    Nothing -> Nothing
+spliceExprM (Record "Error" bs) =
+  case fieldLookup "msg" bs of
+    Just (StringLit msg) -> Just $ Error msg
+    _                    -> Nothing
+-- Raw values pass through
+spliceExprM e@(IntLit _)    = Just e
+spliceExprM e@(FloatLit _)  = Just e
+spliceExprM e@(StringLit _) = Just e
+spliceExprM e@(Name _)      = Just e
+spliceExprM e@(ListLit _)   = Just e
+spliceExprM _               = Nothing
+
+-- | Convert binding records back to Binding list
+spliceBindings :: Expr -> Maybe [Binding]
+spliceBindings expr = case consToList expr of
+  Just es -> mapM spliceField es
+  Nothing -> Nothing
+  where
+    spliceField (Record _ bs) = do
+      StringLit name <- fieldLookup "name" bs
+      val <- fieldLookup "val" bs
+      Just (mkBind name (spliceExpr val))
+    spliceField _ = Nothing
+
+-- | Convert an AST record back to an expression (infallible, for recursive use)
+spliceExpr :: Expr -> Expr
+spliceExpr e = case spliceExprM e of
+  Just r  -> r
+  Nothing -> e
 
 -- | Look up a field by name in a record's bindings
 fieldLookup :: Text -> [Binding] -> Maybe Expr

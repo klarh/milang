@@ -66,6 +66,16 @@ data Binding = Binding
   , bindPos    :: !(Maybe SrcPos)
   } deriving (Show, Eq)
 
+-- | Get the binding name of a lambda parameter (strips # for quoted params)
+lamParamName :: Text -> Text
+lamParamName p = case T.stripPrefix "#" p of
+  Just p' -> p'
+  Nothing -> p
+
+-- | Check if a lambda parameter is a quoted (auto-quote) parameter
+isQuotedParam :: Text -> Bool
+isQuotedParam = T.isPrefixOf "#"
+
 -- | Convenience: make a simple value binding
 mkBind :: Text -> Expr -> Binding
 mkBind name body = Binding Value name [] body Nothing
