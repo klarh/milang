@@ -21,6 +21,7 @@ preludeSrc = T.unlines
   , "const x y = x"
   , "flip f a b = f b a"
   , "null lst = lst -> Nil = 1; _ = 0"
+  , "len lst = lst -> Nil = 0; Cons h t = 1 + len t"
   , "head lst = lst -> Nil = Nothing; Cons h t = Just h"
   , "tail lst = lst -> Nil = Nothing; Cons h t = Just t"
   , "fold f acc lst = lst -> Nil = acc; Cons h t = fold f (f acc h) t"

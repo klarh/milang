@@ -143,22 +143,25 @@ reduceD d env (BinOp op l r) =
     _ -> result
 
 reduceD d env (App f x) =
-  case collectApp (App f x) of
-    (Name n, args) | envIsRec n env ->
-      let args' = map (reduceD d env) args
-      in if all isConcrete args' && d >= minRecDepth
-         then case envLookup n env of
-                Just fn -> foldl (reduceApp d env) fn args'
-                Nothing -> foldl App (Name n) args'
-         else foldl App (Name n) args'
-    _ ->
-      let f' = reduceD d env f
-      in case f' of
-        -- Call-by-name for lambda application: don't evaluate arg until needed.
-        -- This prevents divergence in recursive branches (e.g., if cond t e).
-        Lam _ _ -> reduceApp d env f' x
-        _       -> let x' = reduceD d env x
-                   in reduceApp d env f' x'
+  -- Check for single-arg builtins by name before env lookup (e.g. len on strings)
+  case f of
+    Name n | Just r <- tryBuiltin1 d env n x -> r
+    _ -> case collectApp (App f x) of
+      (Name n, args) | envIsRec n env ->
+        let args' = map (reduceD d env) args
+        in if all isConcrete args' && d >= minRecDepth
+           then case envLookup n env of
+                  Just fn -> foldl (reduceApp d env) fn args'
+                  Nothing -> foldl App (Name n) args'
+           else foldl App (Name n) args'
+      _ ->
+        let f' = reduceD d env f
+        in case f' of
+          -- Call-by-name for lambda application: don't evaluate arg until needed.
+          -- This prevents divergence in recursive branches (e.g., if cond t e).
+          Lam _ _ -> reduceApp d env f' x
+          _       -> let x' = reduceD d env x
+                     in reduceApp d env f' x'
 
 reduceD d env (Lam p b) =
   -- Alpha-rename if the param could be captured:
@@ -337,6 +340,13 @@ reduceApp _ _ (Record tag fields) arg =
 -- Builtin: tag extracts the tag name from a record
 reduceApp _ _ (Name "tag") (Record t _) = StringLit t
 reduceApp _ _ f x = App f x
+
+-- Builtins that should fire before env lookup (by original name)
+tryBuiltin1 :: Int -> Env -> Text -> Expr -> Maybe Expr
+tryBuiltin1 d env "len" x = case reduceD d env x of
+  StringLit s -> Just $ IntLit (fromIntegral (T.length s))
+  _           -> Nothing  -- fall through to prelude len for lists
+tryBuiltin1 _ _ _ _ = Nothing
 
 -- ── Binary operator reduction ─────────────────────────────────────
 
