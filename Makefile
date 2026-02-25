@@ -1,4 +1,4 @@
-.PHONY: all clean test test-hs docs docs-serve
+.PHONY: all clean test test-hs docs docs-serve docs-publish
 
 all:
 	@echo 'module Core.Version (version) where' > core/src/Core/Version.hs
@@ -56,3 +56,11 @@ docs:
 
 docs-serve:
 	cd docs && mdbook serve --open
+
+docs-publish: docs
+	@TMP=$$(mktemp -d) && \
+	cp -r docs-out/. $$TMP/ && \
+	cd $$TMP && git init -b gh-pages && git add -A && \
+	git commit -m "Deploy docs $$(date +%Y-%m-%d)" && \
+	git push -f git@github.com:klarh/milang.git HEAD:gh-pages && \
+	rm -rf $$TMP
