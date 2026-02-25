@@ -339,6 +339,31 @@ reduceApp _ _ (Record tag fields) arg =
   in Record tag (fields ++ [newField])
 -- Builtin: tag extracts the tag name from a record
 reduceApp _ _ (Name "tag") (Record t _) = StringLit t
+-- Builtin: fields returns list of field values
+reduceApp _ _ (Name "fields") (Record _ bs) =
+  listToCons [bindBody b | b <- bs]
+-- Builtin: fieldNames returns list of field name strings
+reduceApp _ _ (Name "fieldNames") (Record _ bs) =
+  listToCons [StringLit (bindName b) | b <- bs]
+-- Builtin: getField rec name — curried: (getField rec) returns a closure, applied to name does lookup
+reduceApp d env (App (Name "getField") rec) (StringLit name) =
+  case reduceD d env rec of
+    Record _ bs -> case [bindBody b | b <- bs, bindName b == name] of
+      (v:_) -> Record "Just" [Binding { bindName = "val", bindParams = []
+                                      , bindBody = v, bindDomain = Value, bindPos = Nothing }]
+      []    -> Record "Nothing" []
+    r -> App (App (Name "getField") r) (StringLit name)
+-- Builtin: setField rec name val — curried
+reduceApp d env (App (App (Name "setField") rec) (StringLit name)) val =
+  case reduceD d env rec of
+    Record tag bs ->
+      let updated = [if bindName b == name then b { bindBody = val } else b | b <- bs]
+          found = any (\b -> bindName b == name) bs
+          bs' = if found then updated
+                else bs ++ [Binding { bindName = name, bindParams = []
+                                    , bindBody = val, bindDomain = Value, bindPos = Nothing }]
+      in Record tag bs'
+    r -> App (App (App (Name "setField") r) (StringLit name)) val
 reduceApp _ _ f x = App f x
 
 -- Builtins that should fire before env lookup (by original name)
