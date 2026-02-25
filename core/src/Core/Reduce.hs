@@ -1550,20 +1550,31 @@ traitCheckBindings env bindings =
       valueBinds = filter (\b -> bindDomain b == Value || bindDomain b == Lazy) bindings
   in concatMap (checkTrait traitEnv bindingMap valueBinds) valueBinds
 
--- | Check a single binding against its trait annotation
+-- | Check a single binding against its trait annotation.
+-- Unannotated bindings default to pure (:~ []), except "main" and "_main"
+-- which are implicitly granted all capabilities.
 checkTrait :: TraitEnv -> Map.Map Text Binding -> [Binding] -> Binding -> [Warning]
 checkTrait traitEnv bindingMap allBindings b =
-  case Map.lookup (bindName b) traitEnv of
-    Nothing -> []
-    Just declared ->
-      let inferred = inferBindingEffects traitEnv bindingMap allBindings b
-          excess = Set.difference inferred declared
-      in if Set.null excess
-         then []
-         else [TraitWarning (bindPos b) (bindName b)
-                ("effect violation: " <> bindName b
-                 <> " declared :~ " <> formatEffects declared
-                 <> " but uses " <> formatEffects excess)]
+  let name = bindName b
+      -- main and _main (auto-wrapper for main-less files) are implicitly unconstrained
+      isMain = name == "main" || name == "_main"
+      declared = case Map.lookup name traitEnv of
+                   Just d  -> d
+                   Nothing | isMain    -> Set.empty  -- placeholder; skip check below
+                           | otherwise -> Set.empty  -- pure by default
+      skip = isMain && not (Map.member name traitEnv)
+  in if skip
+     then []
+     else let inferred = inferBindingEffects traitEnv bindingMap allBindings b
+              excess = Set.difference inferred declared
+          in if Set.null excess
+             then []
+             else [TraitWarning (bindPos b) (bindName b)
+                    ("effect violation: " <> name
+                     <> (if Map.member name traitEnv
+                         then " declared :~ " <> formatEffects declared
+                         else " has no :~ annotation (assumed pure)")
+                     <> " but uses " <> formatEffects excess)]
 
 -- | Infer effects of a binding body
 inferBindingEffects :: TraitEnv -> Map.Map Text Binding -> [Binding] -> Binding -> Effects

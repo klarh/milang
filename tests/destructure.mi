@@ -3,9 +3,12 @@ Point = Point {x = 10; y = 20}
 
 -- Destructure with shorthand: {x; y} = Point
 {x; y} = Point
+main1 :~ [console]
 main1 = world.io.println x
+main2 :~ [console]
 main2 = world.io.println y
 
 -- Destructure with rename: {myX = x} = Point
 {myX = x} = Point
+main3 :~ [console]
 main3 = world.io.println myX

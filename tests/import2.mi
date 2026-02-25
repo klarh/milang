@@ -4,8 +4,10 @@ geo = import "lib/geometry.mi"
 
 -- circle area via nested import chain
 a1 = geo.circle_area 10
+main1 :~ [console]
 main1 = world.io.println a1
 
 -- rect area
 a2 = geo.rect_area 3 4
+main2 :~ [console]
 main2 = world.io.println a2

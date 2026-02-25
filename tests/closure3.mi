@@ -8,9 +8,11 @@ inc x = x + 1
 
 -- All compile-time evaluable
 r1 = apply_twice inc 3
+main1 :~ [console]
 main1 = world.io.println r1
 
 -- Now test: pass make_adder 2 as a function
 add2 = make_adder 2
 r2 = apply_twice add2 10
+main2 :~ [console]
 main2 = world.io.println r2

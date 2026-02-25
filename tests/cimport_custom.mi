@@ -2,10 +2,13 @@
 lib = import' "lib/mylib.h" ({src = "lib/mylib.c"})
 
 a = lib.add_ints 3 4
+main1 :~ [console]
 main1 = world.io.println a
 
 b = lib.multiply 2.5 4.0
+main2 :~ [console]
 main2 = world.io.println b
 
 c = lib.greeting 0
+main3 :~ [console]
 main3 = world.io.println c

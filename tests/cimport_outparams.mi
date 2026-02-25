@@ -3,8 +3,10 @@ m = import "/usr/include/math.h"
 
 -- frexp(6.0) should give mantissa=0.75, exponent=3 (since 0.75 * 2^3 = 6)
 r = m.frexp 6.0
+main1 :~ [console]
 main1 = world.io.println r
 
 -- modf(3.14) should give integer part and fractional part
 r2 = m.modf 3.14
+main2 :~ [console]
 main2 = world.io.println r2

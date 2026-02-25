@@ -5,3 +5,6 @@ should_fail: effect violation
 
 # Fix 7: Rebound println keeps effect tracking
 rebind_test: effect violation
+
+# Pure by default: unannotated function that uses IO is an error
+impure_no_annotation: effect violation

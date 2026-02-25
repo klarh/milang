@@ -70,12 +70,15 @@ add a b = a + b
 
 Trait annotations are parsed, stored, and **enforced** by the compiler. The compiler performs taint analysis: it tracks the `world` value and any names that transitively reference it (via aliasing or closures), then infers the effect set of every binding. If a function's inferred effects are not a subset of its declared traits, the compiler emits an error.
 
-For example, declaring `:~ []` (pure) but calling `world.io.println` inside the body is a compile error:
+**Functions without a `:~` annotation are assumed pure** (`:~ []`). This means any function that performs IO must declare its effects. The only exception is `main`, which is implicitly granted all capabilities.
+
+For example, declaring `:~ []` (pure) but calling `world.io.println` inside the body is a compile error — and so is omitting the annotation entirely:
 
 ```milang
-pure_fn :~ []
-pure_fn world =
-  world.io.println "oops"  -- error: declared pure but uses [console]
-```
+-- This is an error: no annotation, so assumed pure, but uses console
+helper world = world.io.println "oops"
 
-Functions that do not have a `:~` annotation are unconstrained and may use any effects.
+-- Fix: add trait annotation
+helper :~ [console]
+helper world = world.io.println "ok"
+```

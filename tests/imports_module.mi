@@ -4,12 +4,15 @@ helpers = import "lib/helpers.mi"
 
 -- Direct access through shared imports
 area1 = imports.myMath.circle_area 5
+main1 :~ [console]
 main1 = world.io.println area1
 
 -- Via helper that also uses the shared imports
 area2 = helpers.double_area 5
+main2 :~ [console]
 main2 = world.io.println area2
 
 -- Access geometry through shared imports
 rect = imports.geo.rect_area 3 4
+main3 :~ [console]
 main3 = world.io.println rect

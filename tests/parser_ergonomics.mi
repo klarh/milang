@@ -11,4 +11,5 @@ r4 = describe (Just 5)
 r5 = describe None
 
 -- Test 3: Bare expressions in brace scopes
+result :~ [console]
 result = 42 {world.io.println "side effect 1"; world.io.println "side effect 2"}

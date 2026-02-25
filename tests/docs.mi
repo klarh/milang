@@ -19,6 +19,7 @@ distance :? {
 distance x1 y1 x2 y2 = (x2 - x1)**2 + (y2 - y1)**2
 
 -- Triple-quoted string docs
+greet :~ [console]
 greet :? """
   Greet a person by name.
   Prints a friendly message to the console.

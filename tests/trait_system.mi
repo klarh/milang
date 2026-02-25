@@ -1,6 +1,7 @@
 /* Trait system correctness tests */
 
 /* === Fix 1: World aliasing should be detected === */
+printer :~ [console]
 printer w = w.io.println "aliased"
 should_fail :~ []
 should_fail world =
@@ -10,6 +11,9 @@ should_fail world =
 rebind_test :~ []
 rebind_test world =
   println "hello"
+
+/* === Pure by default: unannotated functions are assumed pure === */
+impure_no_annotation world = world.io.println "oops"
 
 main world =
   world.io.println "trait tests"

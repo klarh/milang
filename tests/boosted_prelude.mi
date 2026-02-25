@@ -2,16 +2,20 @@
 
 -- flatMap: map then flatten
 r1 = flatMap (\x -> [x, x * 10]) [1, 2, 3]
+main1 :~ [console]
 main1 = world.io.println r1
 
 -- foldRight
 r2 = foldRight (\x acc -> Cons x acc) [] [1, 2, 3]
+main2 :~ [console]
 main2 = world.io.println r2
 
 -- sort / nub
 r3 = sort [3, 1, 4, 1, 5, 9, 2, 6]
 r4 = nub [1, 2, 2, 3, 3, 3, 1]
+main3 :~ [console]
 main3 = world.io.println r3
+main4 :~ [console]
 main4 = world.io.println r4
 
 -- startsWith / endsWith
@@ -42,4 +46,5 @@ r15 = cmpLen [1, 2, 3] [1, 2]
 -- groupBy
 r16 = groupBy (\a b -> a == b) [1, 1, 2, 2, 2, 3]
 
+main5 :~ [console]
 main5 = world.io.println r9

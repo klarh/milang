@@ -1,11 +1,17 @@
 -- Test IO: world.io.print and world.io.println built-ins
 
 -- world.io.println prints a value followed by newline
+main1 :~ [console]
 main1 = world.io.println 42
+main2 :~ [console]
 main2 = world.io.println "hello world"
+main3 :~ [console]
 main3 = world.io.println (3 + 4)
 
 -- world.io.print without newline
+main4 :~ [console]
 main4 = world.io.print "a"
+main5 :~ [console]
 main5 = world.io.print "b"
+main6 :~ [console]
 main6 = world.io.println "c"

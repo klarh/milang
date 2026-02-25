@@ -1,39 +1,51 @@
 -- Test list literals and built-in functions
 xs = [1, 2, 3, 4, 5]
+main1 :~ [console]
 main1 = world.io.println xs
 
 -- len
+main2 :~ [console]
 main2 = world.io.println (len xs)
 
 -- at (indexing)
+main3 :~ [console]
 main3 = world.io.println (at xs 0)
+main4 :~ [console]
 main4 = world.io.println (at xs 4)
 
 -- push
 ys = push xs 6
+main5 :~ [console]
 main5 = world.io.println ys
 
 -- concat
 zs = concat [10, 20] [30, 40]
+main6 :~ [console]
 main6 = world.io.println zs
 
 -- map
 doubled = map (\x -> x * 2) xs
+main7 :~ [console]
 main7 = world.io.println doubled
 
 -- filter
 evens = filter (\x -> x == 2) [1, 2, 3, 4]
+main8 :~ [console]
 main8 = world.io.println evens
 
 -- fold
 total = fold (\acc x -> acc + x) 0 xs
+main9 :~ [console]
 main9 = world.io.println total
 
 -- pattern matching
+first :~ [console]
 first = xs ->
   [a, b, ...rest] = world.io.println (a + b)
+main10 :~ [console]
 main10 = first
 
 -- empty list
 empty = []
+main11 :~ [console]
 main11 = world.io.println empty

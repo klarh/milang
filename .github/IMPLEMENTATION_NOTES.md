@@ -20,6 +20,8 @@ data Domain = Value | Lazy | Type | Trait | Doc | Parse
 
 Type checking and trait checking happen *during reduction*, not as separate passes. After reducing all bindings in a namespace (using SCC ordering for dependency analysis), the reducer runs `typeCheckBindings` and `traitCheckBindings` against the accumulated environment.
 
+**Pure by default**: Functions without a `:~` trait annotation are assumed pure (`:~ []`). Any function that performs IO must explicitly declare its effects. `main` and `_main` (the auto-wrapper for main-less files) are the only exceptions — they are implicitly granted all capabilities.
+
 ### Why This Matters
 
 - Adding a new annotation domain (e.g., for effects, ownership) only requires adding a `Domain` variant and a few clauses in `evalAnnotation` and the checker functions.

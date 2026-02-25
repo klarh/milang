@@ -2,4 +2,5 @@
 lib = import "lib/mylib.h"
 
 a = lib.add_ints 10 20
+main1 :~ [console]
 main1 = world.io.println a

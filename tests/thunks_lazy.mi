@@ -1,3 +1,4 @@
 -- Test that thunks are truly lazy (only chosen branch should world.io.print)
 x = 10
+result :~ [console]
 result = if (x > 5) ~(world.io.println "true branch") ~(world.io.println "false branch")
