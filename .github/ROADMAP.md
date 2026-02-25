@@ -8,7 +8,42 @@ Bidirectional `::` annotations, inference through `Case`/`With`/`App`, operator 
 - The partial evaluator already evaluates predicates at compile time, so refinement types can be expressed with minimal new machinery
 - Planned syntax: `Positive = Int' 64 | (\x -> x > 0)`, `SmallInt = Int' 32 | (\x -> x < 256)`
 - Compile-time-known values checked against predicates during reduction; runtime values generate guard code
+- Types-as-functions: the core architecture already treats type annotations as expressions evaluated in the type domain — refinement predicates are a natural extension where the type checker literally *calls* the predicate during reduction
 - Longer term: explore full dependent types where type expressions can reference values (natural fit since types are already milang expressions evaluated in the type domain)
+
+## Import System
+
+### Import Mirrors / Fallback URLs
+Extend `import'` with a `mirrors` field for resilience against URL unavailability:
+
+```milang
+Lib = import' "https://primary.example.com/lib.mi" ({
+  sha256 = "abc123..."
+  mirrors = ["https://mirror1.example.com/lib.mi"
+             "https://mirror2.example.com/lib.mi"]
+})
+```
+
+- All mirrors must produce the same content (verified by `sha256`)
+- Resolver tries primary URL first, then each mirror in order
+- `pin` command could auto-discover working mirrors and populate the list
+- Zero trust change: the hash is what you trust, not the URL
+
+### Version Constraints & Registry Resolution
+A resolution layer above pinned imports for ergonomic dependency management:
+
+```
+# milang.toml (or similar manifest)
+[dependencies]
+array = ">= 2.0"
+json = "~1.3"
+```
+
+- Constraint predicates are pure milang expressions evaluated by the reducer during resolution (e.g., `\pkg -> pkg.version >= "2.0"`)
+- Resolution produces pinned `import'` calls with exact URL + sha256 → written to a lockfile
+- Reproducible builds come from the lockfile (hash-pinned); the manifest is for human-friendly version management
+- Registry is just a URL that serves a package index (JSON or milang data); no special protocol needed
+- This sits *above* the existing import system — `import "url"` and `import' "url" ({sha256=...})` remain the primitives
 
 ## Security & Capability Restriction
 
