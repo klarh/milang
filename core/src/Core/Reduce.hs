@@ -118,6 +118,7 @@ reduceD d env (Name n)
     case envLookup n env of
       Just (Name m) | m == n -> Name n  -- self-reference; don't recurse
       Just val@(Lam _ _) -> val
+      Just val@(Namespace _) -> val  -- Namespace is a value, don't re-reduce
       Just val -> reduceD (d - 1) env val
       Nothing
         | isOperatorName n -> Lam "_a" (Lam "_b" (BinOp n (Name "_a") (Name "_b")))
@@ -211,10 +212,12 @@ reduceD d env (FieldAccess e field) =
 
 reduceD d env (Namespace bindings) =
   let expanded = concatMap expandUnion bindings
-      merged = mergeOpenDefs expanded
+      (valueBs, annotBs) = partitionBindings expanded
+      mergedValues = mergeOpenDefs valueBs
       env' = evalBindings d env expanded
-      bs' = map (reduceBind d env') merged
-  in Namespace bs'
+      valBs' = map (reduceBind d env') mergedValues
+      annBs' = map (reduceBind d env') annotBs
+  in Namespace (valBs' ++ annBs')
 
 reduceD d env (Case scrut alts) =
   let scrut' = forceThunk d env (reduceD d env scrut)
@@ -288,6 +291,10 @@ evalAnnotation d env b = case bindDomain b of
   _     -> env  -- shouldn't happen
 
 -- | Evaluate one SCC group of value bindings
+isNamespaceVal :: Expr -> Bool
+isNamespaceVal (Namespace _) = True
+isNamespaceVal _ = False
+
 evalSCC :: Int -> Env -> SCC Binding -> Env
 evalSCC d env (AcyclicSCC b) =
   let name = bindName b
@@ -303,7 +310,7 @@ evalSCC d env (AcyclicSCC b) =
             then bindBody b'
             else reduceD d env body
       env1 = if isWorldTainted env body then envMarkImpure name env else env
-  in if isConcrete val
+  in if isConcrete val || isNamespaceVal val
      then envInsert name val env1
      else env1
 

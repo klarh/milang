@@ -41,6 +41,11 @@ skipDomain Doc   = True
 skipDomain Parse = True
 skipDomain _     = False
 
+-- | Should this binding be skipped entirely during codegen?
+skipBinding :: Binding -> Bool
+skipBinding b = skipDomain (bindDomain b) || isModuleRef (bindName b)
+  where isModuleRef n = "__mod_" `T.isPrefixOf` n && "__" `T.isSuffixOf` n
+
 -- | Generate C code from a (partially reduced) Expr
 codegen :: Handle -> Set.Set Text -> Expr -> IO ()
 codegen h hidden expr = do
@@ -86,7 +91,7 @@ captureIO st hidden expr = do
         emit "\n"
   case expr of
     Namespace bs -> do
-      let runtimeBs = filter (not . skipDomain . bindDomain) bs
+      let runtimeBs = filter (not . skipBinding) bs
       let hasMainWithArg = any isMainBinding runtimeBs
       emit "int main(int argc, char **argv) {\n"
       emit "  MiEnv *_env = mi_env_new(NULL);\n"
@@ -166,7 +171,10 @@ exprToC :: CGState -> Expr -> IO String
 exprToC _ (IntLit n) = pure $ "mi_expr_int(" ++ show n ++ ")"
 exprToC _ (FloatLit d) = pure $ "mi_expr_float(" ++ show d ++ ")"
 exprToC _ (StringLit s) = pure $ "mi_expr_string(" ++ cStringLit (T.unpack s) ++ ")"
-exprToC _ (Name n) = pure $ "mi_expr_name(\"" ++ T.unpack n ++ "\")"
+exprToC _ (Name n)
+  | "__mod_" `T.isPrefixOf` n && "__" `T.isSuffixOf` n =
+    pure "mi_expr_string(\"<circular>\")"  -- circular module reference placeholder
+  | otherwise = pure $ "mi_expr_name(\"" ++ T.unpack n ++ "\")"
 
 exprToC st (BinOp op l r)
   | not (isBuiltinOp op) = do
@@ -190,12 +198,12 @@ exprToC st (Lam param body) = do
 
 exprToC st (With body bindings) = do
   bc <- exprToC st body
-  bindCodes <- mapM (bindingStructToC st) (filter (not . skipDomain . bindDomain) bindings)
+  bindCodes <- mapM (bindingStructToC st) (filter (not . skipBinding) bindings)
   pure $ "mi_expr_with(" ++ bc ++ ", " ++ show (length bindCodes) ++ ", " ++
     intercalate ", " bindCodes ++ ")"
 
 exprToC st (Record tag bindings) = do
-  bindCodes <- mapM (bindingStructToC st) (filter (not . skipDomain . bindDomain) bindings)
+  bindCodes <- mapM (bindingStructToC st) (filter (not . skipBinding) bindings)
   pure $ "mi_expr_record(\"" ++ T.unpack tag ++ "\", " ++ show (length bindCodes) ++
     (if null bindCodes then "" else ", " ++ intercalate ", " bindCodes) ++ ")"
 
@@ -204,7 +212,7 @@ exprToC st (FieldAccess e field) = do
   pure $ "mi_expr_field(" ++ ec ++ ", \"" ++ T.unpack field ++ "\")"
 
 exprToC st (Namespace bindings) = do
-  bindCodes <- mapM (bindingStructToC st) (filter (not . skipDomain . bindDomain) bindings)
+  bindCodes <- mapM (bindingStructToC st) (filter (not . skipBinding) bindings)
   let args = if null bindCodes then "" else ", " ++ intercalate ", " bindCodes
   pure $ "mi_expr_namespace(" ++ show (length bindCodes) ++ args ++ ")"
 
