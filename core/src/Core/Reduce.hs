@@ -334,6 +334,8 @@ reduceApp _ _ (Record tag fields) arg =
       newField = Binding { bindName = fieldName, bindParams = []
                          , bindBody = arg, bindDomain = Value, bindPos = Nothing }
   in Record tag (fields ++ [newField])
+-- Builtin: tag extracts the tag name from a record
+reduceApp _ _ (Name "tag") (Record t _) = StringLit t
 reduceApp _ _ f x = App f x
 
 -- ── Binary operator reduction ─────────────────────────────────────
