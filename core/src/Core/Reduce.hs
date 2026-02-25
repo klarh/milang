@@ -230,6 +230,9 @@ reduceD d env (Thunk body) =
 
 reduceD d env (ListLit es) = listToCons (map (reduceD d env) es)
 
+-- Import should have been resolved before reduction; if not, leave as-is
+reduceD _ _ e@(Import _) = e
+
 reduceD _ _ (Error msg) = Error msg
 
 -- ── Binding evaluation (unified) ──────────────────────────────────
@@ -587,6 +590,7 @@ exprFreeVars (Case s alts)   = Set.union (exprFreeVars s) (Set.unions (map altFr
 exprFreeVars (Thunk e)       = exprFreeVars e
 exprFreeVars (ListLit es)    = Set.unions (map exprFreeVars es)
 exprFreeVars (With e bs)     = Set.union (bindingsFreeVars bs) (exprFreeVars e)
+exprFreeVars (Import _)      = Set.empty
 exprFreeVars (Error _)       = Set.empty
 
 bindingFreeVars :: Binding -> Set.Set Text
@@ -637,6 +641,7 @@ substExpr var replacement = go
     go (Thunk e)       = Thunk (go e)
     go (ListLit es)    = ListLit (map go es)
     go (With e bs)     = With (go e) (map goBind bs)
+    go e@(Import _)    = e
     go e@(Error _)     = e
 
     goBind b = b { bindBody = go (bindBody b) }

@@ -45,6 +45,7 @@ data Expr
   | Thunk Expr                  -- ~expr: deferred evaluation
   | ListLit [Expr]              -- [a, b, c]
   | With Expr [Binding]         -- expr <- { bindings } (record update)
+  | Import !Text                -- import "path": file import
   | Error !Text                 -- reduction error (type error, trait violation, etc.)
   deriving (Show, Eq)
 
@@ -108,6 +109,7 @@ prettyExpr i (Thunk e)       = "~(" ++ prettyExpr i e ++ ")"
 prettyExpr i (ListLit es)    = "[" ++ intercalate ", " (map (prettyExpr i) es) ++ "]"
 prettyExpr i (With e bs)     =
   prettyExpr i e ++ " <- {" ++ prettyBindings i bs ++ "}"
+prettyExpr _ (Import path)   = "import \"" ++ T.unpack path ++ "\""
 prettyExpr _ (Error msg)     = "<error: " ++ T.unpack msg ++ ">"
 
 prettyBindings :: Int -> [Binding] -> String

@@ -412,14 +412,14 @@ pDotChain e = do
 
 pAtomML :: Bool -> Parser Expr
 pAtomML ml = choice
-  [ pParens, pListLit, pThunk
+  [ pParens, pListLit, pThunk, pImport
   , try pStringLit, try pFloatLit, pIntLit
   , pLambdaML ml, try pUnionDecl, try pAnonRecord, pNameOrRecord
   ]
 
 pAtomNoRecordML :: Bool -> Parser Expr
 pAtomNoRecordML ml = choice
-  [ pParens, pListLit, pThunk
+  [ pParens, pListLit, pThunk, pImport
   , try pStringLit, try pFloatLit, pIntLit
   , pLambdaML ml, try pUnionDecl, pNameOrRecord
   ]
@@ -439,6 +439,14 @@ pParens = do
 
 pThunk :: Parser Expr
 pThunk = symbol "~" *> (Thunk <$> pAtomDot False)
+
+pImport :: Parser Expr
+pImport = do
+  _ <- try (lexeme (string "import") <* lookAhead (char '"'))
+  _ <- char '"'
+  s <- manyTill L.charLiteral (char '"')
+  sc
+  pure $ Import (T.pack s)
 
 pListLit :: Parser Expr
 pListLit = do

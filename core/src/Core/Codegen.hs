@@ -224,6 +224,7 @@ exprToC st (ListLit es) = exprToC st (listLitToCons es)
     listLitToCons (x:xs) = Record "Cons" [mkBind "head" x, mkBind "tail" (listLitToCons xs)]
 
 exprToC _ (Error msg) = pure $ "mi_expr_string(" ++ cStringLit (T.unpack msg) ++ ")"
+exprToC _ (Import path) = pure $ "mi_expr_string(" ++ cStringLit ("unresolved import: " ++ T.unpack path) ++ ")"
 
 -- | Escape a string for C
 cStringLit :: String -> String
