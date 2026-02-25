@@ -154,7 +154,7 @@ bindingEvalCode st b = do
                 "    _thunk.as.closure.param = \"_thunk_\";\n" ++
                 "    _thunk.as.closure.env = _env;\n" ++
                 "    mi_env_set(_env, \"" ++ name ++ "\", _thunk); }\n"
-    else pure $ "  mi_env_set(_env, \"" ++ name ++ "\", mi_eval(" ++ code ++ ", _env));\n"
+    else pure $ "  mi_env_set(_env, \"" ++ name ++ "\", mi_force(mi_eval(" ++ code ++ ", _env), _env));\n"
 
 -- ── Expression → MiExpr* construction ─────────────────────────────
 
@@ -972,13 +972,13 @@ emitPreamble h = hPutStr h $ unlines
   , "    case EXPR_NAME:   return mi_env_get_loc(env, expr->as.name, expr->loc);"
   , ""
   , "    case EXPR_BINOP: {"
-  , "      MiVal l = mi_eval(expr->as.binop.left, env);"
-  , "      MiVal r = mi_eval(expr->as.binop.right, env);"
+  , "      MiVal l = mi_force(mi_eval(expr->as.binop.left, env), env);"
+  , "      MiVal r = mi_force(mi_eval(expr->as.binop.right, env), env);"
   , "      return mi_binop(expr->as.binop.op, l, r);"
   , "    }"
   , ""
   , "    case EXPR_APP: {"
-  , "      MiVal fn = mi_eval(expr->as.app.fn, env);"
+  , "      MiVal fn = mi_force(mi_eval(expr->as.app.fn, env), env);"
   , "      MiVal a = mi_eval(expr->as.app.arg, env);"
   , "      if (fn.type == MI_CLOSURE) {"
   , "        MiEnv *call_env = mi_env_new(fn.as.closure.env);"
@@ -1015,7 +1015,7 @@ emitPreamble h = hPutStr h $ unlines
   , "          thunk.as.closure.env = inner;"
   , "          mi_env_set(inner, b->name, thunk);"
   , "        } else {"
-  , "          mi_env_set(inner, b->name, mi_eval(body, inner));"
+  , "          mi_env_set(inner, b->name, mi_force(mi_eval(body, inner), inner));"
   , "        }"
   , "      }"
   , "      expr = expr->as.with.body; env = inner; goto eval_top;"
@@ -1058,7 +1058,7 @@ emitPreamble h = hPutStr h $ unlines
   , "          thunk.as.closure.env = inner;"
   , "          mi_env_set(inner, b->name, thunk); vals[i] = thunk;"
   , "        } else {"
-  , "          vals[i] = mi_eval(body, inner);"
+  , "          vals[i] = mi_force(mi_eval(body, inner), inner);"
   , "          mi_env_set(inner, b->name, vals[i]);"
   , "        }"
   , "      }"
