@@ -153,8 +153,12 @@ reduceD d env (App f x) =
          else foldl App (Name n) args'
     _ ->
       let f' = reduceD d env f
-          x' = reduceD d env x
-      in reduceApp d env f' x'
+      in case f' of
+        -- Call-by-name for lambda application: don't evaluate arg until needed.
+        -- This prevents divergence in recursive branches (e.g., if cond t e).
+        Lam _ _ -> reduceApp d env f' x
+        _       -> let x' = reduceD d env x
+                   in reduceApp d env f' x'
 
 reduceD d env (Lam p b) =
   -- Alpha-rename if the param could be captured:
