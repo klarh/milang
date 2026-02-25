@@ -104,9 +104,22 @@ stripDeepModules maxD = go False 0
     -- If in a circular context at boundary depth, strip non-simple bodies
     goB circ d b =
       let body' = go circ d (bindBody b)
-      in if d >= maxD && circ && not (isSimpleVal body')
+          origBody = bindBody b
+      in if circ && d >= 2 && isCircularBackRef origBody
+         then b { bindBody = StringLit "<closure>" }
+         else if d >= maxD && circ && not (isSimpleVal body')
          then b { bindBody = StringLit "<closure>" }
          else b { bindBody = body' }
+    -- A circular back-ref has __mod_ Names within 2 levels of nesting
+    isCircularBackRef e = case e of
+      Namespace _ -> minModDepth 0 e <= 2
+      _           -> False
+    minModDepth d (Name n)
+      | "__mod_" `T.isPrefixOf` n && "__" `T.isSuffixOf` n = d
+    minModDepth d (Namespace bs) = minimum ((maxBound :: Int) : map (minModDepth (d+1) . bindBody) bs)
+    minModDepth d (App f x)      = min (minModDepth d f) (minModDepth d x)
+    minModDepth d (BinOp _ l r)  = min (minModDepth d l) (minModDepth d r)
+    minModDepth _ _              = maxBound
     isSimpleVal (IntLit _)    = True
     isSimpleVal (FloatLit _)  = True
     isSimpleVal (StringLit _) = True
