@@ -17,12 +17,13 @@ isBuiltinOp op = op `elem`
 
 -- | Codegen state
 data CGState = CGState
-  { cgNextId  :: IORef Int
-  , cgTopDefs :: IORef [String]
+  { cgNextId   :: IORef Int
+  , cgTopDefs  :: IORef [String]
+  , cgIncludes :: IORef [String]
   }
 
 newCGState :: IO CGState
-newCGState = CGState <$> newIORef 0 <*> newIORef []
+newCGState = CGState <$> newIORef 0 <*> newIORef [] <*> newIORef []
 
 freshId :: CGState -> IO Int
 freshId st = do
@@ -52,6 +53,8 @@ codegen h hidden expr = do
   st <- newCGState
   mainCode <- captureIO st hidden expr
   emitPreamble h
+  incs <- readIORef (cgIncludes st)
+  mapM_ (\inc -> hPutStrLn h inc) (reverse incs)
   defs <- readIORef (cgTopDefs st)
   mapM_ (hPutStr h) (reverse defs)
   hPutStrLn h ""
@@ -236,6 +239,11 @@ exprToC _ (Import path) = pure $ "mi_expr_string(" ++ cStringLit ("unresolved im
 exprToC st (Quote e) = exprToC st e   -- should be reduced to records already
 exprToC st (Splice e) = exprToC st e  -- should be reduced away already
 
+exprToC st (CFunction hdr cname retTy paramTys) = do
+  modifyIORef (cgIncludes st) (("#include " ++ show (T.unpack hdr)) :)
+  nativeCode <- cfunctionToC st (T.unpack cname) retTy paramTys
+  pure $ "mi_expr_val(" ++ nativeCode ++ ")"
+
 -- | Escape a string for C
 cStringLit :: String -> String
 cStringLit s = "\"" ++ concatMap esc s ++ "\""
@@ -245,6 +253,177 @@ cStringLit s = "\"" ++ concatMap esc s ++ "\""
     esc '\n' = "\\n"
     esc '\t' = "\\t"
     esc c    = [c]
+
+-- ── C FFI codegen (native closures) ──────────────────────────────
+
+cfunctionToC :: CGState -> String -> CType -> [CType] -> IO String
+cfunctionToC st cname retTy allParamTys = do
+  let indexed = zip [0::Int ..] allParamTys
+      inputParams  = [(i, t) | (i, t) <- indexed, not (isOutputParam t)]
+      outputParams = [(i, t) | (i, t) <- indexed, isOutputParam t]
+      nInputs = length inputParams
+  case nInputs of
+    0 -> cffiLeaf st cname retTy allParamTys inputParams outputParams
+    _ -> cffiCurried st cname retTy allParamTys inputParams outputParams
+
+cffiLeaf :: CGState -> String -> CType -> [CType]
+         -> [(Int, CType)] -> [(Int, CType)] -> IO String
+cffiLeaf st cname retTy allParamTys inputParams outputParams = do
+  cid <- freshId st
+  let fnName = "mi_cffi_" ++ show cid
+      nInputs = length inputParams
+      hasOuts = not (null outputParams)
+      envFields
+        | nInputs <= 1 = ""
+        | otherwise = concatMap (\k ->
+            "  MiVal _a" ++ show k ++ ";\n") [0..nInputs-2]
+      envStruct
+        | nInputs <= 1 = ""
+        | otherwise = "struct " ++ fnName ++ "_env {\n" ++ envFields ++ "};\n\n"
+      envCast
+        | nInputs <= 1 = ""
+        | otherwise = "  struct " ++ fnName ++ "_env *_e = (struct " ++ fnName ++ "_env *)_env;\n"
+      envUnpack
+        | nInputs <= 1 = ""
+        | otherwise = concatMap (\k ->
+            "  MiVal _a" ++ show k ++ " = _e->_a" ++ show k ++ ";\n") [0..nInputs-2]
+      inputArgExpr k
+        | nInputs == 0 = error "no inputs"
+        | nInputs == 1 = "_arg"
+        | k == nInputs - 1 = "_arg"
+        | otherwise = "_a" ++ show k
+      outDecls = concatMap (\(i, t) ->
+        let cty = case t of COutInt -> "int"; COutFloat -> "double"; _ -> "int"
+        in "  " ++ cty ++ " _out_" ++ show i ++ " = 0;\n") outputParams
+      cArgList = intercalate ", " $ map (\(origIdx, t) ->
+        if isOutputParam t
+          then "&_out_" ++ show origIdx
+          else let inputIdx = length [() | (j, _) <- inputParams, j < origIdx]
+               in miToCArg t (inputArgExpr inputIdx)
+        ) (zip [0..] allParamTys)
+      callExpr = cname ++ "(" ++ cArgList ++ ")"
+      returnExpr
+        | not hasOuts = cRetToMi retTy callExpr
+        | retTy == CVoid =
+            "(" ++ callExpr ++ ",\n" ++ buildOutRecord outputParams ++ ")"
+        | otherwise =
+            "({ " ++ cRetTypeName retTy ++ " _ret = " ++ callExpr ++ ";\n" ++
+            buildOutRecordWithRet retTy outputParams ++ " })"
+      fnDef = envStruct ++
+              "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
+              (if nInputs == 0 then "  (void)_arg; " else "") ++
+              (if nInputs <= 1 then "  (void)_env;\n" else "") ++
+              envCast ++ envUnpack ++ outDecls ++
+              "  return " ++ returnExpr ++ ";\n}\n\n"
+  addTopDef st fnDef
+  pure $ "mi_native(" ++ fnName ++ ")"
+
+buildOutRecord :: [(Int, CType)] -> String
+buildOutRecord outs =
+  let n = length outs
+      fields = concatMap (\(idx, (i, t)) ->
+        let val = outToMi t ("_out_" ++ show i)
+        in "    _fields[" ++ show idx ++ "] = " ++ val ++ ";\n") (zip [0..] outs)
+      names = concatMap (\(i, _) -> "\"out" ++ show i ++ "\", ") outs
+  in "({\n    MiVal *_fields = mi_alloc(" ++ show n ++ " * sizeof(MiVal));\n" ++
+     "    static const char *_names[] = {" ++ names ++ "};\n" ++ fields ++
+     "    MiVal _r; _r.type = MI_RECORD; _r.as.rec.tag = \"Result\";" ++
+     " _r.as.rec.names = _names; _r.as.rec.fields = _fields;" ++
+     " _r.as.rec.nfields = " ++ show n ++ "; _r;\n  })"
+
+buildOutRecordWithRet :: CType -> [(Int, CType)] -> String
+buildOutRecordWithRet retTy outs =
+  let n = 1 + length outs
+      retField = "    _fields[0] = " ++ cRetToMi retTy "_ret" ++ ";\n"
+      outFields = concatMap (\(idx, (i, t)) ->
+        let val = outToMi t ("_out_" ++ show (i :: Int))
+        in "    _fields[" ++ show ((idx :: Int) + 1) ++ "] = " ++ val ++ ";\n")
+        (zip [0..] outs)
+      names = "\"value\", " ++ concatMap (\(i, _) -> "\"out" ++ show i ++ "\", ") outs
+  in "MiVal *_fields = mi_alloc(" ++ show n ++ " * sizeof(MiVal));\n" ++
+     "  static const char *_names[] = {" ++ names ++ "};\n" ++
+     retField ++ outFields ++
+     "  MiVal _r; _r.type = MI_RECORD; _r.as.rec.tag = \"Result\";" ++
+     " _r.as.rec.names = _names; _r.as.rec.fields = _fields;" ++
+     " _r.as.rec.nfields = " ++ show n ++ "; _r;"
+
+outToMi :: CType -> String -> String
+outToMi COutInt name   = "mi_int((int64_t)" ++ name ++ ")"
+outToMi COutFloat name = "mi_float((double)" ++ name ++ ")"
+outToMi t name         = cRetToMi t name
+
+cRetTypeName :: CType -> String
+cRetTypeName CInt    = "int64_t"
+cRetTypeName CFloat  = "double"
+cRetTypeName CString = "char *"
+cRetTypeName CPtr    = "void *"
+cRetTypeName CVoid   = "void"
+cRetTypeName COutInt = "int"
+cRetTypeName COutFloat = "double"
+
+cffiCurried :: CGState -> String -> CType -> [CType]
+            -> [(Int, CType)] -> [(Int, CType)] -> IO String
+cffiCurried st cname retTy allParamTys inputParams outputParams = do
+  let nInputs = length inputParams
+  leafCode <- cffiLeaf st cname retTy allParamTys inputParams outputParams
+  if nInputs == 1
+    then pure leafCode
+    else do
+      leafFnName <- do
+        n <- readIORef (cgNextId st)
+        pure $ "mi_cffi_" ++ show (n - 1)
+      ids <- mapM (\_ -> freshId st) [0..nInputs-2]
+      let wrapperNames = map (\i -> "mi_cffi_" ++ show i) ids
+      mapM_ (\k -> do
+        let fnName = wrapperNames !! k
+            envName = fnName ++ "_env"
+            nextName = if k == nInputs - 2 then leafFnName else wrapperNames !! (k + 1)
+            nextEnvName = nextName ++ "_env"
+        if k == 0
+          then do
+            let fnDef = "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
+                        "  (void)_env;\n" ++
+                        "  struct " ++ nextEnvName ++ " *_ne = mi_alloc(sizeof(struct " ++ nextEnvName ++ "));\n" ++
+                        "  _ne->_a0 = _arg;\n" ++
+                        "  return mi_native_env(" ++ nextName ++ ", _ne);\n}\n\n"
+            addTopDef st fnDef
+          else do
+            let envFields = concatMap (\i -> "  MiVal _a" ++ show i ++ ";\n") [0..k-1]
+                envStruct = "struct " ++ envName ++ " {\n" ++ envFields ++ "};\n\n"
+                envCast = "  struct " ++ envName ++ " *_e = (struct " ++ envName ++ " *)_env;\n"
+                allocNext = "  struct " ++ nextEnvName ++ " *_ne = mi_alloc(sizeof(struct " ++ nextEnvName ++ "));\n" ++
+                            concatMap (\i -> "  _ne->_a" ++ show i ++ " = _e->_a" ++ show i ++ ";\n") [0..k-1] ++
+                            "  _ne->_a" ++ show k ++ " = _arg;\n"
+                fnDef = envStruct ++
+                        "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
+                        envCast ++ allocNext ++
+                        "  return mi_native_env(" ++ nextName ++ ", _ne);\n}\n\n"
+            addTopDef st fnDef
+        ) (reverse [0..nInputs-2])
+      pure $ "mi_native(" ++ wrapperNames !! 0 ++ ")"
+
+cRetToMi :: CType -> String -> String
+cRetToMi CInt expr     = "mi_int((int64_t)(" ++ expr ++ "))"
+cRetToMi CFloat expr   = "mi_float((double)(" ++ expr ++ "))"
+cRetToMi CString expr  = "mi_string(" ++ expr ++ ")"
+cRetToMi CVoid expr    = "(" ++ expr ++ ", mi_int(0))"
+cRetToMi CPtr expr     = "mi_pointer((void*)(" ++ expr ++ "))"
+cRetToMi COutInt _     = "mi_int(0)"
+cRetToMi COutFloat _   = "mi_float(0)"
+
+miToCArg :: CType -> String -> String
+miToCArg CInt name     = "(int)(" ++ name ++ ".as.i)"
+miToCArg CFloat name   = "mi_to_float(" ++ name ++ ")"
+miToCArg CString name  = name ++ ".as.str.data"
+miToCArg CVoid _       = "/* void */"
+miToCArg CPtr name     = name ++ ".as.ptr"
+miToCArg COutInt name  = "&_out_" ++ name
+miToCArg COutFloat name = "&_out_" ++ name
+
+isOutputParam :: CType -> Bool
+isOutputParam COutInt   = True
+isOutputParam COutFloat = True
+isOutputParam _         = False
 
 -- | Convert a Binding to C MiBinding struct
 bindingStructToC :: CGState -> Binding -> IO String
@@ -336,7 +515,7 @@ emitPreamble h = hPutStr h $ unlines
   , "typedef struct MiPat MiPat;"
   , ""
   , "// ── MiVal: runtime values ──"
-  , "typedef enum { MI_INT, MI_FLOAT, MI_STRING, MI_RECORD, MI_CLOSURE, MI_NATIVE } MiType;"
+  , "typedef enum { MI_INT, MI_FLOAT, MI_STRING, MI_RECORD, MI_CLOSURE, MI_NATIVE, MI_POINTER } MiType;"
   , ""
   , "struct MiVal {"
   , "  MiType type;"
@@ -347,6 +526,7 @@ emitPreamble h = hPutStr h $ unlines
   , "    struct { const char *tag; const char **names; MiVal *fields; int nfields; } rec;"
   , "    struct { MiExpr *body; const char *param; MiEnv *env; } closure;"
   , "    struct { MiVal (*fn)(MiVal, void*); void *env; } native;"
+  , "    void *ptr;"
   , "  } as;"
   , "};"
   , ""
@@ -418,6 +598,7 @@ emitPreamble h = hPutStr h $ unlines
   , "static MiVal mi_float(double v) { MiVal r; r.type = MI_FLOAT; r.as.f = v; return r; }"
   , "static MiVal mi_string(const char *s) { MiVal r; r.type = MI_STRING; int n = strlen(s); r.as.str.data = mi_alloc(n+1); memcpy(r.as.str.data, s, n+1); r.as.str.len = n; return r; }"
   , "static MiVal mi_stringn(const char *s, int n) { MiVal r; r.type = MI_STRING; r.as.str.data = mi_alloc(n+1); memcpy(r.as.str.data, s, n); r.as.str.data[n] = '\\0'; r.as.str.len = n; return r; }"
+  , "static MiVal mi_pointer(void *p) { MiVal r; r.type = MI_POINTER; r.as.ptr = p; return r; }"
   , "static MiVal mi_nil(void) {"
   , "  MiVal r; r.type = MI_RECORD; r.as.rec.tag = \"Nil\"; r.as.rec.nfields = 0; r.as.rec.names = NULL; r.as.rec.fields = NULL; return r;"
   , "}"
@@ -645,6 +826,7 @@ emitPreamble h = hPutStr h $ unlines
   , "      break;"
   , "    case MI_CLOSURE: printf(\"<closure>\"); break;"
   , "    case MI_NATIVE:  printf(\"<closure>\"); break;"
+  , "    case MI_POINTER: printf(\"<ptr:%p>\", v.as.ptr); break;"
   , "  }"
   , "}"
   , "static int mi_is_cons_list(MiVal v) {"
@@ -1154,6 +1336,7 @@ emitPreamble h = hPutStr h $ unlines
   , "      break;"
   , "    case MI_CLOSURE: mi_buf_append(buf,len,cap,\"<closure>\"); break;"
   , "    case MI_NATIVE:  mi_buf_append(buf,len,cap,\"<closure>\"); break;"
+  , "    case MI_POINTER: { char tmp[64]; snprintf(tmp, sizeof(tmp), \"<ptr:%p>\", v.as.ptr); mi_buf_append(buf,len,cap,tmp); break; }"
   , "  }"
   , "}"
   , "static MiVal mi_builtin_toString(MiVal v, void *env) {"

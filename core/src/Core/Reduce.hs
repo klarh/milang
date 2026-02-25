@@ -87,6 +87,7 @@ isConcrete (StringLit _)  = True
 isConcrete (Lam _ _)      = True
 isConcrete (Record _ bs)  = all (isConcrete . bindBody) bs
 isConcrete (Namespace bs) = all (isConcrete . bindBody) bs
+isConcrete (CFunction {}) = True
 isConcrete _              = False
 
 isWorldTainted :: Env -> Expr -> Bool
@@ -245,6 +246,9 @@ reduceD d env (Splice e) =
   in reduceD d env (spliceExpr val)
 
 reduceD _ _ (Error msg) = Error msg
+
+-- CFunction is already fully concrete
+reduceD _ _ e@(CFunction {}) = e
 
 -- ── Binding evaluation (unified) ──────────────────────────────────
 
@@ -608,6 +612,7 @@ exprFreeVars (With e bs)     = Set.union (bindingsFreeVars bs) (exprFreeVars e)
 exprFreeVars (Import _)      = Set.empty
 exprFreeVars (Quote e)       = exprFreeVars e
 exprFreeVars (Splice e)      = exprFreeVars e
+exprFreeVars (CFunction {})  = Set.empty
 exprFreeVars (Error _)       = Set.empty
 
 bindingFreeVars :: Binding -> Set.Set Text
@@ -661,6 +666,7 @@ substExpr var replacement = go
     go e@(Import _)    = e
     go (Quote e)       = Quote (go e)
     go (Splice e)      = Splice (go e)
+    go e@(CFunction {}) = e
     go e@(Error _)     = e
 
     goBind b = b { bindBody = go (bindBody b) }

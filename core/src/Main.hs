@@ -5,19 +5,37 @@ import System.Environment (getArgs)
 import System.Exit (exitFailure, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout)
 import System.Process (readProcessWithExitCode)
-import System.Directory (removeFile, doesFileExist)
-import System.FilePath (dropExtension, takeDirectory, (</>))
+import System.Directory (removeFile, doesFileExist, getCurrentDirectory)
+import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>))
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
+import Data.List (nub)
 
 import Core.Syntax
 import Core.Parser (parseProgram)
 import Core.Reduce (reduce, emptyEnv, Env, warnings, Warning(..))
 import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
+import Core.CHeader (parseCHeader, CFunSig(..))
+
+-- | Link info accumulated during import resolution
+data LinkInfo = LinkInfo
+  { linkFlags    :: [String]    -- extra gcc flags (-lm, -lpthread, etc.)
+  , linkSources  :: [FilePath]  -- extra .c files to compile
+  , linkIncludes :: [FilePath]  -- extra -I include directories
+  }
+
+emptyLinkInfo :: LinkInfo
+emptyLinkInfo = LinkInfo [] [] []
+
+mergeLinkInfo :: LinkInfo -> LinkInfo -> LinkInfo
+mergeLinkInfo a b = LinkInfo
+  (linkFlags a ++ linkFlags b)
+  (linkSources a ++ linkSources b)
+  (linkIncludes a ++ linkIncludes b)
 
 main :: IO ()
 main = do
@@ -51,16 +69,16 @@ injectPrelude True e = Namespace (preludeBindings ++ [mkBind "_main" e])
 injectPrelude False e = e
 
 -- | Load, parse, inject prelude, and reduce
-loadAndReduce :: String -> IO (Expr, Env)
+loadAndReduce :: String -> IO (Expr, Env, LinkInfo)
 loadAndReduce file = do
   ast <- loadAndParse file
-  resolved <- resolveImports file ast
+  (resolved, li) <- resolveImports file ast
   let withPrelude = injectPrelude True resolved
       env = emptyEnv
       reduced = reduce env withPrelude
       ws = warnings env
   mapM_ (printWarning file) ws
-  pure (reduced, env)
+  pure (reduced, env, li)
 
 -- | Strip deeply nested Namespace content from circular imports for codegen.
 -- Only strips Namespace nesting that contains circular module references
@@ -110,102 +128,173 @@ hasCircularRef _              = False
 
 -- | Resolve all imports in an AST, replacing Import nodes with parsed content.
 -- Circular imports are replaced with Name references to top-level module bindings.
-resolveImports :: String -> Expr -> IO Expr
+resolveImports :: String -> Expr -> IO (Expr, LinkInfo)
 resolveImports file expr = do
   cache      <- newIORef (Map.empty :: Map.Map FilePath Expr)
   inProgress <- newIORef (Set.empty :: Set.Set FilePath)
   circRefs   <- newIORef (Set.empty :: Set.Set FilePath)
-  resolved <- resolveExpr cache inProgress circRefs (takeDirectory file) expr
+  linkRef    <- newIORef emptyLinkInfo
+  resolved <- resolveExpr cache inProgress circRefs linkRef (takeDirectory file) expr
   -- Lift circular-referenced modules as top-level bindings
   circSet  <- readIORef circRefs
   cacheMap <- readIORef cache
-  if Set.null circSet
-    then pure resolved
-    else do
-      let modBinds = [ Binding { bindDomain = Value
-                               , bindName   = moduleRefName p
-                               , bindParams = []
-                               , bindBody   = content
-                               , bindPos    = Nothing
-                               }
-                     | p <- Set.toList circSet
-                     , Just content <- [Map.lookup p cacheMap]
-                     ]
-      case resolved of
-        Namespace bs -> pure $ Namespace (modBinds ++ bs)
-        _ -> pure resolved
+  li       <- readIORef linkRef
+  let result = if Set.null circSet
+        then resolved
+        else
+          let modBinds = [ Binding { bindDomain = Value
+                                   , bindName   = moduleRefName p
+                                   , bindParams = []
+                                   , bindBody   = content
+                                   , bindPos    = Nothing
+                                   }
+                         | p <- Set.toList circSet
+                         , Just content <- [Map.lookup p cacheMap]
+                         ]
+          in case resolved of
+               Namespace bs -> Namespace (modBinds ++ bs)
+               _ -> resolved
+  pure (result, li)
 
 -- | Generate a stable reference name for a module file path
 moduleRefName :: FilePath -> T.Text
 moduleRefName path = "__mod_" <> T.pack (map sanitize path) <> "__"
   where sanitize '/' = '_'; sanitize '.' = '_'; sanitize '-' = '_'; sanitize c = c
 
-resolveExpr :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> FilePath -> Expr -> IO Expr
-resolveExpr cache inProg circRefs dir (Import path) = do
+resolveExpr :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> IORef LinkInfo -> FilePath -> Expr -> IO Expr
+-- Handle import' "path" ({opts}) — 2-arg import with options
+resolveExpr cache inProg circRefs linkRef dir (App (App (Name "import'") (StringLit path)) (Record _ opts)) = do
+  importOpts <- extractImportOpts dir opts
+  modifyIORef linkRef (mergeLinkInfo importOpts)
+  resolveExpr cache inProg circRefs linkRef dir (Import path)
+-- Handle regular imports
+resolveExpr cache inProg circRefs linkRef dir (Import path) = do
   let pathStr = T.unpack path
       relPath = dir </> pathStr
   cached <- readIORef cache
   case Map.lookup relPath cached of
     Just e  -> pure e
-    Nothing -> do
-      -- Also check by raw path (for pre-resolved absolute paths)
-      case Map.lookup pathStr cached of
-        Just e -> pure e
-        Nothing -> do
-          progress <- readIORef inProg
-          if Set.member relPath progress
-            then do
-              -- Circular import: return a Name reference
-              modifyIORef circRefs (Set.insert relPath)
-              pure $ Name (moduleRefName relPath)
-            else do
-              exists <- doesFileExist relPath
-              if not exists
-                then pure $ Error ("import not found: " <> path)
-                else do
-                  src <- TIO.readFile relPath
-                  case parseProgram relPath src of
-                    Left err -> pure $ Error (T.pack (show err))
-                    Right ast -> do
-                      modifyIORef inProg (Set.insert relPath)
-                      resolved <- resolveExpr cache inProg circRefs (takeDirectory relPath) ast
-                      modifyIORef cache (Map.insert relPath resolved)
-                      modifyIORef inProg (Set.delete relPath)
-                      pure resolved
-resolveExpr cache ip cr dir (Namespace bs) =
-  Namespace <$> mapM (resolveBinding cache ip cr dir) bs
-resolveExpr cache ip cr dir (App f x) =
-  App <$> resolveExpr cache ip cr dir f <*> resolveExpr cache ip cr dir x
-resolveExpr cache ip cr dir (BinOp op l r) =
-  BinOp op <$> resolveExpr cache ip cr dir l <*> resolveExpr cache ip cr dir r
-resolveExpr cache ip cr dir (Lam p b) =
-  Lam p <$> resolveExpr cache ip cr dir b
-resolveExpr cache ip cr dir (Record t bs) =
-  Record t <$> mapM (resolveBinding cache ip cr dir) bs
-resolveExpr cache ip cr dir (FieldAccess e f) =
-  (\e' -> FieldAccess e' f) <$> resolveExpr cache ip cr dir e
-resolveExpr cache ip cr dir (Case s alts) =
-  Case <$> resolveExpr cache ip cr dir s <*> mapM (resolveAlt cache ip cr dir) alts
-resolveExpr cache ip cr dir (Thunk e) = Thunk <$> resolveExpr cache ip cr dir e
-resolveExpr cache ip cr dir (ListLit es) = ListLit <$> mapM (resolveExpr cache ip cr dir) es
-resolveExpr cache ip cr dir (With e bs) =
-  With <$> resolveExpr cache ip cr dir e <*> mapM (resolveBinding cache ip cr dir) bs
-resolveExpr cache ip cr dir (Quote e) = Quote <$> resolveExpr cache ip cr dir e
-resolveExpr cache ip cr dir (Splice e) = Splice <$> resolveExpr cache ip cr dir e
-resolveExpr _ _ _ _ e = pure e  -- literals, names, errors
+    Nothing -> case Map.lookup pathStr cached of
+      Just e -> pure e
+      Nothing -> do
+        -- Check for C header import
+        if takeExtension pathStr == ".h"
+          then do
+            let fullPath = if head pathStr == '/' then pathStr else relPath
+            autoInfo <- autoLinkInfo fullPath
+            modifyIORef linkRef (mergeLinkInfo autoInfo)
+            result <- loadCHeader fullPath
+            case result of
+              Left err -> pure $ Error (T.pack err)
+              Right ns -> do
+                modifyIORef cache (Map.insert relPath ns)
+                pure ns
+          else do
+            progress <- readIORef inProg
+            if Set.member relPath progress
+              then do
+                modifyIORef circRefs (Set.insert relPath)
+                pure $ Name (moduleRefName relPath)
+              else do
+                exists <- doesFileExist relPath
+                if not exists
+                  then pure $ Error ("import not found: " <> path)
+                  else do
+                    src <- TIO.readFile relPath
+                    case parseProgram relPath src of
+                      Left err -> pure $ Error (T.pack (show err))
+                      Right ast -> do
+                        modifyIORef inProg (Set.insert relPath)
+                        resolved <- resolveExpr cache inProg circRefs linkRef (takeDirectory relPath) ast
+                        modifyIORef cache (Map.insert relPath resolved)
+                        modifyIORef inProg (Set.delete relPath)
+                        pure resolved
+resolveExpr cache ip cr lr dir (Namespace bs) =
+  Namespace <$> mapM (resolveBinding cache ip cr lr dir) bs
+resolveExpr cache ip cr lr dir (App f x) =
+  App <$> resolveExpr cache ip cr lr dir f <*> resolveExpr cache ip cr lr dir x
+resolveExpr cache ip cr lr dir (BinOp op l r) =
+  BinOp op <$> resolveExpr cache ip cr lr dir l <*> resolveExpr cache ip cr lr dir r
+resolveExpr cache ip cr lr dir (Lam p b) =
+  Lam p <$> resolveExpr cache ip cr lr dir b
+resolveExpr cache ip cr lr dir (Record t bs) =
+  Record t <$> mapM (resolveBinding cache ip cr lr dir) bs
+resolveExpr cache ip cr lr dir (FieldAccess e f) =
+  (\e' -> FieldAccess e' f) <$> resolveExpr cache ip cr lr dir e
+resolveExpr cache ip cr lr dir (Case s alts) =
+  Case <$> resolveExpr cache ip cr lr dir s <*> mapM (resolveAlt cache ip cr lr dir) alts
+resolveExpr cache ip cr lr dir (Thunk e) = Thunk <$> resolveExpr cache ip cr lr dir e
+resolveExpr cache ip cr lr dir (ListLit es) = ListLit <$> mapM (resolveExpr cache ip cr lr dir) es
+resolveExpr cache ip cr lr dir (With e bs) =
+  With <$> resolveExpr cache ip cr lr dir e <*> mapM (resolveBinding cache ip cr lr dir) bs
+resolveExpr cache ip cr lr dir (Quote e) = Quote <$> resolveExpr cache ip cr lr dir e
+resolveExpr cache ip cr lr dir (Splice e) = Splice <$> resolveExpr cache ip cr lr dir e
+resolveExpr _ _ _ _ _ e = pure e  -- literals, names, errors
 
-resolveBinding :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> FilePath -> Binding -> IO Binding
-resolveBinding cache ip cr dir b = do
-  body' <- resolveExpr cache ip cr dir (bindBody b)
+resolveBinding :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> IORef LinkInfo -> FilePath -> Binding -> IO Binding
+resolveBinding cache ip cr lr dir b = do
+  body' <- resolveExpr cache ip cr lr dir (bindBody b)
   pure b { bindBody = body' }
 
-resolveAlt :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> FilePath -> Alt -> IO Alt
-resolveAlt cache ip cr dir (Alt p g body) = do
-  body' <- resolveExpr cache ip cr dir body
+resolveAlt :: IORef (Map.Map FilePath Expr) -> IORef (Set.Set FilePath) -> IORef (Set.Set FilePath) -> IORef LinkInfo -> FilePath -> Alt -> IO Alt
+resolveAlt cache ip cr lr dir (Alt p g body) = do
+  body' <- resolveExpr cache ip cr lr dir body
   g' <- case g of
-    Just ge -> Just <$> resolveExpr cache ip cr dir ge
+    Just ge -> Just <$> resolveExpr cache ip cr lr dir ge
     Nothing -> pure Nothing
   pure $ Alt p g' body'
+
+-- | Parse a C header file, returning a Namespace of CFunction bindings
+loadCHeader :: FilePath -> IO (Either String Expr)
+loadCHeader path = do
+  result <- parseCHeader path
+  case result of
+    Left err -> pure $ Left err
+    Right sigs -> do
+      let hdr = T.pack path
+          bindings = map (sigToBinding hdr) sigs
+      pure $ Right (Namespace bindings)
+  where
+    sigToBinding hdr (CFunSig n r p) =
+      Binding { bindDomain = Value
+              , bindName   = n
+              , bindParams = []
+              , bindBody   = CFunction hdr n r p
+              , bindPos    = Nothing
+              }
+
+-- | Auto-detect link flags for a C header
+autoLinkInfo :: FilePath -> IO LinkInfo
+autoLinkInfo hdrPath = do
+  let sysFlags = systemHeaderFlags hdrPath
+      hdrDir = takeDirectory hdrPath
+      includeDir = if null hdrDir || hdrDir == "." then [] else [hdrDir]
+      baseName = takeBaseName hdrPath
+      cFile = takeDirectory hdrPath </> baseName ++ ".c"
+  hasCFile <- doesFileExist cFile
+  pure $ LinkInfo sysFlags (if hasCFile then [cFile] else []) includeDir
+
+-- | Built-in map of system headers to link flags
+systemHeaderFlags :: FilePath -> [String]
+systemHeaderFlags path = case takeBaseName path of
+  "math"    -> ["-lm"]
+  "pthread" -> ["-lpthread"]
+  "dl"      -> ["-ldl"]
+  "rt"      -> ["-lrt"]
+  _         -> []
+
+-- | Extract import options from import' opts record
+extractImportOpts :: FilePath -> [Binding] -> IO LinkInfo
+extractImportOpts dir bs = do
+  let srcs = [ dir </> T.unpack (textVal v) | Binding { bindName = "src", bindBody = v } <- bs, isTextVal v ]
+      flags = [ T.unpack (textVal v) | Binding { bindName = "flags", bindBody = v } <- bs, isTextVal v ]
+      incls = [ dir </> T.unpack (textVal v) | Binding { bindName = "include", bindBody = v } <- bs, isTextVal v ]
+  pure $ LinkInfo flags srcs incls
+  where
+    isTextVal (StringLit _) = True
+    isTextVal _ = False
+    textVal (StringLit t) = t
+    textVal _ = ""
 
 printWarning :: String -> Warning -> IO ()
 printWarning _file (TypeWarning pos name msg) =
@@ -243,13 +332,13 @@ cmdDump file = do
 -- | reduce: show AST after partial evaluation
 cmdReduce :: String -> IO ()
 cmdReduce file = do
-  (reduced, _) <- loadAndReduce file
+  (reduced, _, _) <- loadAndReduce file
   putStrLn (prettyExpr 0 reduced)
 
 -- | compile: emit C
 cmdCompile :: String -> Maybe String -> IO ()
 cmdCompile file mOut = do
-  (reduced, _) <- loadAndReduce file
+  (reduced, _, _) <- loadAndReduce file
   let stripped = stripDeepModules 3 reduced
       outFile = case mOut of
         Just "-" -> Nothing  -- stdout
@@ -262,13 +351,18 @@ cmdCompile file mOut = do
 -- | run: compile to C, invoke gcc, execute
 cmdRun :: String -> [String] -> IO ()
 cmdRun file runArgs = do
-  (reduced, _) <- loadAndReduce file
+  cwd <- getCurrentDirectory
+  (reduced, _, li) <- loadAndReduce file
   let stripped = stripDeepModules 3 reduced
       cFile = dropExtension file ++ "_core.c"
       binFile = dropExtension file ++ "_core"
+      extraFlags = nub (linkFlags li)
+      extraSrcs  = nub (linkSources li)
+      extraIncls = nub (map ("-I" ++) (linkIncludes li))
+      gccArgs = ["-O2", "-o", binFile, cFile, "-I" ++ cwd]
+                ++ extraIncls ++ extraSrcs ++ extraFlags
   withFile cFile WriteMode $ \h -> codegen h preludeNames stripped
-  (gccExit, _, gccErr) <- readProcessWithExitCode "gcc"
-    ["-O2", "-o", binFile, cFile] ""
+  (gccExit, _, gccErr) <- readProcessWithExitCode "gcc" gccArgs ""
   case gccExit of
     ExitSuccess -> pure ()
     ExitFailure _ -> do
