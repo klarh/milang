@@ -1,0 +1,45 @@
+-- Test boosted prelude functions
+
+-- flatMap: map then flatten
+r1 = flatMap (\x -> [x, x * 10]) [1, 2, 3]
+main1 = world.io.println r1
+
+-- foldRight
+r2 = foldRight (\x acc -> Cons x acc) [] [1, 2, 3]
+main2 = world.io.println r2
+
+-- sort / nub
+r3 = sort [3, 1, 4, 1, 5, 9, 2, 6]
+r4 = nub [1, 2, 2, 3, 3, 3, 1]
+main3 = world.io.println r3
+main4 = world.io.println r4
+
+-- startsWith / endsWith
+r5 = startsWith "hello world" "hello"
+r6 = endsWith "hello world" "world"
+r7 = startsWith "hello" "xyz"
+
+-- words / unwords
+r8 = words "the quick brown fox"
+r9 = unwords ["a", "b", "c"]
+
+-- fst / snd
+r10 = fst {fst = 42; snd = "hello"}
+r11 = snd {fst = 42; snd = "hello"}
+
+-- maybe
+r12 = maybe 0 (\x -> x * 2) (Just 21)
+r13 = maybe 0 (\x -> x * 2) Nothing
+
+-- curry / uncurry
+addPair = uncurry (\a b -> a + b)
+r14 = addPair {fst = 3; snd = 4}
+
+-- on
+cmpLen = on (\a b -> a - b) len
+r15 = cmpLen [1, 2, 3] [1, 2]
+
+-- groupBy
+r16 = groupBy (\a b -> a == b) [1, 1, 2, 2, 2, 3]
+
+main5 = world.io.println r9

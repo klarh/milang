@@ -453,6 +453,22 @@ tryBuiltin1 d env "toFloat" x = case reduceD d env x of
                    , bindBody = FloatLit f, bindDomain = Value, bindPos = Nothing }]
     _          -> Just $ Record "Nothing" []
   _           -> Nothing
+tryBuiltin1 d env "abs" x = case reduceD d env x of
+  IntLit n   -> Just $ IntLit (Prelude.abs n)
+  FloatLit f -> Just $ FloatLit (Prelude.abs f)
+  _          -> Nothing
+tryBuiltin1 d env "float" x = case reduceD d env x of
+  IntLit n -> Just $ FloatLit (fromIntegral n)
+  _        -> Nothing
+tryBuiltin1 d env "round" x = case reduceD d env x of
+  FloatLit f -> Just $ IntLit (Prelude.round f)
+  _          -> Nothing
+tryBuiltin1 d env "floor" x = case reduceD d env x of
+  FloatLit f -> Just $ IntLit (Prelude.floor f)
+  _          -> Nothing
+tryBuiltin1 d env "ceil" x = case reduceD d env x of
+  FloatLit f -> Just $ IntLit (Prelude.ceiling f)
+  _          -> Nothing
 tryBuiltin1 _ _ _ _ = Nothing
 
 -- ── Binary operator reduction ─────────────────────────────────────
