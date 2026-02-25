@@ -81,12 +81,13 @@ isResidual (Record _ _)  = False
 isResidual _             = True
 
 isConcrete :: Expr -> Bool
-isConcrete (IntLit _)    = True
-isConcrete (FloatLit _)  = True
-isConcrete (StringLit _) = True
-isConcrete (Lam _ _)     = True
-isConcrete (Record _ bs) = all (isConcrete . bindBody) bs
-isConcrete _             = False
+isConcrete (IntLit _)     = True
+isConcrete (FloatLit _)   = True
+isConcrete (StringLit _)  = True
+isConcrete (Lam _ _)      = True
+isConcrete (Record _ bs)  = all (isConcrete . bindBody) bs
+isConcrete (Namespace bs) = all (isConcrete . bindBody) bs
+isConcrete _              = False
 
 isWorldTainted :: Env -> Expr -> Bool
 isWorldTainted env expr =
@@ -125,6 +126,11 @@ reduceD d env (Name n)
             Record n []
         | otherwise -> Name n
 
+reduceD d env (BinOp "<-" l r) =
+  let l' = forceThunk d env (reduceD d env l)
+      r' = reduceD d env r
+  in reduceRecordUpdate l' r'
+
 reduceD d env (BinOp op l r) =
   let l' = forceThunk d env (reduceD d env l)
       r' = forceThunk d env (reduceD d env r)
@@ -151,24 +157,41 @@ reduceD d env (App f x) =
       in reduceApp d env f' x'
 
 reduceD d env (Lam p b) =
-  -- Only alpha-rename if the param shadows an env key (fast check).
-  -- The full free-var check is expensive for large envs; this is a safe
-  -- over-approximation (rename more than strictly needed, but never miss).
-  let pn = p
-  in if pn `Map.member` envMap env
+  -- Alpha-rename if the param could be captured:
+  -- 1. p shadows an env key, OR
+  -- 2. p appears free in an env value that the body references
+  let bodyFVs = Set.delete p (exprFreeVars b)
+      envCapturesP = any (\fv -> case envLookup fv env of
+        Just v  -> p `Set.member` exprFreeVars v
+        Nothing -> False) (Set.toList bodyFVs)
+      needsRename = p `Map.member` envMap env || envCapturesP
+  in if needsRename
      then let allNames = Set.union (Map.keysSet (envMap env)) (exprFreeVars b)
-              fresh = freshName pn allNames
-              b' = substExpr pn (Name fresh) b
+              fresh = freshName p allNames
+              b' = substExpr p (Name fresh) b
               env' = envDelete fresh env
           in Lam fresh (reduceD d env' b')
-     else let env' = envDelete pn env
+     else let env' = envDelete p env
           in Lam p (reduceD d env' b)
 
 reduceD d env (With body bindings) =
+  -- First, evaluate bindings normally (handles SCC ordering, concrete values)
   let env' = evalBindings d env bindings
-      body' = reduceD d env' body
-      bs' = map (reduceBind d env') bindings
-      keepBinding b = isResidual (bindBody b) || envIsImpure (bindName b) env'
+  -- Then force-insert any bindings that evalBindings skipped (non-concrete).
+  -- We check whether evalBindings actually inserted the name by comparing
+  -- the new env against the old env.
+      env'' = foldl (\e b ->
+        let name = bindName b
+        in case (envLookup name env, envLookup name e) of
+             (old, new) | old == new ->
+               -- evalBindings didn't change this binding — force insert
+               let val = wrapLambda (bindParams b) (bindBody b)
+               in envInsert name (reduceD d e val) e
+             _ -> e  -- evalBindings already updated it
+        ) env' bindings
+      body' = reduceD d env'' body
+      bs' = map (reduceBind d env'') bindings
+      keepBinding b = isResidual (bindBody b) || envIsImpure (bindName b) env''
       residualBs = filter keepBinding bs'
   in if null residualBs then body' else With body' residualBs
 
@@ -194,7 +217,9 @@ reduceD d env (Case scrut alts) =
             in Alt p (fmap (reduceD d env') g) (reduceD d env' b)) alts)
      else reduceCase d env scrut' alts
 
-reduceD d env (Thunk body) = Thunk (applyEnv d env body)
+reduceD d env (Thunk body) =
+  let body' = reduceD d env body
+  in if isConcrete body' then body' else Thunk body'
 
 reduceD d env (ListLit es) = listToCons (map (reduceD d env) es)
 
@@ -363,7 +388,28 @@ reduceFieldAccess (Record _ bs) field =
     readMaybeInt t = case reads (T.unpack t) of
       [(n, "")] -> Just n
       _ -> Nothing
+reduceFieldAccess (Namespace bs) field =
+  case [bindBody b | b <- bs, bindName b == field] of
+    (v:_) -> v
+    []    -> FieldAccess (Namespace bs) field
 reduceFieldAccess e field = FieldAccess e field
+
+-- | Record update: base <- {overrides}
+reduceRecordUpdate :: Expr -> Expr -> Expr
+reduceRecordUpdate (Record tag bs) updates =
+  let overrides = case updates of
+        Record _ obs   -> obs
+        Namespace obs  -> obs
+        _              -> []
+      overrideMap = Map.fromList [(bindName o, o) | o <- overrides]
+      -- Replace existing fields in-place, then append new ones
+      updated = map (\b -> case Map.lookup (bindName b) overrideMap of
+                       Just o  -> o
+                       Nothing -> b) bs
+      existingNames = Set.fromList [bindName b | b <- bs]
+      newFields = filter (\o -> not (bindName o `Set.member` existingNames)) overrides
+  in Record tag (updated ++ newFields)
+reduceRecordUpdate l r = BinOp "<-" l r
 
 -- ── Case/pattern matching ─────────────────────────────────────────
 
@@ -552,9 +598,7 @@ substExpr var replacement = go
     go (With e bs)     = With (go e) (map goBind bs)
     go e@(Error _)     = e
 
-    goBind b
-      | bindName b == var = b
-      | otherwise = b { bindBody = go (bindBody b) }
+    goBind b = b { bindBody = go (bindBody b) }
 
     goAlt (Alt p g body)
       | var `Set.member` patVars p = Alt p g body  -- shadowed by pattern

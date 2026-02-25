@@ -559,7 +559,31 @@ pBraceBinding = do
   pure $ Binding dom name params body''' (Just pos)
 
 pStringLit :: Parser Expr
-pStringLit = lexeme $ do
+pStringLit = lexeme $ try pTripleString <|> pSingleString
+
+pTripleString :: Parser Expr
+pTripleString = do
+  _ <- string "\"\"\""
+  _ <- optional (char '\n')
+  content <- manyTill anySingle (string "\"\"\"")
+  let ls = T.lines (T.pack content)
+      -- Last line is the indentation before closing """; use it for margin, then remove
+      (contentLines, closingLine) = case ls of
+        [] -> ([], "")
+        xs -> (init xs, last xs)
+      -- Margin from closing line indentation (or minimum of non-empty lines)
+      closingMargin = T.length (T.takeWhile (== ' ') closingLine)
+      nonEmpty = filter (not . T.null . T.stripStart) contentLines
+      margin = case nonEmpty of
+        [] -> closingMargin
+        _  -> min closingMargin (minimum (map (T.length . T.takeWhile (== ' ')) nonEmpty))
+      stripped = map (T.drop margin) contentLines
+      -- Remove trailing empty lines
+      trimmed = reverse $ dropWhile T.null $ reverse stripped
+  pure $ StringLit (T.intercalate "\n" trimmed)
+
+pSingleString :: Parser Expr
+pSingleString = do
   _ <- char '"'
   s <- manyTill L.charLiteral (char '"')
   pure $ StringLit (T.pack s)

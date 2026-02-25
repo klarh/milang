@@ -34,10 +34,18 @@ inlineBlockComment = try $ do
   _ <- manyTill (satisfy (/= '\n')) (string "*/")
   pure ()
 
+-- | Line continuation: backslash at end of line
+lineContinuation :: Parser ()
+lineContinuation = try $ do
+  _ <- char '\\'
+  _ <- many (char ' ' <|> char '\t')
+  _ <- newline
+  pure ()
+
 -- | Space consumer: spaces/tabs only (preserves newlines for indentation)
 sc :: Parser ()
 sc = L.space
-  (void $ some (char ' ' <|> char '\t'))
+  (void $ some (char ' ' <|> char '\t') <|> (lineContinuation *> pure ""))
   lineComment
   inlineBlockComment
 
