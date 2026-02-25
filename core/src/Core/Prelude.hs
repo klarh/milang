@@ -13,6 +13,7 @@ preludeSrc = T.unlines
   [ "Bool = {True; False}"
   , "List = {Nil; Cons head tail}"
   , "Maybe = {Nothing; Just val}"
+  , "eq a b = a -> _ = a == b"
   , "if cond t e = (truthy cond) -> 0 = e; _ = t"
   , "truthy val = val -> False = 0; Nil = 0; Nothing = 0; 0 = 0; \"\" = 0; _ = 1"
   , "toString val = val -> True = \"True\"; False = \"False\"; Nil = \"[]\"; Nothing = \"Nothing\"; Just x = \"Just(\" + toString x + \")\"; _ = _toString val"
