@@ -80,10 +80,15 @@ preludeSrc = T.unlines
   , "floor :: Float : Int"
   , "ceil :: Float : Int"
   -- Type annotations for prelude functions
+  , "toString :: a : Str"
+  , "fromMaybe :: a : Maybe : a"
+  , "eq :: a : a : Num"
+  , "truthy :: a : Num"
   , "id :: a : a"
   , "const :: a : b : a"
   , "flip :: (a : b : c) : b : a : c"
   , "null :: List : Num"
+  , "len :: a : Num"
   , "head :: List : Maybe"
   , "tail :: List : Maybe"
   , "fold :: (a : b : a) : a : List : a"
@@ -92,6 +97,7 @@ preludeSrc = T.unlines
   , "concat :: List : List : List"
   , "push :: List : a : List"
   , "at :: List : Num : Maybe"
+  , "at' :: Num : List : Maybe"
   , "sum :: List : Num"
   , "product :: List : Num"
   , "any :: (a : Num) : List : Num"
@@ -110,6 +116,11 @@ preludeSrc = T.unlines
   , "neg :: Num : Num"
   , "min :: a : a : a"
   , "max :: a : a : a"
+  , "not :: a : Num"
+  -- IO function types
+  , "println :: a : Num"
+  , "print :: a : Num"
+  -- Operator types
   , "(+) :: a : a : a"
   , "(-) :: a : a : a"
   , "(*) :: a : a : a"
@@ -122,6 +133,11 @@ preludeSrc = T.unlines
   , "(>) :: a : a : Int"
   , "(<=) :: a : a : Int"
   , "(>=) :: a : a : Int"
+  , "(|>) :: a : (a : b) : b"
+  , "(>>) :: (a : b) : (b : c) : a : c"
+  , "(<<) :: (b : c) : (a : b) : a : c"
+  , "(&&) :: a : a : Num"
+  , "(||) :: a : a : Num"
   -- Boosted prelude
   , "flatMap f lst = fold (\\acc x -> concat acc (f x)) [] lst"
   , "foldRight f z lst = lst -> Nil = z; Cons h t = f h (foldRight f z t)"
@@ -145,6 +161,17 @@ preludeSrc = T.unlines
   , "nubBy eq lst = lst -> Nil = []; Cons h t = Cons h (nubBy eq (filter (\\x -> not (eq h x)) t))"
   , "nub lst = nubBy (\\a b -> a == b) lst"
   , "groupBy eq lst = lst -> Nil = []; Cons h t = Cons (Cons h (filter (\\x -> eq h x) t)) (groupBy eq (filter (\\x -> not (eq h x)) t))"
+  -- Boosted prelude type annotations
+  , "flatMap :: (a : List) : List : List"
+  , "foldRight :: (a : b : b) : b : List : b"
+  , "scanLeft :: (a : b : a) : a : List : List"
+  , "iterate :: (a : a) : a : List"
+  , "maybe :: b : (a : b) : Maybe : b"
+  , "sortBy :: (a : a : Num) : List : List"
+  , "sort :: List : List"
+  , "nubBy :: (a : a : Num) : List : List"
+  , "nub :: List : List"
+  , "groupBy :: (a : a : Num) : List : List"
   -- String utilities
   , "startsWith str prefix = slice str 0 (len prefix) == prefix"
   , "endsWith str suffix = slice str (len str - len suffix) (len str) == suffix"
@@ -152,6 +179,13 @@ preludeSrc = T.unlines
   , "lines str = split str \"\\n\""
   , "unwords lst = join \" \" lst"
   , "unlines lst = join \"\\n\" lst"
+  -- String utility type annotations
+  , "startsWith :: Str : Str : Num"
+  , "endsWith :: Str : Str : Num"
+  , "words :: Str : List"
+  , "lines :: Str : List"
+  , "unwords :: List : Str"
+  , "unlines :: List : Str"
   ]
 
 -- | Parse the prelude source into bindings.

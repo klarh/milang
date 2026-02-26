@@ -272,7 +272,33 @@ reduceD d env (Namespace bindings) =
 reduceD d env (Case scrut alts) =
   let scrut' = forceThunk d env (reduceD d env scrut)
   in if isResidual scrut'
-     then Case scrut' (map (\(Alt p g b) ->
+     then case scrut of
+       -- When the scrutinee came from a name in env and a wildcard alt body
+       -- references it, convert PWild to PVar so the C runtime binds the
+       -- evaluated scrutinee once, preventing double evaluation of effectful
+       -- expressions (e.g. toString (println x)).
+       Name n
+         | Map.member n (envMap env)
+         , any (\(Alt p _ b) -> case p of
+             PWild -> n `Set.member` exprFreeVars b
+             _     -> False) alts ->
+           let allNames = Set.unions
+                 [ Map.keysSet (envMap env), exprFreeVars scrut'
+                 , Set.unions (concatMap (\(Alt _ g b) ->
+                     exprFreeVars b : maybe [] ((:[]) . exprFreeVars) g) alts) ]
+               fresh = freshName n allNames
+               envShadow = envInsert n (Name fresh) (envDelete fresh env)
+               alts' = map (\alt@(Alt p g b) -> case p of
+                 PWild | n `Set.member` exprFreeVars b
+                         || maybe False ((n `Set.member`) . exprFreeVars) g ->
+                   let envA = Set.foldl' (\e v -> envDelete v e) envShadow (patVars (PVar fresh))
+                   in Alt (PVar fresh) (fmap (reduceD d envA) g) (reduceD d envA b)
+                 _ ->
+                   let envA = Set.foldl' (\e v -> envDelete v e) env (patVars p)
+                   in Alt p (fmap (reduceD d envA) g) (reduceD d envA b)) alts
+           in Case scrut' alts'
+       _ ->
+         Case scrut' (map (\(Alt p g b) ->
             let env' = Set.foldl' (\e v -> envDelete v e) env (patVars p)
             in Alt p (fmap (reduceD d env') g) (reduceD d env' b)) alts)
      else reduceCase d env scrut' alts
@@ -1211,8 +1237,53 @@ collectTypeEnv _env bindings =
 -- | Infer the type of a binding's body (with params wrapped as function types)
 inferExpr :: TypeEnv -> Binding -> MiType
 inferExpr tenv b =
-  let bodyTy = inferExprE tenv (bindBody b)
-  in foldr (\_ ty -> TFun TAny ty) bodyTy (bindParams b)
+  let params = bindParams b
+      -- Infer parameter types from how they're used in the body
+      paramTys = map (inferParamFromBody tenv (bindBody b)) params
+      tenv' = foldl (\e (p, ty) -> Map.insert p ty e) tenv (zip params paramTys)
+      bodyTy = inferExprE tenv' (bindBody b)
+  in foldr (\ty acc -> TFun ty acc) bodyTy paramTys
+
+-- | Infer a parameter's type from its usage in the function body.
+-- Looks at BinOp operand positions and App argument positions to find
+-- constraints. For example, in `2 * x`, x is constrained to Int.
+inferParamFromBody :: TypeEnv -> Expr -> Text -> MiType
+inferParamFromBody tenv body param = findConstraint body
+  where
+    findConstraint (BinOp op l r)
+      | isArithOp op || isCmpOp op =
+        case (isParam l, isParam r) of
+          (True, False) -> constrainType (inferExprE tenv r)
+          (False, True) -> constrainType (inferExprE tenv l)
+          _             -> merge (findConstraint l) (findConstraint r)
+      | otherwise = merge (findConstraint l) (findConstraint r)
+    findConstraint (App f x)
+      | isParam x =
+        case inferExprE tenv f of
+          TFun argTy _ | argTy /= TAny -> argTy
+          _ -> findConstraint f
+      | otherwise = merge (findConstraint f) (findConstraint x)
+    findConstraint (Lam _ e) = findConstraint e
+    findConstraint (Case _ alts) =
+      foldl (\acc (Alt _ _ b) -> merge acc (findConstraint b)) TAny alts
+    findConstraint (With e bs) =
+      merge (findConstraint e)
+            (foldl (\acc b -> merge acc (findConstraint (bindBody b))) TAny bs)
+    findConstraint _ = TAny
+
+    isParam (Name n) = n == param
+    isParam _        = False
+
+    isArithOp op = op `elem` ["+", "-", "*", "/", "%", "**"]
+    isCmpOp op   = op `elem` ["==", "/=", "<", ">", "<=", ">="]
+
+    constrainType TInt   = TInt
+    constrainType TFloat = TFloat
+    constrainType TStr   = TStr
+    constrainType _      = TAny
+
+    merge TAny t = t
+    merge t    _ = t
 
 -- | Infer the type of an expression
 inferExprE :: TypeEnv -> Expr -> MiType
@@ -1237,6 +1308,30 @@ inferExprE tenv (BinOp op l r)
   | op == ":" =
     let ht = inferExprE tenv l
     in TRecord "Cons" [("head", ht), ("tail", TAny)]
+  | op == ">>" =
+    -- f >> g: input of f → output of g
+    let lt = inferExprE tenv l
+        rt = inferExprE tenv r
+    in case (lt, rt) of
+      (TFun a _, TFun _ d) -> TFun a d
+      (TAny,     TFun _ d) -> TFun TAny d
+      (TFun a _, TAny)     -> TFun a TAny
+      _                    -> TAny
+  | op == "<<" =
+    -- f << g: input of g → output of f
+    let lt = inferExprE tenv l
+        rt = inferExprE tenv r
+    in case (lt, rt) of
+      (TFun _ b, TFun c _) -> TFun c b
+      (TAny,     TFun c _) -> TFun c TAny
+      (TFun _ b, TAny)     -> TFun TAny b
+      _                    -> TAny
+  | op == "|>" =
+    -- x |> f: return type of f
+    let rt = inferExprE tenv r
+    in case rt of
+      TFun _ ret -> ret
+      _          -> TAny
   | otherwise = TAny
 inferExprE tenv (App f x) =
   case inferExprE tenv f of
@@ -1248,8 +1343,10 @@ inferExprE tenv (App f x) =
                   _ -> TAny
       _ -> TAny
 inferExprE tenv (Lam p body) =
-  -- Use type env for the param if available (from annotation peeling)
-  let paramTy = Map.findWithDefault TAny p tenv
+  -- Infer param type from body usage (e.g., 2*x → x :: Int)
+  let inferred = inferParamFromBody tenv body p
+      paramTy = if inferred /= TAny then inferred
+                else Map.findWithDefault TAny p tenv
       tenv' = Map.insert p paramTy tenv
   in TFun paramTy (inferExprE tenv' body)
 inferExprE tenv (Record tag fields) =
@@ -1316,6 +1413,8 @@ checkCompatWith subst0 pos name expected actual = go subst0 expected actual
     go subst (TUnion _ tags) (TRecord atag _)
       | atag `elem` tags = (subst, [])
       | otherwise = (subst, [mkErr ("expected one of " <> T.intercalate "/" tags <> ", got " <> showTag atag)])
+    go subst (TRecord etag _) (TUnion _ tags)
+      | etag `elem` tags = (subst, [])  -- a Cons value is a valid List
     go subst (TUnion n1 _) (TUnion n2 _)
       | n1 == n2 = (subst, [])
     go subst (TRecord etag efields) (TRecord atag afields)
@@ -1463,7 +1562,15 @@ typeCheckBindings env bindings =
       tenv = collectTypeEnv env bindings
       -- Only check value/lazy bindings, not annotation bindings
       valueBinds = filter (\b -> bindDomain b == Value || bindDomain b == Lazy) bindings
-  in concatMap (checkTypeBinding tenv localAnnots) valueBinds
+      origWarns = concatMap (checkTypeBinding tenv localAnnots) valueBinds
+      -- Also check reduced bodies for operand errors: after inlining,
+      -- composition type mismatches (e.g. 2 * toString(...)) become visible.
+      reducedWarns = concatMap (\b ->
+        case envLookup (bindName b) env of
+          Just val | not (isPreludePos (bindPos b)) ->
+            checkOperands tenv (bindPos b) (bindName b) val
+          _ -> []) valueBinds
+  in origWarns ++ reducedWarns
 
 isPreludePos :: Maybe SrcPos -> Bool
 isPreludePos (Just pos) = "<prelude>" `isPrefixOf` srcFile pos
