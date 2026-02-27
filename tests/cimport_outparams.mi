@@ -1,5 +1,5 @@
 -- Test output params: frexp returns (mantissa, exponent)
-m = import "/usr/include/math.h"
+m = import' "math.h" ({standard_import = 1})
 
 -- frexp(6.0) should give mantissa=0.75, exponent=3 (since 0.75 * 2^3 = 6)
 r = m.frexp 6.0

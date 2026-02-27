@@ -1,5 +1,5 @@
 -- Test C header import with opaque pointers: stdio.h
-cio = import "/usr/include/stdio.h"
+cio = import' "stdio.h" ({standard_import = 1})
 
 -- printf returns int, takes const char * format + varargs
 -- We can't do varargs, but puts works with a single string

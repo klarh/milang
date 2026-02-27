@@ -8,6 +8,7 @@ import Data.IORef
 import Data.List (intercalate)
 import Core.Syntax
 import System.IO (Handle, hPutStr, hPutStrLn)
+import System.FilePath (takeFileName)
 
 -- | Operators handled by the C runtime's mi_binop
 isBuiltinOp :: Text -> Bool
@@ -241,8 +242,10 @@ exprToC _ (Import path) = pure $ "mi_expr_string(" ++ cStringLit ("unresolved im
 exprToC st (Quote e) = exprToC st e   -- should be reduced to records already
 exprToC st (Splice e) = exprToC st e  -- should be reduced away already
 
-exprToC st (CFunction hdr cname retTy paramTys) = do
-  modifyIORef (cgIncludes st) (("#include " ++ show (T.unpack hdr)) :)
+exprToC st (CFunction hdr cname retTy paramTys standardImport) = do
+  let hdrStr = T.unpack hdr
+      inc = if standardImport then "<" ++ takeFileName hdrStr ++ ">" else show hdrStr
+  modifyIORef (cgIncludes st) (("#include " ++ inc) :)
   nativeCode <- cfunctionToC st (T.unpack cname) retTy paramTys
   pure $ "mi_expr_val(" ++ nativeCode ++ ")"
 

@@ -50,7 +50,7 @@ data Expr
   | Import !Text                -- import "path": file import
   | Quote Expr                  -- #expr: reify syntax as data (AST records)
   | Splice Expr                 -- $expr: interpret data as syntax and reduce
-  | CFunction !Text !Text CType [CType]  -- header, C name, return type, param types
+  | CFunction !Text !Text CType [CType] !Bool  -- header, C name, return type, param types, standard import flag
   | Error !Text                 -- reduction error (type error, trait violation, etc.)
   deriving (Show, Eq)
 
@@ -133,7 +133,7 @@ prettyExpr i (With e bs)     =
 prettyExpr _ (Import path)   = "import \"" ++ T.unpack path ++ "\""
 prettyExpr i (Quote e)       = "#(" ++ prettyExpr i e ++ ")"
 prettyExpr i (Splice e)      = "$(" ++ prettyExpr i e ++ ")"
-prettyExpr _ (CFunction _ n _ _) = "<cfun:" ++ T.unpack n ++ ">"
+prettyExpr _ (CFunction _ n _ _ _) = "<cfun:" ++ T.unpack n ++ ">"
 prettyExpr _ (Error msg)     = "<error: " ++ T.unpack msg ++ ">"
 
 prettyBindings :: Int -> [Binding] -> String

@@ -25,7 +25,7 @@ import Text.Megaparsec (errorBundlePretty)
 import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap)
 import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
-import Core.CHeader (parseCHeader, CFunSig(..))
+import Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..))
 import Core.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
 import Core.Version (version)
 
@@ -291,14 +291,15 @@ resolveExpr :: ResCtx -> String -> Expr -> IO Expr
 resolveExpr ctx dir (App (App (Name "import'") (StringLit path)) (Record _ opts)) = do
   let pathStr = T.unpack path
       sha256  = extractSha256 opts
+      standardImport = extractStandardImport opts
   -- For local imports, extract link info
   unless (isURL pathStr) $ do
     importOpts <- extractImportOpts dir opts
     modifyIORef (rcLinkRef ctx) (mergeLinkInfo importOpts)
-  resolveImport ctx dir pathStr sha256
+  resolveImport ctx dir pathStr sha256 standardImport
 -- Handle regular imports
 resolveExpr ctx dir (Import path) =
-  resolveImport ctx dir (T.unpack path) Nothing
+  resolveImport ctx dir (T.unpack path) Nothing False
 resolveExpr ctx dir (Namespace bs) =
   Namespace <$> mapM (resolveBinding ctx dir) bs
 resolveExpr ctx dir (App f x) =
@@ -322,15 +323,15 @@ resolveExpr ctx dir (Splice e) = Splice <$> resolveExpr ctx dir e
 resolveExpr _ _ e = pure e  -- literals, names, errors
 
 -- | Unified import resolution: handles local files and URLs
-resolveImport :: ResCtx -> String -> String -> Maybe String -> IO Expr
-resolveImport ctx dir pathStr expectedHash
-  | isURL pathStr = resolveURLImport ctx pathStr expectedHash
-  | isURL dir     = resolveURLImport ctx (resolveURL dir pathStr) expectedHash
-  | otherwise     = resolveLocalImport ctx dir pathStr expectedHash
+resolveImport :: ResCtx -> String -> String -> Maybe String -> Bool -> IO Expr
+resolveImport ctx dir pathStr expectedHash standardImport
+  | isURL pathStr = resolveURLImport ctx pathStr expectedHash standardImport
+  | isURL dir     = resolveURLImport ctx (resolveURL dir pathStr) expectedHash standardImport
+  | otherwise     = resolveLocalImport ctx dir pathStr expectedHash standardImport
 
 -- | Resolve a local file import
-resolveLocalImport :: ResCtx -> String -> String -> Maybe String -> IO Expr
-resolveLocalImport ctx dir pathStr _expectedHash = do
+resolveLocalImport :: ResCtx -> String -> String -> Maybe String -> Bool -> IO Expr
+resolveLocalImport ctx dir pathStr _expectedHash standardImport = do
   let relPath = dir </> pathStr
   cached <- readIORef (rcCache ctx)
   case Map.lookup relPath cached of
@@ -343,7 +344,7 @@ resolveLocalImport ctx dir pathStr _expectedHash = do
             let fullPath = if not (null pathStr) && head pathStr == '/' then pathStr else relPath
             autoInfo <- autoLinkInfo fullPath
             modifyIORef (rcLinkRef ctx) (mergeLinkInfo autoInfo)
-            result <- loadCHeader fullPath
+            result <- loadCHeader fullPath pathStr standardImport
             case result of
               Left err -> pure $ Error (T.pack err)
               Right ns -> do
@@ -371,8 +372,8 @@ resolveLocalImport ctx dir pathStr _expectedHash = do
                         pure resolved
 
 -- | Resolve a URL import with Merkle hash computation
-resolveURLImport :: ResCtx -> String -> Maybe String -> IO Expr
-resolveURLImport ctx url expectedHash = do
+resolveURLImport :: ResCtx -> String -> Maybe String -> Bool -> IO Expr
+resolveURLImport ctx url expectedHash _standardImport = do
   -- Check Merkle cache first
   merkleMap <- readIORef (rcMerkle ctx)
   case Map.lookup url merkleMap of
@@ -445,6 +446,12 @@ extractSha256 bs = case [T.unpack v | Binding { bindName = "sha256", bindBody = 
   (h:_) -> Just h
   []    -> Nothing
 
+-- | Extract standard_import option from import options (nonzero Int = True)
+extractStandardImport :: [Binding] -> Bool
+extractStandardImport bs = case [x | Binding { bindName = "standard_import", bindBody = IntLit x } <- bs] of
+  (n:_) -> n /= 0
+  []    -> False
+
 resolveBinding :: ResCtx -> String -> Binding -> IO Binding
 resolveBinding ctx dir b = do
   body' <- resolveExpr ctx dir (bindBody b)
@@ -459,13 +466,15 @@ resolveAlt ctx dir (Alt p g body) = do
   pure $ Alt p g' body'
 
 -- | Parse a C header file, returning a Namespace of CFunction bindings
-loadCHeader :: FilePath -> IO (Either String Expr)
-loadCHeader path = do
-  result <- parseCHeader path
+loadCHeader :: FilePath -> String -> Bool -> IO (Either String Expr)
+loadCHeader path hdrName standardImport = do
+  result <- if standardImport
+              then parseCHeaderInclude hdrName
+              else parseCHeader path
   case result of
     Left err -> pure $ Left err
     Right sigs -> do
-      let hdr = T.pack path
+      let hdr = T.pack hdrName
           bindings = map (sigToBinding hdr) sigs
       pure $ Right (Namespace bindings)
   where
@@ -473,7 +482,7 @@ loadCHeader path = do
       Binding { bindDomain = Value
               , bindName   = n
               , bindParams = []
-              , bindBody   = CFunction hdr n r p
+              , bindBody   = CFunction hdr n r p standardImport
               , bindPos    = Nothing
               }
 

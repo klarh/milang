@@ -3,12 +3,17 @@
 MILANG:=milang
 PYTHON:=python
 
+DYNAMIC:=0
+DYNAMIC_0:=
+DYNAMIC_1:=-dynamic
+GHC_OPTIONS:=-Wall -O2 ${DYNAMIC_${DYNAMIC}}
+
 all:
 	@echo 'module Core.Version (version) where' > core/src/Core/Version.hs
 	@echo '' >> core/src/Core/Version.hs
 	@echo 'version :: String' >> core/src/Core/Version.hs
 	@echo 'version = "'$$(date +%Y%m%d%H%M%S)-$$(git rev-parse --short HEAD)'"' >> core/src/Core/Version.hs
-	cd core && cabal build
+	cd core && cabal build --ghc-options="${GHC_OPTIONS}"
 	ln -sf "$$(cd core && cabal list-bin -v0 exe:milang-core | tr -d '\r' | tr '\\' '/')" "$(MILANG)"
 
 clean:

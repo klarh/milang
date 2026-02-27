@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Core.CHeader (parseCHeader, CFunSig(..)) where
+module Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..)) where
 
 import qualified Data.Text as T
 import Data.Text (Text)
@@ -20,6 +20,16 @@ data CFunSig = CFunSig
 parseCHeader :: FilePath -> IO (Either String [CFunSig])
 parseCHeader path = do
   output <- readProcess "clang" ["-E", path] ""
+  let sigs = mapMaybe parseLine (lines output)
+      visible = filter (not . isInternal . cfName) sigs
+  pure $ Right visible
+
+-- | Parse a C header by asking clang to preprocess an #include of the header
+-- name. This lets clang find system headers via angle-bracket includes.
+parseCHeaderInclude :: String -> IO (Either String [CFunSig])
+parseCHeaderInclude hdr = do
+  let input = "#include <" ++ hdr ++ ">\n"
+  output <- readProcess "clang" ["-E", "-xc", "-"] input
   let sigs = mapMaybe parseLine (lines output)
       visible = filter (not . isInternal . cfName) sigs
   pure $ Right visible

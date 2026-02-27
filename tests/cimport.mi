@@ -1,5 +1,5 @@
 -- Test C header import: math.h via import
-m = import "/usr/include/math.h"
+m = import' "math.h" ({standard_import = 1})
 
 -- sin(1.0) ≈ 0.841471
 a = m.sin 1.0
