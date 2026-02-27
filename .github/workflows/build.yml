@@ -1,0 +1,116 @@
+name: Multi-OS Build & Test
+
+# Only run on pushes to master, PRs to master, or manually via workflow_dispatch
+on:
+  push:
+    branches: [ "master", "test-workflows" ]
+  pull_request:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build & Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # If Linux fails, don't automatically cancel Windows/Mac
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # ==========================================
+    # PATH A: NATIVE BUILDS (MAC & WINDOWS)
+    # ==========================================
+    - name: Setup Haskell (Mac/Windows)
+      if: runner.os != 'Linux'
+      uses: haskell-actions/setup@v2
+      with:
+        ghc-version: '9.4.7'
+        cabal-version: 'latest'
+
+    - name: Cache Cabal store and build directory (Mac/Windows)
+      if: runner.os != 'Linux'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cabal/store
+          dist-newstyle
+        key: ${{ runner.os }}-ghc-9.4.7-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project', '**/cabal.project.freeze') }}
+        restore-keys: |
+          ${{ runner.os }}-ghc-9.4.7-cabal-
+
+    - name: Build native binary (Mac/Windows)
+      if: runner.os != 'Linux'
+      shell: bash
+      run: |
+        cabal update
+        make
+        mkdir -p out
+        BIN_PATH=$(readlink -f milang)
+
+        # Ensure Windows gets its .exe extension
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          cp "$BIN_PATH" out/milang.exe
+        else
+          cp "$BIN_PATH" out/milang
+        fi
+
+    # ==========================================
+    # PATH B: PODMAN STATIC BUILD (LINUX)
+    # ==========================================
+    - name: Cache Podman base image (Linux)
+      if: runner.os == 'Linux'
+      id: cache-podman
+      uses: actions/cache@v4
+      with:
+        path: milang-base.tar
+        key: ${{ runner.os }}-podman-base-${{ hashFiles('Dockerfile.base') }}
+
+    - name: Load cached base image (Linux)
+      if: runner.os == 'Linux' && steps.cache-podman.outputs.cache-hit == 'true'
+      run: podman load -i milang-base.tar && touch core/builder_img.txt
+
+    - name: Build static binary via Podman (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        cd core
+        # If cache missed, build the base image manually and package it as a tarball
+        if [[ "${{ steps.cache-podman.outputs.cache-hit }}" != 'true' ]]; then
+          echo "Cache miss: Building milang-base from scratch..."
+          make -f Makefile.static builder_img.txt
+          podman save -o ../milang-base.tar milang-base
+        fi
+
+        # Build the final binary skipping the base step
+        mkdir -p ../out
+        make -f Makefile.static
+        cp -Lt ../out milang
+
+    # ==========================================
+    # UPLOAD (ALL OSes)
+    # ==========================================
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      # This step ensures the binary is saved as a zip file you can download from the GitHub UI
+      with:
+        name: milang-${{ runner.os }}
+        path: out/*
+        if-no-files-found: error
+
+    # ==========================================
+    # TEST STEP (ALL OSes)
+    # ==========================================
+    - name: Run Tests using compiled binary
+      shell: bash
+      run: |
+        echo "Executing tests..."
+        # NOTE: Replace '--help' with the actual arguments you use to run tests via your CLI
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          make test MILANG=out/milang.exe
+        else
+          make test MILANG=out/milang
+        fi

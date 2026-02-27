@@ -1,2 +1,2 @@
 -- Test world file IO: write, read, remove
-main world = done {_w = world.fs.write.file "/tmp/milang_wt.txt" "test data"; contents = world.fs.read.file "/tmp/milang_wt.txt"; _p = world.io.println contents.value; _r = world.fs.write.remove "/tmp/milang_wt.txt"; done = 0}
+main world = done {_w = world.fs.write.file "milang_wt.txt" "test data"; contents = world.fs.read.file "milang_wt.txt"; _p = world.io.println contents.value; _r = world.fs.write.remove "milang_wt.txt"; done = 0}

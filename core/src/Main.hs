@@ -7,8 +7,9 @@ import System.Exit (exitFailure, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (readProcessWithExitCode)
 import System.Directory (removeFile, doesFileExist, getCurrentDirectory)
+import System.Info (os)
 import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>))
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -621,12 +622,19 @@ cmdRun file runArgs = do
   (reduced, li) <- loadAndReduce file
   let stripped = stripDeepModules 3 reduced
       cFile = dropExtension file ++ "_core.c"
-      binFile = dropExtension file ++ "_core"
+      binBase = dropExtension file ++ "_core"
       extraFlags = nub (linkFlags li)
       extraSrcs  = nub (linkSources li)
       extraIncls = nub (map ("-I" ++) (linkIncludes li))
-      gccArgs = ["-O2", "-o", binFile, cFile, "-I" ++ cwd]
-                ++ extraIncls ++ extraSrcs ++ extraFlags
+      gccArgs = ["-O2", "-o", binBase, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraFlags
+      isWin = any (`isPrefixOf` os) ["mingw", "cygwin", "windows"]
+      exeExt = if isWin then ".exe" else ""
+      candidates = if exeExt /= "" then [binBase ++ exeExt, binBase] else [binBase]
+      -- helper to find first existing path
+      findExisting [] = return (head candidates)
+      findExisting (p:ps) = do
+        e <- doesFileExist p
+        if e then return p else findExisting ps
   withFile cFile WriteMode $ \h -> codegen h preludeNames stripped
   (gccExit, _, gccErr) <- readProcessWithExitCode "gcc" gccArgs ""
   case gccExit of
@@ -634,11 +642,15 @@ cmdRun file runArgs = do
     ExitFailure code -> do
       hPutStrLn stderr $ "error: C compilation failed (gcc exit " ++ show code ++ ")"
       unless (null gccErr) $ hPutStrLn stderr gccErr
-      removeFile cFile
+      existsC <- doesFileExist cFile
+      when existsC $ removeFile cFile
       exitFailure
-  (runExit, runOut, runErr) <- readProcessWithExitCode binFile runArgs ""
-  removeFile cFile
-  removeFile binFile
+  exeToRun <- findExisting candidates
+  (runExit, runOut, runErr) <- readProcessWithExitCode exeToRun runArgs ""
+  -- cleanup
+  existsC2 <- doesFileExist cFile
+  when existsC2 $ removeFile cFile
+  mapM_ (\p -> do ex <- doesFileExist p; when ex $ removeFile p) candidates
   putStr runOut
   if not (null runErr) then hPutStrLn stderr runErr else pure ()
   exitWith runExit

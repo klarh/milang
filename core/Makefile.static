@@ -1,0 +1,24 @@
+
+PODMAN:=podman
+OUTPUT:=milang
+
+all: $(OUTPUT)
+
+.PHONY: all
+
+builder_img.txt:
+	$(PODMAN) build -f Dockerfile.base --no-cache -t milang-base . > "${@}"
+
+$(OUTPUT): builder_img.txt
+	@echo 'module Core.Version (version) where' > src/Core/Version.hs
+	@echo '' >> src/Core/Version.hs
+	@echo 'version :: String' >> src/Core/Version.hs
+	@echo 'version = "'$$(date +%Y%m%d%H%M%S)-$$(git rev-parse --short HEAD)'"' >> src/Core/Version.hs
+	$(PODMAN) build -f Dockerfile.builder --no-cache --output type=local,dest="static_output" .
+	mv static_output/milang "${@}" && rmdir static_output
+
+clean:
+	rm -f "$(OUTPUT)"
+
+clean-all: clean
+	rm -f builder_img.txt

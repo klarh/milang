@@ -50,6 +50,14 @@ cabal update
 cabal build
 ```
 
+For a statically linked compiler build (Linux) using Podman, you can use the provided Makefile in the core/ directory:
+
+```bash
+cd core
+make -f Makefile.static
+# now ./milang is available
+```
+
 ## Verifying the Installation
 
 Start the REPL to confirm everything works:
@@ -74,4 +82,3 @@ make test
 ```
 
 This compiles and runs every `.mi` file in the repository's test suite. A successful run prints something like `Passed: 60, Failed: 0`.
-

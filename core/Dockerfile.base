@@ -1,0 +1,21 @@
+# Dockerfile.base - caches system deps and ghcup/GHC installation (stages 1-4)
+FROM alpine:3.19 AS base
+
+# 1. Install system dependencies required by GHCup and for static linking
+RUN apk add --no-cache \
+    curl gcc g++ git gmp-dev libc-dev libffi-dev make musl-dev \
+    ncurses-dev perl tar xz zlib-dev zlib-static
+
+# 2. Install ONLY the GHCup management tool itself (non-interactive)
+ENV BOOTSTRAP_HASKELL_NONINTERACTIVE=1
+ENV BOOTSTRAP_HASKELL_MINIMAL=1
+RUN curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+
+# 3. Make ghcup tools available on PATH
+ENV PATH="/root/.ghcup/bin:${PATH}"
+
+# 4. Install requested GHC and cabal (cached in this image)
+RUN ghcup install ghc 9.4.7 && \
+    ghcup set ghc 9.4.7 && \
+    ghcup install cabal latest && \
+    ghcup set cabal latest

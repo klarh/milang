@@ -1,50 +1,23 @@
 .PHONY: all clean test test-hs docs docs-serve docs-publish
 
+MILANG:=milang
+PYTHON:=python
+
 all:
 	@echo 'module Core.Version (version) where' > core/src/Core/Version.hs
 	@echo '' >> core/src/Core/Version.hs
 	@echo 'version :: String' >> core/src/Core/Version.hs
 	@echo 'version = "'$$(date +%Y%m%d%H%M%S)-$$(git rev-parse --short HEAD)'"' >> core/src/Core/Version.hs
 	cd core && cabal build
-	ln -sf $$(cd core && cabal list-bin milang-core) milang
+	ln -sf "$$(cd core && cabal list-bin -v0 exe:milang-core | tr -d '\r' | tr '\\' '/')" "$(MILANG)"
 
 clean:
 	cd core && cabal clean
 	cd hs && cabal clean
-	rm -f milang
+	rm -f $(MILANG) milang
 
-test: all
-	@echo "=== Running tests ==="
-	@TMPDIR=$$(mktemp -d); \
-	ls tests/*.mi | xargs -P $$(nproc) -I{} sh -c \
-		'ERRFILE="{}.errors"; \
-		if [ -f "$$ERRFILE" ]; then \
-			STDERR=$$(timeout 15 ./milang run "{}" >/dev/null 2>&1; echo "$$?" > "$$0/rc_$$(basename {})"); \
-			STDERR=$$(timeout 15 ./milang run "{}" 2>&1 >/dev/null); \
-			PASS=1; \
-			while IFS= read -r expected; do \
-				case "$$expected" in \#*|"") continue ;; esac; \
-				if ! echo "$$STDERR" | grep -qF "$$expected"; then \
-					PASS=0; break; \
-				fi; \
-			done < "$$ERRFILE"; \
-			if [ $$PASS -eq 1 ]; then \
-				touch "$$0/pass_$$(basename {})"; \
-			else \
-				touch "$$0/fail_$$(basename {})"; \
-				echo "FAIL: {} (missing expected error)"; \
-			fi; \
-		elif timeout 15 ./milang run "{}" >/dev/null 2>&1; then \
-			touch "$$0/pass_$$(basename {})"; \
-		else \
-			touch "$$0/fail_$$(basename {})"; \
-			echo "FAIL: {}"; \
-		fi' "$$TMPDIR"; \
-	PASS=$$(ls "$$TMPDIR"/pass_* 2>/dev/null | wc -l); \
-	FAIL=$$(ls "$$TMPDIR"/fail_* 2>/dev/null | wc -l); \
-	rm -rf "$$TMPDIR"; \
-	echo "Passed: $$PASS, Failed: $$FAIL"; \
-	[ $$FAIL -eq 0 ]
+test:
+	$(PYTHON) tests/run.py -m ${MILANG}
 
 test-hs:
 	cd hs && cabal build

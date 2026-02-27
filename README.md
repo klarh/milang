@@ -52,6 +52,14 @@ cd milang
 make
 ```
 
+For a statically linked compiler build (Linux) using Podman, you can use the provided Makefile in the core/ directory:
+
+```bash
+cd core
+make -f Makefile.static
+# now ./milang is available
+```
+
 ### Run
 
 ```bash
