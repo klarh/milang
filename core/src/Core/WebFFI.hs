@@ -55,6 +55,20 @@ reduce_file_c = do
 
 foreign export ccall reduce_file_c :: IO CString
 
+-- | Evaluate a C string (pointer) using REPL semantics (try single expr, then program)
+
+eval_str_c :: CString -> IO CString
+eval_str_c cstr = do
+  s <- peekCString cstr
+  let t = T.pack s
+  case evalExpr t of
+    Right out -> newCString out
+    Left _ -> case evalProgram t of
+      Left err -> newCString ("ERR:" ++ err)
+      Right out -> newCString out
+
+foreign export ccall eval_str_c :: CString -> IO CString
+
 -- | Parse a C string (pointer) and return JSON AST
 parse_str_c :: CString -> IO CString
 parse_str_c cstr = do

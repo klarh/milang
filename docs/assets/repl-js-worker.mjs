@@ -54,7 +54,38 @@ self.addEventListener('message', async (e) => {
         throw new Error('Unexpected pointer type: ' + typeof x);
       }
 
-      if (instance.exports.reduce_str_c && instance.exports.alloc_bytes) {
+      if (instance.exports.eval_str_c && instance.exports.alloc_bytes) {
+        // allocate buffer in wasm memory and write the source string
+        const encoder = new TextEncoder();
+        const bytesIn = encoder.encode(code);
+        const allocRaw = instance.exports.alloc_bytes(bytesIn.length + 1);
+        const bufPtr = toNumPtr(allocRaw);
+        if (!Number.isFinite(bufPtr) || bufPtr < 0) throw new Error('Invalid alloc pointer from wasm: ' + String(allocRaw));
+        let mem = new Uint8Array(instance.exports.memory.buffer);
+        if (bufPtr + bytesIn.length + 1 > mem.length) {
+          // refresh buffer (memory may grow)
+          mem = new Uint8Array(instance.exports.memory.buffer);
+          if (bufPtr + bytesIn.length + 1 > mem.length) throw new Error('WASM memory too small for input');
+        }
+        mem.set(bytesIn, bufPtr);
+        mem[bufPtr + bytesIn.length] = 0;
+
+        const resRaw = instance.exports.eval_str_c(bufPtr);
+        const resPtr = toNumPtr(resRaw);
+        if (!Number.isFinite(resPtr) || resPtr < 0) throw new Error('Invalid result pointer from wasm: ' + String(resRaw));
+
+        mem = new Uint8Array(instance.exports.memory.buffer);
+        if (resPtr >= mem.length) throw new Error('Result pointer out of bounds: ' + resPtr + ' mem.len=' + mem.length);
+        let i = resPtr;
+        const out = [];
+        while (i < mem.length && mem[i] !== 0) { out.push(mem[i]); i++; }
+        if (i >= mem.length) throw new Error('Unterminated string or pointer out of range');
+        const resultStr = new TextDecoder().decode(new Uint8Array(out));
+        if (resultStr.startsWith('ERR:')) { self.postMessage({ type: 'error', error: resultStr }); return; }
+        self.postMessage({ type: 'result', result: resultStr });
+        return;
+
+      } else if (instance.exports.reduce_str_c && instance.exports.alloc_bytes) {
         // allocate buffer in wasm memory and write the source string
         const encoder = new TextEncoder();
         const bytesIn = encoder.encode(code);
