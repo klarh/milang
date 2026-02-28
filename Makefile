@@ -46,7 +46,7 @@ docs-publish: docs
 # Build WebAssembly using ghc-wasm toolchain (requires wasm32-wasi-cabal on PATH)
 .PHONY: wasm
 wasm:
-@echo "Building wasm executable (requires ghc-wasm toolchain)"
-cd core && wasm32-wasi-cabal build exe:milang-wasm -j1
-@mkdir -p docs/assets/wasm
-@find core -type f -name "milang-wasm.wasm" -print -quit | xargs -I{} cp {} docs/assets/wasm/milang-wasm.wasm || true
+	@echo "Building wasm executable (requires ghc-wasm toolchain)"
+	cd core && wasm32-wasi-cabal build exe:milang-wasm -j1
+	@mkdir -p docs/assets/wasm
+	@find core -type f -name "milang-wasm.wasm" -print -quit | xargs -I{} cp {} docs/assets/wasm/milang-wasm.wasm || true
