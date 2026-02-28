@@ -8,7 +8,7 @@ import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetB
 import System.Process (readProcessWithExitCode)
 import System.Directory (removeFile, doesFileExist, getCurrentDirectory)
 import System.Info (os)
-import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>))
+import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>), normalise)
 import Control.Monad (unless, when)
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
@@ -42,8 +42,8 @@ emptyLinkInfo = LinkInfo [] [] []
 mergeLinkInfo :: LinkInfo -> LinkInfo -> LinkInfo
 mergeLinkInfo a b = LinkInfo
   (linkFlags a ++ linkFlags b)
-  (linkSources a ++ linkSources b)
-  (linkIncludes a ++ linkIncludes b)
+  (nub $ map normalise (linkSources a ++ linkSources b))
+  (nub $ map normalise (linkIncludes a ++ linkIncludes b))
 
 -- | Resolution context for import resolution
 data ResCtx = ResCtx
@@ -491,9 +491,9 @@ autoLinkInfo :: FilePath -> IO LinkInfo
 autoLinkInfo hdrPath = do
   let sysFlags = systemHeaderFlags hdrPath
       hdrDir = takeDirectory hdrPath
-      includeDir = if null hdrDir || hdrDir == "." then [] else [hdrDir]
+      includeDir = if null hdrDir || hdrDir == "." then [] else [normalise hdrDir]
       baseName = takeBaseName hdrPath
-      cFile = takeDirectory hdrPath </> baseName ++ ".c"
+      cFile = normalise (takeDirectory hdrPath </> baseName ++ ".c")
   hasCFile <- doesFileExist cFile
   pure $ LinkInfo sysFlags (if hasCFile then [cFile] else []) includeDir
 
@@ -509,9 +509,9 @@ systemHeaderFlags path = case takeBaseName path of
 -- | Extract import options from import' opts record
 extractImportOpts :: FilePath -> [Binding] -> IO LinkInfo
 extractImportOpts dir bs = do
-  let srcs = [ dir </> T.unpack (textVal v) | Binding { bindName = "src", bindBody = v } <- bs, isTextVal v ]
+  let srcs = [ normalise (dir </> T.unpack (textVal v)) | Binding { bindName = "src", bindBody = v } <- bs, isTextVal v ]
       flags = [ T.unpack (textVal v) | Binding { bindName = "flags", bindBody = v } <- bs, isTextVal v ]
-      incls = [ dir </> T.unpack (textVal v) | Binding { bindName = "include", bindBody = v } <- bs, isTextVal v ]
+      incls = [ normalise (dir </> T.unpack (textVal v)) | Binding { bindName = "include", bindBody = v } <- bs, isTextVal v ]
   pure $ LinkInfo flags srcs incls
   where
     isTextVal (StringLit _) = True

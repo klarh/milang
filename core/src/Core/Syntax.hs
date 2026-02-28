@@ -55,7 +55,7 @@ data Expr
   deriving (Show, Eq)
 
 -- | C type representation for FFI
-data CType = CInt | CFloat | CString | CVoid | CPtr | COutInt | COutFloat
+data CType = CInt | CFloat | CString | CVoid | CPtr Text | COutInt | COutFloat
   deriving (Show, Eq)
 
 -- | A binding in any domain. The domain tag determines how the

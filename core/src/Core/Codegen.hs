@@ -5,7 +5,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Set as Set
 import Data.IORef
-import Data.List (intercalate)
+import Data.List (intercalate, isInfixOf)
+import Control.Monad (when)
 import Core.Syntax
 import System.IO (Handle, hPutStr, hPutStrLn)
 import System.FilePath (takeFileName)
@@ -244,8 +245,17 @@ exprToC st (Splice e) = exprToC st e  -- should be reduced away already
 
 exprToC st (CFunction hdr cname retTy paramTys standardImport) = do
   let hdrStr = T.unpack hdr
-      inc = if standardImport then "<" ++ takeFileName hdrStr ++ ">" else show hdrStr
+      inc = if standardImport then "<" ++ hdrStr ++ ">" else show hdrStr
   modifyIORef (cgIncludes st) (("#include " ++ inc) :)
+  -- Include <wchar.h> when any parameter/return type mentions wchar_t so
+  -- wide-character functions (fgetws, etc.) are declared on platforms
+  -- where they live in wchar.h.
+  let usesWchar t = case t of
+        CPtr name -> name == "wchar_t"
+        _         -> False
+      anyWchar = usesWchar retTy || any usesWchar paramTys
+  when anyWchar $ modifyIORef (cgIncludes st) (("#include <wchar.h>") :)
+
   nativeCode <- cfunctionToC st (T.unpack cname) retTy paramTys
   pure $ "mi_expr_val(" ++ nativeCode ++ ")"
 
@@ -361,7 +371,7 @@ cRetTypeName :: CType -> String
 cRetTypeName CInt    = "int64_t"
 cRetTypeName CFloat  = "double"
 cRetTypeName CString = "char *"
-cRetTypeName CPtr    = "void *"
+cRetTypeName (CPtr _) = "void *"
 cRetTypeName CVoid   = "void"
 cRetTypeName COutInt = "int"
 cRetTypeName COutFloat = "double"
@@ -412,7 +422,7 @@ cRetToMi CInt expr     = "mi_int((int64_t)(" ++ expr ++ "))"
 cRetToMi CFloat expr   = "mi_float((double)(" ++ expr ++ "))"
 cRetToMi CString expr  = "mi_string(" ++ expr ++ ")"
 cRetToMi CVoid expr    = "(" ++ expr ++ ", mi_int(0))"
-cRetToMi CPtr expr     = "mi_pointer((void*)(" ++ expr ++ "))"
+cRetToMi (CPtr _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
 cRetToMi COutInt _     = "mi_int(0)"
 cRetToMi COutFloat _   = "mi_float(0)"
 
@@ -421,7 +431,7 @@ miToCArg CInt name     = "(int)(" ++ name ++ ".as.i)"
 miToCArg CFloat name   = "mi_to_float(" ++ name ++ ")"
 miToCArg CString name  = name ++ ".as.str.data"
 miToCArg CVoid _       = "/* void */"
-miToCArg CPtr name     = name ++ ".as.ptr"
+miToCArg (CPtr base) name = let b = T.unpack base in if "FILE" `isInfixOf` b then "(FILE*)" ++ name ++ ".as.ptr" else name ++ ".as.ptr"
 miToCArg COutInt name  = "&_out_" ++ name
 miToCArg COutFloat name = "&_out_" ++ name
 
