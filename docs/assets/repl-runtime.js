@@ -33,7 +33,9 @@
     }
 
     if (!worker) {
-      worker = new Worker(URL.createObjectURL(new Blob([fallbackWorkerSource], { type: 'text/javascript' })));
+      // No JS fallback provided; require the wasm-backed worker for correct Milang evaluation
+      log('WASM worker unavailable and no JS fallback is provided; REPL requires wasm.');
+      worker = null;
     }
 
     worker.onmessage = (e) => {
