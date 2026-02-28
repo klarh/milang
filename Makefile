@@ -42,3 +42,11 @@ docs-publish: docs
 	git commit -m "Deploy docs $$(date +%Y-%m-%d)" && \
 	git push -f git@github.com:klarh/milang.git HEAD:gh-pages && \
 	rm -rf $$TMP
+
+# Build WebAssembly using ghc-wasm toolchain (requires wasm32-wasi-cabal on PATH)
+.PHONY: wasm
+wasm:
+@echo "Building wasm executable (requires ghc-wasm toolchain)"
+cd core && wasm32-wasi-cabal build exe:milang-wasm -j1
+@mkdir -p docs/assets/wasm
+@find core -type f -name "milang-wasm.wasm" -print -quit | xargs -I{} cp {} docs/assets/wasm/milang-wasm.wasm || true

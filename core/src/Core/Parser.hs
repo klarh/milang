@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Core.Parser (parseProgram, parseExpr) where
+module Core.Parser (parseProgram, parseProgramWithMain, parseExpr) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -33,6 +33,21 @@ parseProgram name src =
   let opTable = scanParseDecls src
   in unsafePerformIO (writeIORef globalOpTable opTable) `seq`
      runParser (scn *> pProgram <* eof) name src
+
+-- | Like parseProgram but allow an optional trailing expression after top-level
+-- bindings. If an expression is present it is added as a synthetic _main binding.
+parseProgramWithMain :: String -> Text -> Either (ParseErrorBundle Text Void) Expr
+parseProgramWithMain name src =
+  let opTable = scanParseDecls src
+  in unsafePerformIO (writeIORef globalOpTable opTable) `seq`
+     runParser (scn *> do
+                  bss <- many (pTopBindings <* scn)
+                  me  <- optional (try pExpr)
+                  let bs = mergeAnnotations (concat bss)
+                  case me of
+                    Just e  -> pure (Namespace (bs ++ [mkBind "_main" e]))
+                    Nothing -> pure (Namespace bs)
+                <* eof) name src
 
 parseExpr :: String -> Text -> Either (ParseErrorBundle Text Void) Expr
 parseExpr = runParser (sc *> pExpr <* eof)

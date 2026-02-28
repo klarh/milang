@@ -8,7 +8,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Megaparsec (errorBundlePretty)
 
-import Core.Parser (parseProgram, parseExpr)
+import Core.Parser (parseProgramWithMain, parseExpr)
 import Core.Reduce (reduce, emptyEnv)
 import Core.Prelude (preludeBindings)
 import Core.Syntax (Expr(..), Binding(..), mkBind, prettyExpr)
@@ -19,14 +19,22 @@ injectPrelude (Namespace bs) = Namespace (preludeBindings ++ bs)
 injectPrelude e = Namespace (preludeBindings ++ [mkBind "_main" e])
 
 -- | Parse+reduce a full program (possibly with top-level bindings).
--- Does NOT resolve imports; imports will remain as Import nodes.
+-- Accept an optional trailing expression after bindings; print its value if present.
 evalProgram :: Text -> Either String String
-evalProgram src = case parseProgram "<input>" src of
+evalProgram src = case parseProgramWithMain "<input>" src of
   Left err -> Left (errorBundlePretty err)
   Right expr ->
     let withPrelude = injectPrelude expr
         (reduced, _ws) = reduce emptyEnv withPrelude
-    in Right (prettyExpr 0 reduced)
+        -- If reduce returned a Namespace, prefer printing the value bound to
+        -- the synthetic _main binding we may have created; otherwise print
+        -- the whole reduced expression.
+        resultExpr = case reduced of
+          Namespace bs -> case filter (\b -> bindName b == "_main") bs of
+            (b:_) -> bindBody b
+            _     -> reduced
+          _ -> reduced
+    in Right (prettyExpr 0 resultExpr)
 
 -- | Parse+reduce a single expression (treat as a main expression)
 evalExpr :: Text -> Either String String
