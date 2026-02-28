@@ -40,14 +40,27 @@ self.addEventListener('message', async (e) => {
       try { instance.exports.hs_init(0, 0); } catch (e) { /* ignore */ }
     }
 
-    // Prefer reduce_file_c (reduced AST) and fall back to parse_file_c
-    if (!(instance.exports && (instance.exports.reduce_file_c || instance.exports.parse_file_c))) {
-      throw new Error('WASM module does not export parse_file_c or reduce_file_c');
+    // Prefer reduce_str_c (string-in reduced AST) when available; otherwise fall back to reduce_file_c/parse_file_c.
+    if (!(instance.exports && (instance.exports.reduce_str_c || instance.exports.reduce_file_c || instance.exports.parse_file_c))) {
+      throw new Error('WASM module does not export a parsing/reduce entrypoint');
     }
 
     try {
       let astJson;
-      if (instance.exports.reduce_file_c) {
+      if (instance.exports.reduce_str_c && instance.exports.alloc_bytes) {
+        // allocate buffer in wasm memory and write the source string
+        const encoder = new TextEncoder();
+        const bytesIn = encoder.encode(code);
+        const bufPtr = instance.exports.alloc_bytes(bytesIn.length + 1);
+        const mem = new Uint8Array(instance.exports.memory.buffer);
+        mem.set(bytesIn, bufPtr);
+        mem[bufPtr + bytesIn.length] = 0;
+        const resPtr = instance.exports.reduce_str_c(bufPtr);
+        const out = [];
+        let i = resPtr;
+        while (mem[i] !== 0) { out.push(mem[i]); i++; }
+        astJson = new TextDecoder().decode(new Uint8Array(out));
+      } else if (instance.exports.reduce_file_c) {
         const resPtr = instance.exports.reduce_file_c();
         const mem = new Uint8Array(instance.exports.memory.buffer);
         let i = resPtr;

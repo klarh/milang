@@ -1,7 +1,10 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 module Core.WebFFI where
 
-import Foreign.C.String (CString, newCString)
+import Foreign.C.String (CString, newCString, peekCString)
+import Foreign.C.Types (CSize(..))
+import Foreign.Marshal.Alloc (mallocBytes)
+import Foreign.Ptr (castPtr)
 import qualified Data.Text.IO as TIO
 import qualified Data.Text as T
 import Data.Char (ord)
@@ -51,6 +54,36 @@ reduce_file_c = do
       in newCString (exprToJson reduced)
 
 foreign export ccall reduce_file_c :: IO CString
+
+-- | Parse a C string (pointer) and return JSON AST
+parse_str_c :: CString -> IO CString
+parse_str_c cstr = do
+  s <- peekCString cstr
+  case parseProgramWithMain "<input>" (T.pack s) of
+    Left err -> newCString ("ERR:" ++ errorBundlePretty err)
+    Right expr -> newCString (exprToJson expr)
+
+foreign export ccall parse_str_c :: CString -> IO CString
+
+-- | Reduce from a C string (pointer) and return reduced AST JSON
+reduce_str_c :: CString -> IO CString
+reduce_str_c cstr = do
+  s <- peekCString cstr
+  case parseProgramWithMain "<input>" (T.pack s) of
+    Left err -> newCString ("ERR:" ++ errorBundlePretty err)
+    Right expr -> let (reduced, _ws) = reduce emptyEnv expr in newCString (exprToJson reduced)
+
+foreign export ccall reduce_str_c :: CString -> IO CString
+
+-- | Allocate `n` bytes in the Haskell heap and return pointer (CString).
+-- JS can call this to get a writable buffer in wasm memory, write bytes and
+-- then pass the pointer to the parse_str_c/reduce_str_c functions.
+alloc_bytes :: CSize -> IO CString
+alloc_bytes (CSize n) = do
+  p <- mallocBytes (fromIntegral n)
+  return (castPtr p)
+
+foreign export ccall alloc_bytes :: CSize -> IO CString
 
 -- === JSON serialization of the Core.Syntax AST (minimal) ===
 
