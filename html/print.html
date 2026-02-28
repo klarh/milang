@@ -1,0 +1,3339 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>The Milang Programming Language</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "ayu";
+            window.path_to_searchindex_js = "searchindex-a96b4c13.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-2d887c1e.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">The Milang Programming Language</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="the-milang-programming-language"><a class="header" href="#the-milang-programming-language">The Milang Programming Language</a></h1>
+<p>Milang is a minimalist functional programming language with:</p>
+<ul>
+<li><strong>Zero keywords</strong> — everything is a function or operator, including <code>if</code></li>
+<li><strong>Haskell-like syntax</strong> — clean, whitespace-sensitive, expression-oriented</li>
+<li><strong>Partial evaluation</strong> as the core compilation model — the compiler reduces your program as far as possible at compile time, then emits C code for what remains</li>
+<li><strong>Capability-based IO</strong> — side effects flow through an explicit <code>world</code> value</li>
+<li><strong>Five annotation domains</strong> — types (<code>::</code>) , traits (<code>:~</code>), docs (<code>:?</code>), parse declarations (<code>:!</code>), and values (<code>=</code>)</li>
+</ul>
+<p>Note: the lazy binding operator <code>:=</code> is a variant of the value domain (it creates a cached thunk) and is not a separate annotation domain.</p>
+<p>Milang is designed around three guiding principles: extreme simplicity, aggressive compile-time evaluation, and explicit capabilities for side effects.</p>
+<p>There are no special syntactic forms in Milang — control flow, conditionals, and data construction are expressed with ordinary functions and operators. This uniform surface makes programs concise and composable, and helps both authors and tooling reason about code consistently.</p>
+<p>Partial evaluation is the heart of the compiler: any expression that can be resolved at compile time is evaluated by the compiler itself. The result is that high-level abstractions often carry zero runtime cost — configuration, macro-like computation, and many optimizations happen automatically while compiling into straightforward C.</p>
+<p>Milang uses an explicit capability-based IO model: the program entry point receives a <code>world</code> record that contains sub-records like <code>io</code> and <code>process</code>. By passing only the capabilities a function needs, you restrict what it can do. The compiler targets C and emits code suitable for <code>gcc</code> or <code>clang</code>, which makes Milang programs portable and fast.</p>
+<p>The repository contains focused examples covering language features referenced throughout this guide.</p>
+<h2 id="quick-example"><a class="header" href="#quick-example">Quick Example</a></h2>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+
+area s = s -&gt;
+  Circle = 3.14 * s.radius * s.radius
+  Rect = s.width * s.height
+
+main world =
+  world.io.println (area (Circle 5))
+  world.io.println (area (Rect 3 4))
+</code></pre>
+<pre><code>78.5
+12
+</code></pre>
+<h2 id="how-it-compiles"><a class="header" href="#how-it-compiles">How It Compiles</a></h2>
+<pre><code class="language-bash">milang source -&gt; parse -&gt; import resolution -&gt; partial evaluation -&gt; C codegen -&gt; gcc
+</code></pre>
+<p>The partial evaluator is the heart of milang: it reduces all compile-time-known expressions to values, leaving only runtime-dependent code in the output. This means zero runtime overhead for abstractions that are fully known at compile time.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
+<p>Milang is built from source using the Haskell toolchain and compiles programs to C via <code>gcc</code>.</p>
+<h2 id="pre-built-binaries"><a class="header" href="#pre-built-binaries">Pre-built Binaries</a></h2>
+<p>Automated builds for Windows, macOS, and Linux (static) are available at:
+<strong><a href="https://github.com/klarh/milang/actions/workflows/build.yml">https://github.com/klarh/milang/actions/workflows/build.yml</a></strong></p>
+<p>Download the artifact for your platform from any successful workflow run — no Haskell toolchain needed.</p>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<p>You need three things installed:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tool</th><th>Minimum version</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>GHC</strong></td><td>9.6+</td><td>Haskell compiler (builds the milang compiler itself)</td></tr>
+<tr><td><strong>cabal</strong></td><td>3.10+</td><td>Haskell build tool</td></tr>
+<tr><td><strong>gcc</strong></td><td>any recent</td><td>C compiler (milang emits C, then calls gcc to produce binaries)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="ubuntu--debian"><a class="header" href="#ubuntu--debian">Ubuntu / Debian</a></h3>
+<pre><code class="language-bash">sudo apt install ghc cabal-install build-essential
+</code></pre>
+<h3 id="arch-linux"><a class="header" href="#arch-linux">Arch Linux</a></h3>
+<pre><code class="language-bash">sudo pacman -S ghc cabal-install base-devel
+</code></pre>
+<h3 id="macos-homebrew"><a class="header" href="#macos-homebrew">macOS (Homebrew)</a></h3>
+<pre><code class="language-bash">brew install ghc cabal-install gcc
+</code></pre>
+<h2 id="building-from-source"><a class="header" href="#building-from-source">Building from Source</a></h2>
+<p>Clone the repository and build:</p>
+<pre><code class="language-bash">git clone &lt;repository&gt;
+cd milang
+make
+</code></pre>
+<p><code>make</code> runs <code>cabal build</code> inside the <code>core/</code> directory.</p>
+<p>If you prefer to do it manually:</p>
+<pre><code class="language-bash">cd core
+cabal update
+cabal build
+</code></pre>
+<p>For a statically linked compiler build (Linux) using Podman, you can use the provided Makefile in the core/ directory:</p>
+<pre><code class="language-bash">cd core
+make -f Makefile.static
+# now ./milang is available
+</code></pre>
+<h2 id="verifying-the-installation"><a class="header" href="#verifying-the-installation">Verifying the Installation</a></h2>
+<p>Start the REPL to confirm everything works:</p>
+<pre><code class="language-bash">./milang repl
+</code></pre>
+<p>You should see a <code>λ&gt;</code> prompt. Try evaluating an expression:</p>
+<pre><code class="language-text">λ&gt; 2 + 3
+5
+</code></pre>
+<p>Press Ctrl-D to exit.</p>
+<p>Run the test suite to make sure the compiler is healthy:</p>
+<pre><code class="language-bash">make test
+</code></pre>
+<p>This compiles and runs every <code>.mi</code> file in the repository’s test suite. A successful run prints something like <code>Passed: 60, Failed: 0</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="hello-world"><a class="header" href="#hello-world">Hello World</a></h1>
+<p>This guide walks through creating, running, and compiling your first Milang program and explains common variants useful when learning the language.</p>
+<h2 id="your-first-program"><a class="header" href="#your-first-program">Your First Program</a></h2>
+<p>Create a file called hello.mi with this content:</p>
+<pre><code class="language-milang">main world =
+  world.io.println "Hello, Milang!"
+</code></pre>
+<pre><code>Hello, Milang!
+</code></pre>
+<p>Run it with the bundled binary:</p>
+<pre><code class="language-bash">./milang run hello.mi
+</code></pre>
+<p>Expected output:</p>
+<pre><code>Hello, Milang!
+</code></pre>
+<h3 id="what-main-and-world-mean"><a class="header" href="#what-main-and-world-mean">What <code>main</code> and <code>world</code> mean</a></h3>
+<ul>
+<li><code>main</code> is the program entry point by convention (not a language keyword).</li>
+<li><code>world</code> is an explicit record that carries runtime capabilities: <code>world.io</code> (console and file IO), <code>world.process</code> (exec/exit), <code>world.argv</code>, and helpers like <code>getEnv</code>.</li>
+<li>Only code that receives the appropriate part of <code>world</code> can perform the corresponding effects — pass only what you need to follow the principle of least privilege.</li>
+</ul>
+<h2 id="printing-and-helpers"><a class="header" href="#printing-and-helpers">Printing and Helpers</a></h2>
+<p><code>println</code> appends a newline; <code>print</code> does not. Prefer small helpers that accept only the sub-record they need:</p>
+<pre><code class="language-milang">greet io name = io.println ("Hello, " + name + "!")
+
+main world =
+  greet world.io "Alice"
+</code></pre>
+<pre><code>Hello, Alice!
+</code></pre>
+<p>This makes <code>greet</code> unable to access process or filesystem capabilities.</p>
+<h2 id="handling-command-line-arguments"><a class="header" href="#handling-command-line-arguments">Handling Command-Line Arguments</a></h2>
+<p>A more advanced “Hello World” might greet someone by name, using command-line arguments. The <code>world.argv</code> list contains the arguments. The following example, which you can save as <code>hello_argv.mi</code>, demonstrates this. It uses a helper function to safely get an argument or fall back to a default value.</p>
+<pre><code class="language-milang">-- main entrypoint
+main world =
+  name = fromMaybe "World" (at' 1 world.argv)
+  world.io.println ("Hello, " + name + "!")
+</code></pre>
+<pre><code>Hello, World!
+</code></pre>
+<p>Run this from your terminal:</p>
+<pre><code class="language-bash"># With no arguments
+./milang run hello_argv.mi
+# Expected output: Hello, World!
+
+# With an argument
+./milang run hello_argv.mi "Universe"
+# Expected output: Hello, Universe!
+</code></pre>
+<p>This example shows several concepts:</p>
+<ul>
+<li><code>world.argv</code>: A list of strings from the command line.</li>
+<li><code>at'</code>: A prelude function to safely get an element from a list by index. It returns a <code>Maybe</code> value. (<code>at'</code> takes index first; <code>at</code> takes list first for use as an operator: <code>xs `at` 1</code>).</li>
+<li><code>fromMaybe</code>: A prelude function that unwraps a <code>Maybe</code>, returning a default value if <code>Nothing</code>.</li>
+</ul>
+<p>This pattern of using helpers to safely extract information is common in Milang.</p>
+<h2 id="script-mode-quick-experiments"><a class="header" href="#script-mode-quick-experiments">Script Mode (quick experiments)</a></h2>
+<p>When a file does not define <code>main</code> that takes a parameter, <code>milang run</code> executes in script mode: every top-level binding is evaluated and printed. This is ideal for short tests and REPL-style exploration.</p>
+<pre><code class="language-milang">x = 6 * 7
+y = x + 1
+</code></pre>
+<pre><code>x = 42
+y = 43
+</code></pre>
+<p>Script-mode output prints name/value pairs for top-level bindings (prelude/internal bindings are hidden).</p>
+<h2 id="printing-non-strings-and-maybe-values"><a class="header" href="#printing-non-strings-and-maybe-values">Printing non-strings and Maybe values</a></h2>
+<p>Use <code>toString</code> to render non-string values. Many standard library functions return <code>Maybe</code> to handle operations that might fail, like converting a string to a number. For example, <code>toInt</code> returns <code>Just(number)</code> on success and <code>Nothing</code> on failure.</p>
+<p>Use <code>toString</code> to safely print these <code>Maybe</code> values.</p>
+<pre><code class="language-milang">main world =
+  world.io.println (toString (toInt "42"))
+  world.io.println (toString (toInt "abc"))
+</code></pre>
+<pre><code>Just(42)
+Nothing
+</code></pre>
+<p>This will print:</p>
+<pre><code class="language-text">Just(42)
+Nothing
+</code></pre>
+<p>The <code>Maybe</code> type is how Milang handles optional values, avoiding nulls and making error handling more explicit. You can use <a href="#pattern-matching-1">pattern matching</a> to safely unwrap these values.</p>
+<h2 id="compiling-to-c"><a class="header" href="#compiling-to-c">Compiling to C</a></h2>
+<p>Emit the generated C and compile it:</p>
+<pre><code class="language-bash">./milang compile hello.mi hello.c
+gcc hello.c -o hello
+./hello
+</code></pre>
+<p>The C file embeds the milang runtime; you only need a standard C toolchain.</p>
+<h2 id="using-the-repl"><a class="header" href="#using-the-repl">Using the REPL</a></h2>
+<p>Start the REPL for interactive experimentation:</p>
+<pre><code class="language-bash">./milang repl
+</code></pre>
+<p>Example session:</p>
+<pre><code class="language-text">&gt; 2 + 3
+5
+&gt; f x = x * x
+&gt; f 8
+64
+&gt; map f [1, 2, 3, 4]
+[1, 4, 9, 16]
+</code></pre>
+<p>Bindings persist across lines; you may rethink and refine definitions live. Many common functions like <code>map</code>, <code>filter</code>, and <code>fold</code> are available automatically because they are part of the prelude.</p>
+<h2 id="next-steps"><a class="header" href="#next-steps">Next Steps</a></h2>
+<ul>
+<li>Read the full <a href="#milang-syntax-cheatsheet">syntax cheatsheet</a>.</li>
+<li>Inspect reduction with <code>./milang reduce</code> (see <a href="#partial-evaluation">Partial Evaluation</a>).</li>
+<li>Try the larger examples in the repository root.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="how-milang-works"><a class="header" href="#how-milang-works">How Milang Works</a></h1>
+<p>Milang’s compilation pipeline has four stages:</p>
+<pre><code class="language-bash">source.mi -&gt; Parser -&gt; Import Resolution -&gt; Partial Evaluator -&gt; C Codegen -&gt; gcc
+</code></pre>
+<p>Each stage is a pure transformation of the AST, except for import resolution (which reads files and URLs) and the final gcc invocation.</p>
+<h2 id="1-parser"><a class="header" href="#1-parser">1. Parser</a></h2>
+<p>The parser is indentation-sensitive — nested blocks are determined by whitespace, similar to Haskell or Python.</p>
+<p>There are <strong>zero keywords</strong> in milang. Everything that looks like a keyword — <code>if</code>, <code>import</code>, <code>true</code>, <code>false</code> — is actually a function or value defined in the prelude. The parser only needs to recognize:</p>
+<ul>
+<li><strong>Bindings</strong> across five annotation domains: <code>=</code> (value), <code>::</code> (type), <code>:~</code> (traits), <code>:?</code> (docs), <code>:!</code> (parse)</li>
+<li><strong>Expressions</strong>: literals, application, operators, lambdas, records, lists, pattern match (<code>-&gt;</code>)</li>
+<li><strong>Operators</strong>: parsed with configurable precedence (<code>:!</code> declarations can define new ones)</li>
+</ul>
+<p>The output is a single <code>Expr</code> AST type with variants like <code>IntLit</code>, <code>App</code>, <code>Lam</code>, <code>Namespace</code>, <code>Record</code>, <code>Match</code>, and so on.</p>
+<h2 id="2-import-resolution"><a class="header" href="#2-import-resolution">2. Import Resolution</a></h2>
+<p>When the parser encounters <code>import "path.mi"</code>, the import resolver:</p>
+<ol>
+<li><strong>Reads the file</strong> (local path or URL)</li>
+<li><strong>Parses it</strong> into an AST</li>
+<li><strong>Recursively resolves</strong> its imports</li>
+<li><strong>Returns a record</strong> of the module’s exported bindings</li>
+</ol>
+<p>Import types:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Syntax</th><th>Source</th></tr>
+</thead>
+<tbody>
+<tr><td><code>import "lib/utils.mi"</code></td><td>Local file (relative to importing file)</td></tr>
+<tr><td><code>import "https://example.com/lib.mi"</code></td><td>URL (downloaded and cached)</td></tr>
+<tr><td><code>import "/usr/include/math.h"</code></td><td>C header (extracts function signatures for FFI)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>URL security:</strong> URL imports must be pinned with a SHA-256 hash using <code>import'</code> and a hash record. The <code>milang pin</code> command fetches imports and writes the hashes back into your source file. The hash covers the content of the import and all of its transitive sub-imports (a Merkle hash), so any tampering is detected.</p>
+<p><strong>Circular imports</strong> are handled by returning only the non-import bindings from the cycle and marking the recursive reference as a lazy thunk.</p>
+<h2 id="3-partial-evaluator"><a class="header" href="#3-partial-evaluator">3. Partial Evaluator</a></h2>
+<p>The partial evaluator is the heart of the compiler. It walks the AST and <strong>reduces every expression it can</strong> given the values it knows at compile time.</p>
+<p>Consider:</p>
+<pre><code class="language-milang">double x = x * 2
+y = double 21
+</code></pre>
+<pre><code>double = &lt;closure&gt;
+y = 42
+</code></pre>
+<p>The partial evaluator sees that <code>double</code> is fully known and <code>21</code> is a literal, so it evaluates <code>double 21</code> at compile time. The result in the reduced AST is simply <code>y = 42</code> — the function call has been eliminated entirely.</p>
+<p>Key techniques:</p>
+<ul>
+<li><strong>Strongly Connected Component (SCC) analysis</strong> — bindings are sorted by dependency so each group can be reduced in order.</li>
+<li><strong>Depth-limited recursion</strong> — recursive functions are unrolled a fixed number of times. If the result converges (reaches a base case), it becomes a compile-time constant. Otherwise, the function is left as runtime code.</li>
+<li><strong>Environment threading</strong> — the evaluator carries a map of known bindings. When a binding’s value is fully determined, it’s substituted into all uses.</li>
+</ul>
+<p>The partial evaluator <strong>is</strong> the optimizer. There is no separate optimization pass. Any abstraction that is fully known at compile time — constants, configuration, helper functions applied to literals, record construction — is resolved to a value before code generation.</p>
+<h2 id="4-c-code-generation"><a class="header" href="#4-c-code-generation">4. C Code Generation</a></h2>
+<p>The code generator takes the reduced AST and emits a single, self-contained C file. This file includes:</p>
+<ul>
+<li><strong>An embedded runtime</strong> — an arena allocator, a tagged union value type (<code>MiVal</code>), environment chains, and built-in functions.</li>
+<li><strong>Arena allocation</strong> — all milang values are allocated from 1 MB arena blocks with 8-byte alignment. There is no garbage collector; arenas are freed in bulk.</li>
+<li><strong>Tagged unions</strong> — every runtime value is a <code>MiVal</code> with a <code>tag</code> (<code>MI_INT</code>, <code>MI_FLOAT</code>, <code>MI_STRING</code>, <code>MI_CLOSURE</code>, <code>MI_RECORD</code>, etc.) and a payload.</li>
+<li><strong>Tail-call optimization</strong> — <code>tail</code> calls are compiled to <code>goto</code> jumps, so recursive functions run in constant stack space.</li>
+<li><strong>Closures</strong> — functions that capture variables are represented as a code pointer plus an environment chain of bindings.</li>
+</ul>
+<p>The generated C compiles with <code>gcc</code> (or <code>clang</code>) and links against the standard C library:</p>
+<pre><code class="language-bash">gcc output.c -o program
+</code></pre>
+<h2 id="the-key-insight"><a class="header" href="#the-key-insight">The Key Insight</a></h2>
+<p>Because the partial evaluator runs at compile time, <strong>high-level abstractions often have zero runtime cost</strong>. A chain of helper functions, a configuration record, a computed lookup table — if the inputs are known at compile time, none of that code exists in the generated binary. Only expressions that depend on runtime values (IO, user input, command-line arguments) survive into the emitted C.</p>
+<h2 id="debugging-the-pipeline"><a class="header" href="#debugging-the-pipeline">Debugging the Pipeline</a></h2>
+<p>Two compiler commands let you inspect intermediate stages:</p>
+<ul>
+<li><strong><code>milang dump file.mi</code></strong> — shows the parsed AST before import resolution. Useful for checking how the parser interpreted your syntax.</li>
+<li><strong><code>milang reduce file.mi</code></strong> — shows the AST after partial evaluation. This is what the code generator sees. Use it to verify that compile-time computation happened as expected.</li>
+</ul>
+<pre><code class="language-bash">./milang dump myfile.mi    # parsed AST
+./milang reduce myfile.mi  # after partial evaluation
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="milang-syntax-cheatsheet"><a class="header" href="#milang-syntax-cheatsheet">Milang Syntax Cheatsheet</a></h1>
+<p>Milang is a functional language with <strong>zero keywords</strong>, Haskell-like syntax, and
+partial evaluation as the core compilation model. Everything is an expression.</p>
+<h2 id="literals"><a class="header" href="#literals">Literals</a></h2>
+<pre><code class="language-text">42              -- integer
+3.14            -- float
+"hello"         -- string (supports \n \t \\ \")
+"""
+  multi-line    -- triple-quoted string (Swift-style margin stripping)
+  string        -- closing """ indentation defines the margin
+  """
+[]              -- empty list (Nil record)
+[1, 2, 3]      -- list literal (desugars to Cons/Nil chain)
+</code></pre>
+<h2 id="bindings"><a class="header" href="#bindings">Bindings</a></h2>
+<pre><code class="language-milang">x = 42                    -- value binding
+f x y = x + y             -- function binding (params before =)
+lazy := expensive_calc    -- lazy binding (thunk, evaluated on first use)
+</code></pre>
+<h2 id="functions--application"><a class="header" href="#functions--application">Functions &amp; Application</a></h2>
+<pre><code class="language-milang">f x y = x + y             -- define: name params = body
+f 3 4                     -- apply: juxtaposition (left-associative)
+(\x -&gt; x + 1)             -- lambda
+(\x y -&gt; x + y)           -- multi-param lambda
+f 3 |&gt; g                  -- pipe: g (f 3)
+f &gt;&gt; g                    -- compose left-to-right: \x -&gt; g (f x)
+f &lt;&lt; g                    -- compose right-to-left: \x -&gt; f (g x)
+</code></pre>
+<h2 id="operators"><a class="header" href="#operators">Operators</a></h2>
+<p>All operators are just functions. Standard arithmetic, comparison, logical:</p>
+<pre><code class="language-text">+ - * / % **              -- arithmetic (** is power)
+== /= &lt; &gt; &lt;= &gt;=           -- comparison
+&amp;&amp; ||                     -- logical (short-circuit)
+not x                     -- logical negation (function, not operator)
++ `+`                       -- string concat (use `+` for both numeric and string)
+:                         -- cons (right-assoc): 1 : 2 : [] = [1, 2]
+</code></pre>
+<p>Operators as functions and functions as operators:</p>
+<pre><code class="language-milang">(+) 3 4                   -- operator in prefix: 7
+3 `add` 4                 -- function in infix (backtick syntax)
+</code></pre>
+<h2 id="records"><a class="header" href="#records">Records</a></h2>
+<pre><code class="language-text">-- Anonymous record
+point = {x = 3; y = 4}
+
+-- Field access
+point.x                       -- 3
+
+-- Positional access (by declaration order)
+point._0                      -- 3 (first field)
+
+-- Record update
+point2 = point &lt;- {x = 10}      -- {x = 10, y = 4}
+
+-- Nested access
+world.io.println              -- chained field access
+
+-- Destructuring
+{x; y} = point               -- binds x=3, y=4
+{myX = x; myY = y} = point   -- binds myX=3, myY=4
+
+-- Parsing gotcha
+-- When passing a record literal directly as an argument you may need to parenthesize
+-- the literal or bind it to a name to avoid parse ambiguity. For example:
+--   -- may need parentheses
+--   getField ({a = 1}) "a"
+--   -- or bind first
+--   r = {a = 1}
+--   getField r "a"
+</code></pre>
+<h2 id="adts-algebraic-data-types"><a class="header" href="#adts-algebraic-data-types">ADTs (Algebraic Data Types)</a></h2>
+<p>Uppercase bindings with braces declare tagged constructors:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+
+-- Creates constructors:
+c = Circle 5              -- {radius = 5} tagged "Circle"
+r = Rect 3 4              -- {width = 3, height = 4} tagged "Rect"
+
+-- Named fields also work:
+Shape = {Circle {radius}; Rect {width; height}}
+</code></pre>
+<h2 id="pattern-matching"><a class="header" href="#pattern-matching">Pattern Matching</a></h2>
+<p>The <code>-&gt;</code> operator introduces match alternatives:</p>
+<pre><code class="language-text">-- Inline alternatives (separated by ;)
+f x = x -&gt; 0 = "zero"; 1 = "one"; _ = "other"
+
+-- Indented alternatives
+f x = x -&gt;
+  0 = "zero"
+  1 = "one"
+  _ = "other"
+
+-- Pattern types
+42                        -- literal match
+x                         -- variable (binds anything)
+_                         -- wildcard (match, don't bind)
+Circle                    -- constructor tag match
+Rect                      -- constructor tag match (fields accessible via .field)
+[a, b, c]                 -- list pattern (exact length)
+[first, ...rest]          -- list pattern with spread
+
+-- Guards (| condition = body)
+abs x = x -&gt;
+  n | n &gt;= 0 = n
+  n = 0 - n
+
+-- Pattern matching in case expressions
+area s = s -&gt;
+  Circle = 3.14 * s.radius * s.radius
+  Rect = s.width * s.height
+</code></pre>
+<h2 id="scopes--multi-line-bodies"><a class="header" href="#scopes--multi-line-bodies">Scopes &amp; Multi-line Bodies</a></h2>
+<p>Indented lines under a binding form a scope:</p>
+<pre><code class="language-milang">-- With explicit body expression (body = the expression after =)
+compute x = result
+  doubled = x * 2
+  result = doubled + 1
+-- Returns: value of `result` (15 when x=7)
+
+-- Without body expression (scope returns implicit record)
+makeVec x y =
+  dx = x ** 2
+  dy = y ** 2
+  sumSquares = dx + dy
+-- Returns: {dx = 49, dy = 9, sumSquares = 58}
+
+-- Bare expressions in scopes evaluate for effect, not included in record
+main world =
+  world.io.println "hello"       -- effect: prints, result discarded
+  world.io.println "world"       -- effect: prints, result discarded
+</code></pre>
+<p>Inline scopes use braces:</p>
+<pre><code class="language-milang">f x = result { doubled = x * 2; result = doubled + 1 }
+</code></pre>
+<h2 id="io--the-world"><a class="header" href="#io--the-world">IO &amp; the World</a></h2>
+<p>IO uses capability-based design. <code>main</code> receives <code>world</code>:</p>
+<pre><code class="language-milang">main world =
+  world.io.println "hello"              -- print line
+  world.io.print "no newline"           -- print without newline
+  line = world.io.readLine              -- read line from stdin
+  contents = world.fs.read.file "f"     -- read file
+  world.fs.write.file "f" "data"        -- write file
+  world.fs.write.append "f" "more"      -- append to file
+  exists = world.fs.read.exists "f"     -- check file exists
+  world.fs.write.remove "f"             -- delete file
+  result = world.process.exec "ls"      -- run shell command
+  world.process.exit 1                  -- exit with code
+  args = world.argv                     -- command-line args (list)
+  val = world.getEnv "PATH"             -- environment variable
+  0
+
+-- Pass restricted capabilities to helpers
+greet io = io.println "hello"
+main world = greet world.io          -- only give IO, not process/fs
+</code></pre>
+<pre><code>hello
+</code></pre>
+<p><code>main</code>’s return value is the process exit code (int -&gt; exit code, non-int -&gt; 0).</p>
+<h2 id="imports"><a class="header" href="#imports">Imports</a></h2>
+<pre><code class="language-text">-- Local file import (result is a record of all top-level bindings)
+math = import "lib/math.mi"
+x = math.square 5
+
+-- URL import (cached locally)
+lib = import "https://example.com/lib.mi"
+
+-- URL import with sha256 pinning (required for reproducibility)
+lib = import' "https://example.com/lib.mi" ({sha256 = "a1b2c3..."})
+
+-- C header import (auto-parses function signatures)
+m = import "/usr/include/math.h"
+x = m.sin 1.0
+
+-- C header with source file linking
+lib = import' "mylib.h" ({src = "mylib.c"})
+
+-- C header with extended options
+lib = import' "mylib.h" ({
+  sources = ["a.c", "b.c"]
+  flags = "-O2"
+  include = "include"
+  pkg = "libpng"
+})
+</code></pre>
+<p>Binding names are always lowercase. Uppercase names are reserved for type
+declarations (union types, record constructors, type annotations).</p>
+<p>Use <code>milang pin &lt;file&gt;</code> to auto-discover URL imports and add sha256 hashes.</p>
+<h2 id="annotation-domains"><a class="header" href="#annotation-domains">Annotation Domains</a></h2>
+<p>Milang has five binding domains, each with its own operator:</p>
+<pre><code class="language-milang">-- Value domain (=) — what it computes
+add a b = a + b
+
+-- Type domain (::) — structural type annotation
+add :: Num : Num : Num
+
+-- Sized numeric types: Int', UInt', Float' take a bit width
+-- Prelude aliases: Int = Int' 64, UInt = UInt' 64, Float = Float' 64, Byte = UInt' 8
+add8 :: Int' 8 : Int' 8 : Int' 8
+
+-- Traits domain (:~) — computational attributes / effect sets
+add :~ pure                          -- pure = [] (no effects)
+greet :~ [console]                   -- needs console capability
+server :~ [console, fs.read, fs.write]
+
+-- Documentation domain (:?) — human-readable docs
+add :? "Add two numbers"
+add :? {summary = "Add two numbers"; params = {a = "First"; b = "Second"}}
+add :? """
+  Add two numbers together.
+  Returns their sum.
+  """
+
+-- Parse domain (:!) — operator precedence/associativity
+(+) :! {prec = 6; assoc = Left}
+
+-- All domains can coexist on one binding:
+distance :? "Euclidean distance"
+distance :: Point : Point : Num
+distance :~ pure
+distance p1 p2 = (p2.x - p1.x)**2 + (p2.y - p1.y)**2
+</code></pre>
+<h2 id="thunks--laziness"><a class="header" href="#thunks--laziness">Thunks &amp; Laziness</a></h2>
+<pre><code class="language-milang">~expr                   -- thunk: delays evaluation
+x := expensive          -- lazy binding: creates thunk, evaluates once on use
+</code></pre>
+<h2 id="metaprogramming"><a class="header" href="#metaprogramming">Metaprogramming</a></h2>
+<pre><code class="language-milang">#expr                   -- quote: capture AST as a record
+$expr                   -- splice: evaluate quoted AST back to code
+f #param = $param       -- auto-quote param: compiler quotes arg at call site
+</code></pre>
+<h2 id="comments"><a class="header" href="#comments">Comments</a></h2>
+<pre><code class="language-text">-- line comment
+/* block comment (nestable) */
+</code></pre>
+<h2 id="built-in-functions"><a class="header" href="#built-in-functions">Built-in Functions</a></h2>
+<h3 id="core"><a class="header" href="#core">Core</a></h3>
+<ul>
+<li><code>if cond then else</code> — conditional (auto-quotes branches via <code>#</code>-params)</li>
+<li><code>len xs</code> — length of string or list</li>
+<li><code>toString x</code> — convert to string</li>
+<li><code>toInt s</code> — parse string to int; returns <code>Just</code> on success, <code>Nothing</code> on failure</li>
+<li><code>toFloat s</code> — parse string to float; returns <code>Just</code> on success, <code>Nothing</code> on failure</li>
+</ul>
+<h3 id="string"><a class="header" href="#string">String</a></h3>
+<ul>
+<li><code>charAt i s</code> — character at index; returns <code>Just</code> character when index valid, otherwise <code>Nothing</code></li>
+<li><code>slice start end s</code> — substring</li>
+<li><code>indexOf needle haystack</code> — find substring (-1 if not found)</li>
+<li><code>split sep s</code> — split string by separator</li>
+<li><code>trim s</code> — strip whitespace</li>
+<li><code>toUpper s</code> / <code>toLower s</code> — case conversion</li>
+<li><code>replace old new s</code> — string replacement</li>
+</ul>
+<h3 id="list-prelude"><a class="header" href="#list-prelude">List (prelude)</a></h3>
+<ul>
+<li><code>head xs</code> / <code>tail xs</code> / <code>last xs</code> / <code>init xs</code> — return <code>Maybe</code> (<code>Just</code> value or <code>Nothing</code>)</li>
+<li><code>map f xs</code> / <code>filter f xs</code> / <code>fold f acc xs</code></li>
+<li><code>concat xs ys</code> / <code>push xs x</code> / <code>reverse xs</code></li>
+<li><code>take n xs</code> / <code>drop n xs</code> / <code>slice start end xs</code></li>
+<li><code>zip xs ys</code> / <code>enumerate xs</code> / <code>range start end</code></li>
+<li><code>sum xs</code> / <code>product xs</code> / <code>join sep xs</code></li>
+<li><code>any f xs</code> / <code>all f xs</code> / <code>contains x xs</code></li>
+<li><code>at lst i</code> / <code>at' i lst</code> — element at index (returns <code>Maybe</code>)</li>
+<li><code>sort xs</code> / <code>sortBy f xs</code></li>
+</ul>
+<h3 id="record-introspection"><a class="header" href="#record-introspection">Record introspection</a></h3>
+<ul>
+<li><code>fields r</code> — list of <code>{name, value}</code> records</li>
+<li><code>fieldNames r</code> — list of field name strings</li>
+<li><code>tag r</code> — constructor <code>tag</code> string (or “”)</li>
+<li><code>getField r name</code> — dynamic field access; returns <code>Just value</code> if present, otherwise <code>Nothing</code>.</li>
+<li><code>setField r name val</code> — return new record with field set</li>
+</ul>
+<h3 id="utility"><a class="header" href="#utility">Utility</a></h3>
+<ul>
+<li><code>id x</code> / <code>const x y</code> / <code>flip f x y</code></li>
+<li><code>abs x</code> / <code>min a b</code> / <code>max a b</code></li>
+</ul>
+<h2 id="compiler-modes"><a class="header" href="#compiler-modes">Compiler Modes</a></h2>
+<pre><code class="language-bash">milang run file.mi          # compile + run
+milang compile file.mi o.c  # emit C code
+milang dump file.mi         # show parsed AST
+milang reduce file.mi       # show partially-evaluated AST
+milang repl                 # interactive REPL
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="values--literals"><a class="header" href="#values--literals">Values &amp; Literals</a></h1>
+<p>This chapter covers the literal forms you can write directly in source code.</p>
+<h2 id="integers"><a class="header" href="#integers">Integers</a></h2>
+<p>Integer literals are written as decimal digits. Negative integers use a leading
+minus sign attached to the literal. At compile time integers have arbitrary
+precision; at runtime they default to <code>int64_t</code> (signed 64-bit).</p>
+<p>The type system supports sized integers via <code>Int'</code> (signed) and <code>UInt'</code>
+(unsigned) type constructors that take a bit width: <code>Int' 8</code>, <code>Int' 32</code>,
+<code>UInt' 64</code>, etc. The prelude provides aliases: <code>Int = Int' 64</code>,
+<code>UInt = UInt' 64</code>, <code>Byte = UInt' 8</code>.</p>
+<pre><code class="language-milang">small = 42
+zero = 0
+negative = -3
+big = 2 ** 32
+</code></pre>
+<pre><code>small = 42
+zero = 0
+negative = -3
+big = 4294967296
+</code></pre>
+<h2 id="floats"><a class="header" href="#floats">Floats</a></h2>
+<p>Floating-point literals require digits on both sides of the decimal point.
+They default to C <code>double</code> (64-bit). Negative floats use a leading minus sign.
+Sized floats are available via <code>Float'</code>: <code>Float' 32</code> for single precision,
+<code>Float' 64</code> for double precision. The prelude alias <code>Float = Float' 64</code>.</p>
+<pre><code class="language-milang">pi = 3.14
+half = 0.5
+neg = -2.718
+</code></pre>
+<pre><code>pi = 3.14
+half = 0.5
+</code></pre>
+<h2 id="strings"><a class="header" href="#strings">Strings</a></h2>
+<p>Strings are double-quoted and support the escape sequences <code>\n</code>, <code>\t</code>, <code>\\</code>,
+and <code>\"</code>.</p>
+<pre><code class="language-milang">greeting = "hello, world"
+escaped = "line one\nline two"
+length = len greeting
+</code></pre>
+<pre><code>greeting = hello, world
+escaped = line one
+line two
+length = 12
+</code></pre>
+<h3 id="triple-quoted-strings"><a class="header" href="#triple-quoted-strings">Triple-Quoted Strings</a></h3>
+<p>Triple-quoted strings span multiple lines with automatic margin stripping
+(Swift-style). The indentation of the closing <code>"""</code> defines the margin —
+everything to the left of that column is removed.</p>
+<pre><code class="language-milang">msg = """
+  Hello, world!
+    indented line
+  """
+</code></pre>
+<pre><code>msg = Hello, world!
+  indented line
+</code></pre>
+<h2 id="booleans"><a class="header" href="#booleans">Booleans</a></h2>
+<p>There is no dedicated boolean type. Milang uses integers: <code>1</code> is true, <code>0</code> is
+false. Comparison and logical operators return <code>1</code> or <code>0</code>, and <code>if</code> treats <code>0</code>
+as false and any non-zero value as true.</p>
+<pre><code class="language-milang">yes = 1
+no = 0
+check = 3 &gt; 2
+</code></pre>
+<pre><code>yes = 1
+no = 0
+check = 1
+</code></pre>
+<h2 id="lists"><a class="header" href="#lists">Lists</a></h2>
+<p>Lists are linked-list cons cells declared in the prelude as
+<code>List = {Nil; Cons head tail}</code>. The literal syntax <code>[1, 2, 3]</code> desugars into
+a chain of <code>Cons</code>/<code>Nil</code> records. The cons operator <code>:</code> is right-associative.</p>
+<pre><code class="language-milang">nums = [1, 2, 3]
+empty = []
+consed = 10 : 20 : 30 : []
+</code></pre>
+<pre><code>nums = [1, 2, 3]
+empty = []
+consed = [10, 20, 30]
+</code></pre>
+<p>See the <a href="#lists-1">Lists</a> chapter for the full prelude API.</p>
+<h2 id="records-1"><a class="header" href="#records-1">Records</a></h2>
+<p>A record is a set of named <code>fields</code> enclosed in braces and separated by <code>;</code> or
+newlines.</p>
+<pre><code class="language-milang">point = {x = 3; y = 4}
+access = point.x + point.y
+</code></pre>
+<pre><code>point =  {x = 3, y = 4}
+access = 7
+</code></pre>
+<p>See the <a href="#records--adts">Records &amp; ADTs</a> chapter for updates, destructuring, and
+algebraic data types.</p>
+<h2 id="constructors"><a class="header" href="#constructors">Constructors</a></h2>
+<p>An uppercase name applied to arguments creates a tagged record. Tags are
+introduced by ADT declarations or used ad-hoc.</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+c = Circle 5
+r = Rect 3 4
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+c = Circle {radius = 5}
+r = Rect {width = 3, height = 4}
+</code></pre>
+<h2 id="functions-as-values"><a class="header" href="#functions-as-values">Functions as Values</a></h2>
+<p>Functions are first-class values. They can be bound to names, passed as
+arguments, and returned from other functions. A function that has not received
+all of its arguments displays as <code>&lt;closure&gt;</code>.</p>
+<pre><code class="language-milang">add x y = x + y
+inc = add 1
+result = inc 10
+</code></pre>
+<pre><code>add = &lt;closure&gt;
+inc = &lt;closure&gt;
+result = 11
+</code></pre>
+<p>See the <a href="#functions">Functions</a> chapter for lambdas, pipes, and more.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="functions"><a class="header" href="#functions">Functions</a></h1>
+<p>Functions are defined with a name, parameters, <code>=</code>, and a body. All functions
+are first-class, automatically curried, and can be used anywhere a value is
+expected.</p>
+<h2 id="definition"><a class="header" href="#definition">Definition</a></h2>
+<p>A function binding lists its parameters before <code>=</code>. The body is a single
+expression or an indented scope.</p>
+<pre><code class="language-milang">add x y = x + y
+result = add 3 4
+</code></pre>
+<pre><code>add = &lt;closure&gt;
+result = 7
+</code></pre>
+<p>When the body needs local bindings, indent them under an explicit result
+expression:</p>
+<pre><code class="language-milang">distance x1 y1 x2 y2 = result
+  dx = (x2 - x1) ** 2
+  dy = (y2 - y1) ** 2
+  result = dx + dy
+a = distance 0 0 3 4
+</code></pre>
+<pre><code>distance = &lt;closure&gt;
+a = 25
+</code></pre>
+<h2 id="application"><a class="header" href="#application">Application</a></h2>
+<p>Function application is juxtaposition (space-separated), and it is
+left-associative: <code>f a b</code> means <code>(f a) b</code>.</p>
+<pre><code class="language-milang">add 3 4          -- 7
+(add 3) 4        -- same thing
+</code></pre>
+<h2 id="lambdas"><a class="header" href="#lambdas">Lambdas</a></h2>
+<p>Anonymous functions use <code>\params -&gt; body</code>.</p>
+<pre><code class="language-milang">double = \x -&gt; x * 2
+add = \x y -&gt; x + y
+a = double 5
+b = add 3 4
+</code></pre>
+<pre><code>double = &lt;closure&gt;
+add = &lt;closure&gt;
+a = 10
+b = 7
+</code></pre>
+<p>Lambdas are ordinary values and appear frequently as arguments to higher-order
+functions.</p>
+<h2 id="currying--partial-application"><a class="header" href="#currying--partial-application">Currying &amp; Partial Application</a></h2>
+<p>Every function is automatically curried. Supplying fewer arguments than a
+function expects returns a new function that waits for the remaining ones.</p>
+<pre><code class="language-milang">add x y = x + y
+add5 = add 5
+result = add5 10
+</code></pre>
+<pre><code>add = &lt;closure&gt;
+add5 = &lt;closure&gt;
+result = 15
+</code></pre>
+<p>This makes it natural to build specialised functions on the fly:</p>
+<pre><code class="language-milang">doubled = map (\x -&gt; x * 2) [1, 2, 3, 4]
+evens = filter (\x -&gt; x % 2 == 0) [1, 2, 3, 4, 5, 6]
+total = fold (+) 0 [1, 2, 3, 4, 5]
+</code></pre>
+<pre><code>doubled = [2, 4, 6, 8]
+evens = [2, 4, 6]
+total = 15
+</code></pre>
+<h2 id="pipes--composition"><a class="header" href="#pipes--composition">Pipes &amp; Composition</a></h2>
+<p>The pipe operator <code>|&gt;</code> passes a value as the <code>last</code> argument to a function,
+reading left-to-right:</p>
+<pre><code class="language-milang">result = [1, 2, 3, 4, 5] \
+  |&gt; map (\x -&gt; x * 2) \
+  |&gt; filter (\x -&gt; x &gt; 4) \
+  |&gt; sum
+</code></pre>
+<pre><code>result = 24
+</code></pre>
+<p>Composition operators combine functions without naming an intermediate value.
+<code>&gt;&gt;</code> composes left-to-right and <code>&lt;&lt;</code> composes right-to-left:</p>
+<pre><code class="language-milang">double x = x * 2
+inc x = x + 1
+double_then_inc = double &gt;&gt; inc
+inc_then_double = inc &gt;&gt; double
+a = double_then_inc 5
+b = inc_then_double 5
+</code></pre>
+<pre><code>double = &lt;closure&gt;
+inc = &lt;closure&gt;
+double_then_inc = &lt;closure&gt;
+inc_then_double = &lt;closure&gt;
+a = 11
+b = 12
+</code></pre>
+<h2 id="recursion--tail-call-optimisation"><a class="header" href="#recursion--tail-call-optimisation">Recursion &amp; Tail-Call Optimisation</a></h2>
+<p>Functions can reference themselves by name. Milang detects self-calls (and
+mutual calls) in <code>tail</code> position and compiles them with goto-based trampolining,
+so they run in constant stack space.</p>
+<pre><code class="language-milang">factorial n = if (n == 0) 1 (n * factorial (n - 1))
+result = factorial 10
+</code></pre>
+<pre><code>factorial = &lt;closure&gt;
+result = 3628800
+</code></pre>
+<p>A <code>tail</code>-recursive accumulator style avoids building up a chain of multiplications:</p>
+<pre><code class="language-milang">fac_acc acc n = if (n == 0) acc (fac_acc (acc * n) (n - 1))
+result = fac_acc 1 20
+</code></pre>
+<pre><code>fac_acc = &lt;closure&gt;
+result = 2432902008176640000
+</code></pre>
+<h2 id="higher-order-functions"><a class="header" href="#higher-order-functions">Higher-Order Functions</a></h2>
+<p>A higher-order function accepts or returns another function.</p>
+<pre><code class="language-milang">twice f x = f (f x)
+inc x = x + 1
+a = twice inc 3
+b = twice (\x -&gt; x * 2) 3
+</code></pre>
+<pre><code>twice = &lt;closure&gt;
+inc = &lt;closure&gt;
+a = 5
+b = 12
+</code></pre>
+<h2 id="if-is-a-function"><a class="header" href="#if-is-a-function"><code>if</code> Is a Function</a></h2>
+<p>Milang has zero keywords. <code>if</code> is an ordinary user-defined function in the
+prelude. It uses <strong>auto-quote parameters</strong> (<code>#param</code>) so the compiler
+automatically delays evaluation of each branch — only the chosen one runs:</p>
+<pre><code class="language-milang">if (x &gt; 0) "positive" "non-positive"
+</code></pre>
+<p>No special syntax is needed at the call site. The <code>if</code> definition uses <code>#t</code>
+and <code>#e</code> parameters which trigger automatic quoting; inside the body, <code>$t</code> and
+<code>$e</code> splice (evaluate) only the selected branch. See the
+<a href="#metaprogramming-1">Metaprogramming</a> chapter for details on auto-quote params,
+and <a href="#thunks--laziness-1">Thunks &amp; Laziness</a> for the older <code>~</code> approach.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="operators-1"><a class="header" href="#operators-1">Operators</a></h1>
+<p>Operators in milang are ordinary functions with special syntax. Every operator
+can be used in prefix form by wrapping it in parentheses, and any function can
+be used infix with backtick syntax.</p>
+<h2 id="arithmetic"><a class="header" href="#arithmetic">Arithmetic</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Operator</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>+</code></td><td>Addition (also string concatenation)</td></tr>
+<tr><td><code>-</code></td><td>Subtraction</td></tr>
+<tr><td><code>*</code></td><td>Multiplication</td></tr>
+<tr><td><code>/</code></td><td>Division (integer for ints, float for floats)</td></tr>
+<tr><td><code>%</code></td><td>Modulo (integers only)</td></tr>
+<tr><td><code>**</code></td><td>Exponentiation (integer exponent)</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-milang">a = 2 + 3
+b = 10 - 4
+c = 3 * 7
+d = 10 / 3
+e = 10 % 3
+f = 2 ** 10
+</code></pre>
+<pre><code>a = 5
+b = 6
+c = 21
+d = 3
+e = 1
+f = 1024
+</code></pre>
+<p>Float division produces a decimal result:</p>
+<pre><code class="language-milang">a = 7.0 / 2.0
+b = 3.14 * 2.0
+</code></pre>
+<pre><code>a = 3.5
+b = 6.28
+</code></pre>
+<h2 id="comparison"><a class="header" href="#comparison">Comparison</a></h2>
+<p>Comparison operators return <code>1</code> (true) or <code>0</code> (false). <code>==</code> and <code>/=</code> work
+structurally on records, lists, and strings.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Operator</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>==</code></td><td>Equal</td></tr>
+<tr><td><code>/=</code></td><td>Not equal</td></tr>
+<tr><td><code>&lt;</code></td><td>Less than</td></tr>
+<tr><td><code>&gt;</code></td><td>Greater than</td></tr>
+<tr><td><code>&lt;=</code></td><td>Less than or equal</td></tr>
+<tr><td><code>&gt;=</code></td><td>Greater than or equal</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-milang">a = 3 == 3
+b = 3 /= 4
+c = 5 &gt; 2
+d = [1, 2] == [1, 2]
+e = "hello" == "hello"
+</code></pre>
+<pre><code>a = 1
+b = 1
+c = 1
+d = 1
+e = 1
+</code></pre>
+<h2 id="logical"><a class="header" href="#logical">Logical</a></h2>
+<p>Logical operators short-circuit and return <code>1</code> or <code>0</code>. <code>not</code> is a function,
+not an operator.</p>
+<pre><code class="language-milang">a = 1 &amp;&amp; 1
+b = 1 &amp;&amp; 0
+c = 0 || 1
+d = 0 || 0
+e = not 0
+f = not 1
+</code></pre>
+<pre><code>a = 1
+b = 0
+c = 1
+d = 0
+e = 1
+f = 0
+</code></pre>
+<p>Short-circuit evaluation means the right-hand side is never forced when the
+left side determines the result:</p>
+<pre><code class="language-milang">safe = 0 &amp;&amp; (1 / 0)   -- 0, right side never evaluated
+</code></pre>
+<h2 id="string-concatenation"><a class="header" href="#string-concatenation">String Concatenation</a></h2>
+<p>The <code>+</code> operator also concatenates strings:</p>
+<pre><code class="language-milang">greeting = "hello" + " " + "world"
+</code></pre>
+<pre><code>greeting = hello world
+</code></pre>
+<h2 id="cons"><a class="header" href="#cons">Cons</a></h2>
+<p>The <code>:</code> operator prepends an element to a list. It is right-associative.</p>
+<pre><code class="language-milang">xs = 1 : 2 : 3 : []
+</code></pre>
+<pre><code>xs = [1, 2, 3]
+</code></pre>
+<h2 id="pipe"><a class="header" href="#pipe">Pipe</a></h2>
+<p><code>x |&gt; f</code> is syntactic sugar for <code>f x</code>, enabling left-to-right data flow:</p>
+<pre><code class="language-milang">double x = x * 2
+result = 5 |&gt; double
+</code></pre>
+<pre><code>double = &lt;closure&gt;
+result = 10
+</code></pre>
+<h2 id="composition"><a class="header" href="#composition">Composition</a></h2>
+<p><code>f &gt;&gt; g</code> composes left-to-right (<code>\x -&gt; g (f x)</code>).
+<code>f &lt;&lt; g</code> composes right-to-left (<code>\x -&gt; f (g x)</code>).</p>
+<pre><code class="language-milang">double x = x * 2
+inc x = x + 1
+pipeline = double &gt;&gt; inc
+a = pipeline 5
+</code></pre>
+<pre><code>double = &lt;closure&gt;
+inc = &lt;closure&gt;
+pipeline = &lt;closure&gt;
+a = 11
+</code></pre>
+<h2 id="record-merge"><a class="header" href="#record-merge">Record Merge</a></h2>
+<p><code>a &lt;- b</code> produces a new record with all <code>fields</code> from <code>a</code>, overwritten by <code>fields</code>
+from <code>b</code>:</p>
+<pre><code class="language-milang">base = {x = 1; y = 2; z = 3}
+updated = base &lt;- {x = 10; z = 30}
+</code></pre>
+<pre><code>base =  {x = 1, y = 2, z = 3}
+updated =  {x = 10, y = 2, z = 30}
+</code></pre>
+<h2 id="operators-as-functions"><a class="header" href="#operators-as-functions">Operators as Functions</a></h2>
+<p>Wrap any operator in parentheses to use it in prefix (function) position:</p>
+<pre><code class="language-milang">a = (+) 3 4
+b = (*) 5 6
+total = fold (+) 0 [1, 2, 3, 4, 5]
+</code></pre>
+<pre><code>a = 7
+b = 30
+total = 15
+</code></pre>
+<h2 id="functions-as-infix-operators"><a class="header" href="#functions-as-infix-operators">Functions as Infix Operators</a></h2>
+<p>Surround a function name with backticks to use it as an infix operator:</p>
+<pre><code class="language-milang">bigger = 3 `max` 7
+smaller = 3 `min` 7
+</code></pre>
+<pre><code>bigger = 7
+smaller = 3
+</code></pre>
+<h2 id="user-defined-operators"><a class="header" href="#user-defined-operators">User-Defined Operators</a></h2>
+<p>You can define custom operators just like functions. Precedence and
+associativity are set with the parse domain <code>:!</code>. See the
+<a href="#parse-declarations-">Parse Declarations</a> and <a href="#user-defined-operators-1">User Operators</a>
+chapters for details.</p>
+<pre><code class="language-milang">(&lt;=&gt;) a b = if (a == b) 0 (if (a &gt; b) 1 (0 - 1))
+(&lt;=&gt;) :! {prec = 30; assoc = Left}
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="records--adts"><a class="header" href="#records--adts">Records &amp; ADTs</a></h1>
+<p>Records are milang’s primary data structure. They hold named <code>fields</code>, support
+structural updates, and form the basis of algebraic data types (ADTs).</p>
+<h2 id="record-literals"><a class="header" href="#record-literals">Record Literals</a></h2>
+<p>A record is a set of <code>field = value</code> pairs inside braces, separated by <code>;</code> or
+newlines:</p>
+<pre><code class="language-milang">point = {x = 3; y = 4}
+person = {name = "Alice"; age = 30}
+</code></pre>
+<pre><code>point =  {x = 3, y = 4}
+person =  {name = Alice, age = 30}
+</code></pre>
+<h2 id="field-access"><a class="header" href="#field-access">Field Access</a></h2>
+<p>Use dot notation to read a field. Dots chain for nested records.</p>
+<pre><code class="language-milang">point = {x = 3; y = 4}
+a = point.x
+b = point.y
+</code></pre>
+<pre><code>point =  {x = 3, y = 4}
+a = 3
+b = 4
+</code></pre>
+<h2 id="positional-access"><a class="header" href="#positional-access">Positional Access</a></h2>
+<p>Fields can also be accessed by declaration order using <code>_0</code>, <code>_1</code>, etc.:</p>
+<pre><code class="language-milang">pair = {first = "hello"; second = "world"}
+a = pair._0
+b = pair._1
+</code></pre>
+<pre><code>pair =  {first = hello, second = world}
+a = hello
+b = world
+</code></pre>
+<h2 id="record-update"><a class="header" href="#record-update">Record Update</a></h2>
+<p>The <code>&lt;-</code> operator creates a new record with selected <code>fields</code> replaced. Fields
+not mentioned are carried over unchanged.</p>
+<pre><code class="language-milang">base = {x = 1; y = 2; z = 3}
+moved = base &lt;- {x = 10; z = 30}
+</code></pre>
+<pre><code>base =  {x = 1, y = 2, z = 3}
+moved =  {x = 10, y = 2, z = 30}
+</code></pre>
+<h2 id="destructuring"><a class="header" href="#destructuring">Destructuring</a></h2>
+<p>Bind <code>fields</code> from a record directly into the current scope. Use <code>{field}</code> for
+same-name bindings, or <code>{local = field}</code> to rename:</p>
+<pre><code class="language-milang">point = {x = 3; y = 4}
+{x; y} = point
+sum = x + y
+</code></pre>
+<pre><code>point =  {x = 3, y = 4}
+_destruct_23 =  {x = 3, y = 4}
+x = 3
+y = 4
+</code></pre>
+<p>Renaming during destructuring:</p>
+<pre><code class="language-milang">point = {x = 3; y = 4}
+{myX = x; myY = y} = point
+result = myX + myY
+</code></pre>
+<pre><code>point =  {x = 3, y = 4}
+_destruct_23 =  {x = 3, y = 4}
+myX = 3
+myY = 4
+result = 7
+</code></pre>
+<h2 id="scope-as-record"><a class="header" href="#scope-as-record">Scope-as-Record</a></h2>
+<p>When a function body has no explicit result expression — just indented
+bindings — the named bindings are collected into an implicit record:</p>
+<pre><code class="language-milang">makeVec x y =
+  magnitude = x + y
+  product = x * y
+v = makeVec 3 4
+</code></pre>
+<pre><code>makeVec = &lt;closure&gt;
+v =  {magnitude = 7, product = 12}
+</code></pre>
+<p>Bare expressions (not bound to a name) execute for their side effects and are
+<strong>not</strong> included in the returned record. This is how <code>main</code> works — see the
+<a href="#scopes--bindings">Scopes</a> chapter.</p>
+<h2 id="adts-algebraic-data-types-1"><a class="header" href="#adts-algebraic-data-types-1">ADTs (Algebraic Data Types)</a></h2>
+<p>An uppercase name bound to braces containing uppercase constructors declares a
+tagged union:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height; Point}
+c = Circle 5
+r = Rect 3 4
+p = Point
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;, Point = Point {}}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+Point = Point {}
+c = Circle {radius = 5}
+r = Rect {width = 3, height = 4}
+p = Point {}
+</code></pre>
+<p>Each constructor becomes a function that produces a tagged record. Zero-field
+constructors (like <code>Point</code> above) are plain tagged records with no arguments.</p>
+<p>Constructors are also available namespaced under the type name
+(e.g. <code>Shape.Circle</code>).</p>
+<h2 id="constructors-as-functions"><a class="header" href="#constructors-as-functions">Constructors as Functions</a></h2>
+<p>Because constructors are just functions, they work naturally with <code>map</code> and
+other higher-order functions:</p>
+<pre><code class="language-milang">values = map (\x -&gt; Just x) [1, 2, 3]
+</code></pre>
+<pre><code>values = [Just {val = 1}, Just {val = 2}, Just {val = 3}]
+</code></pre>
+<h2 id="pattern-matching-on-tags"><a class="header" href="#pattern-matching-on-tags">Pattern Matching on Tags</a></h2>
+<p>Use the <code>-&gt;</code> operator to match on a value’s constructor <code>tag</code>. After a <code>tag</code>
+matches, the record’s <code>fields</code> are accessible via dot notation or destructuring:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+area shape = shape -&gt;
+  Circle = 3.14 * shape.radius * shape.radius
+  Rect = shape.width * shape.height
+a = area (Circle 5)
+b = area (Rect 3 4)
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+area = &lt;closure&gt;
+a = 78.5
+b = 12
+</code></pre>
+<p>Named-field destructuring in alternatives:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+area shape -&gt;
+  Circle {radius} = 3.14 * radius * radius
+  Rect {width; height} = width * height
+a = area (Circle 5)
+b = area (Rect 3 4)
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+area = &lt;closure&gt;
+a = 78.5
+b = 12
+</code></pre>
+<p>See the <a href="#pattern-matching-1">Pattern Matching</a> chapter for the full range of
+patterns, guards, and list matching.</p>
+<h2 id="record-introspection-1"><a class="header" href="#record-introspection-1">Record Introspection</a></h2>
+<p>Several built-in functions let you inspect records dynamically:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Returns</th></tr>
+</thead>
+<tbody>
+<tr><td><code>fields r</code></td><td>List of <code>{name, value}</code> records (<code>[]</code> for non-records)</td></tr>
+<tr><td><code>fieldNames r</code></td><td>List of field-name strings</td></tr>
+<tr><td><code>tag r</code></td><td>Constructor <code>tag</code> string, or <code>""</code> for untagged values</td></tr>
+<tr><td><code>getField r "name"</code></td><td><code>Just value</code> if present, <code>Nothing</code> if missing</td></tr>
+<tr><td><code>setField r "name" val</code></td><td>New record with field set</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="pattern-matching-1"><a class="header" href="#pattern-matching-1">Pattern Matching</a></h1>
+<p>Pattern matching in milang uses the <code>-&gt;</code> operator to dispatch on a value’s
+shape. There are no keywords — <code>-&gt;</code> is an expression that evaluates the first
+alternative whose pattern matches.</p>
+<h2 id="basic-syntax"><a class="header" href="#basic-syntax">Basic Syntax</a></h2>
+<p>Write <code>expr -&gt;</code> followed by alternatives. Each alternative is
+<code>pattern = body</code>. Alternatives can appear inline (separated by <code>;</code>) or
+indented on separate lines.</p>
+<p>Inline:</p>
+<pre><code class="language-milang">classify x = x -&gt; 0 = "zero"; 1 = "one"; _ = "other"
+a = classify 0
+b = classify 1
+c = classify 42
+</code></pre>
+<pre><code>classify = &lt;closure&gt;
+a = zero
+b = one
+c = other
+</code></pre>
+<p>Indented:</p>
+<pre><code class="language-milang">classify x = x -&gt;
+  0 = "zero"
+  1 = "one"
+  _ = "other"
+a = classify 0
+b = classify 1
+c = classify 42
+</code></pre>
+<pre><code>classify = &lt;closure&gt;
+a = zero
+b = one
+c = other
+</code></pre>
+<h2 id="literal-patterns"><a class="header" href="#literal-patterns">Literal Patterns</a></h2>
+<p>Integers and strings match by exact value:</p>
+<pre><code class="language-milang">describe n = n -&gt;
+  0 = "zero"
+  1 = "one"
+  _ = "many"
+a = describe 0
+b = describe 1
+c = describe 99
+</code></pre>
+<pre><code>describe = &lt;closure&gt;
+a = zero
+b = one
+c = many
+</code></pre>
+<h2 id="variable-patterns"><a class="header" href="#variable-patterns">Variable Patterns</a></h2>
+<p>A lowercase name matches any value and binds it for use in the body:</p>
+<pre><code class="language-milang">myAbs x = x -&gt;
+  n | n &gt;= 0 = n
+  n = 0 - n
+a = myAbs 5
+b = myAbs (0 - 3)
+</code></pre>
+<pre><code>myAbs = &lt;closure&gt;
+a = 5
+b = 3
+</code></pre>
+<h2 id="wildcard"><a class="header" href="#wildcard">Wildcard</a></h2>
+<p><code>_</code> matches any value without binding it. Use it for catch-all branches:</p>
+<pre><code class="language-milang">isZero x = x -&gt;
+  0 = 1
+  _ = 0
+a = isZero 0
+b = isZero 7
+</code></pre>
+<pre><code>isZero = &lt;closure&gt;
+a = 1
+b = 0
+</code></pre>
+<h2 id="constructor-tag-patterns"><a class="header" href="#constructor-tag-patterns">Constructor Tag Patterns</a></h2>
+<p>Match on a tagged record’s constructor. After matching, the scrutinee’s <code>fields</code>
+are accessible through dot notation:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+area shape = shape -&gt;
+  Circle = 3.14 * shape.radius * shape.radius
+  Rect = shape.width * shape.height
+a = area (Circle 5)
+b = area (Rect 3 4)
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+area = &lt;closure&gt;
+a = 78.5
+b = 12
+</code></pre>
+<p>With named-field destructuring in the pattern, <code>fields</code> are bound directly:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+area shape -&gt;
+  Circle {radius} = 3.14 * radius * radius
+  Rect {width; height} = width * height
+a = area (Circle 5)
+b = area (Rect 3 4)
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+area = &lt;closure&gt;
+a = 78.5
+b = 12
+</code></pre>
+<h2 id="list-patterns"><a class="header" href="#list-patterns">List Patterns</a></h2>
+<p>Match a list by its elements. <code>[a, b, c]</code> matches a list of exactly three
+elements. <code>[first, ...rest]</code> matches one or more elements, binding the <code>tail</code>:</p>
+<pre><code class="language-milang">xs = [10, 20, 30, 40]
+result = xs -&gt;
+  [a, b, ...rest] = {first = a; second = b; rest = rest}
+  [] = {first = 0; second = 0; rest = []}
+</code></pre>
+<pre><code>xs = [10, 20, 30, 40]
+result =  {first = 10, second = 20, rest = [30, 40]}
+</code></pre>
+<p>An empty-list pattern matches <code>[]</code> (<code>Nil</code>):</p>
+<pre><code class="language-milang">isEmpty xs = xs -&gt;
+  [] = "empty"
+  _ = "non-empty"
+a = isEmpty []
+b = isEmpty [1]
+</code></pre>
+<pre><code>isEmpty = &lt;closure&gt;
+a = empty
+b = non-empty
+</code></pre>
+<h2 id="guards"><a class="header" href="#guards">Guards</a></h2>
+<p>A guard adds a condition to an alternative using <code>| condition</code> before the <code>=</code>.
+The alternative only matches when both the pattern and the guard are satisfied:</p>
+<pre><code class="language-milang">classify x = x -&gt;
+  n | n &lt; 0 = "negative"
+  n | n == 0 = "zero"
+  _ = "positive"
+a = classify (0 - 5)
+b = classify 0
+c = classify 10
+</code></pre>
+<pre><code>classify = &lt;closure&gt;
+a = negative
+b = zero
+c = positive
+</code></pre>
+<h2 id="guard-only-matching"><a class="header" href="#guard-only-matching">Guard-Only Matching</a></h2>
+<p>When every alternative uses only a guard (no structural pattern), you can
+write guards directly after <code>-&gt;</code>:</p>
+<pre><code class="language-milang">classify x = x -&gt;
+  | x &lt; 0 = "negative"
+  | x == 0 = "zero"
+  | _ = "positive"
+a = classify (0 - 5)
+b = classify 0
+c = classify 10
+</code></pre>
+<pre><code>classify = &lt;closure&gt;
+a = negative
+b = zero
+c = positive
+</code></pre>
+<h2 id="combined-pattern--guard"><a class="header" href="#combined-pattern--guard">Combined Pattern + Guard</a></h2>
+<p>A constructor or literal pattern can be paired with a guard:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+safeArea shape -&gt;
+  Circle {radius} | radius &gt; 0 = 3.14 * radius * radius
+  _ = 0
+a = safeArea (Circle 5)
+b = safeArea (Circle 0)
+c = safeArea (Rect 3 4)
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+safeArea = &lt;closure&gt;
+a = 78.5
+b = 0
+c = 0
+</code></pre>
+<h2 id="match-in-function-bindings"><a class="header" href="#match-in-function-bindings">Match in Function Bindings</a></h2>
+<p>The <code>f param -&gt;</code> sugar defines a function that immediately matches its <code>last</code>
+parameter, avoiding an extra <code>= param -&gt;</code> layer:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+describe label shape -&gt;
+  Circle = label + ": circle"
+  Rect = label + ": rect"
+  _ = label + ": unknown"
+a = describe "shape" (Circle 5)
+b = describe "shape" (Rect 3 4)
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+describe = &lt;closure&gt;
+a = shape: circle
+b = shape: rect
+</code></pre>
+<h2 id="exhaustiveness"><a class="header" href="#exhaustiveness">Exhaustiveness</a></h2>
+<p>When the compiler can determine the type of a scrutinee (e.g., from a <code>::</code> type annotation), it checks that all constructors of a union type are covered. If any constructor is missing and there is no wildcard <code>_</code> catch-all, the compiler emits a warning:</p>
+<pre><code class="language-text">warning: non-exhaustive patterns for Shape — missing: Rect
+</code></pre>
+<p>To silence the warning, either cover all constructors explicitly or add a wildcard branch:</p>
+<pre><code class="language-milang">area s = s -&gt;
+  Circle = 3.14 * s.radius * s.radius
+  _ = 0  -- catch-all for all other shapes
+</code></pre>
+<p>Exhaustiveness checking only triggers when the scrutinee type is a known union type from a <code>::</code> annotation. Unannotated scrutinees without a catch-all will compile without warning but may fail at runtime if an unmatched constructor is encountered.</p>
+<h2 id="matching-maybe"><a class="header" href="#matching-maybe">Matching Maybe</a></h2>
+<pre><code class="language-milang">matchMaybe m = m -&gt;
+  Just {val} = "Just(" + toString val + ")"
+  Nothing = "Nothing"
+
+main world =
+  world.io.println (matchMaybe (Just 5))
+  world.io.println (matchMaybe Nothing)
+</code></pre>
+<pre><code>Just(5)
+Nothing
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="lists-1"><a class="header" href="#lists-1">Lists</a></h1>
+<p>Lists in milang are singly-linked cons cells, declared in the prelude as
+<code>List = {Nil; Cons head tail}</code>. The bracket syntax is sugar that desugars into
+this representation.</p>
+<h2 id="constructing-lists"><a class="header" href="#constructing-lists">Constructing Lists</a></h2>
+<pre><code class="language-milang">nums = [1, 2, 3, 4, 5]
+empty = []
+consed = 10 : 20 : 30 : []
+</code></pre>
+<pre><code>nums = [1, 2, 3, 4, 5]
+empty = []
+consed = [10, 20, 30]
+</code></pre>
+<p><code>[]</code> is <code>Nil</code>, and <code>[1, 2, 3]</code> desugars to <code>Cons 1 (Cons 2 (Cons 3 Nil))</code>.
+The <code>:</code> operator (cons) is right-associative.</p>
+<p>Use <code>range</code> to generate a sequence:</p>
+<pre><code class="language-milang">a = range 1 6
+b = range 1 11
+</code></pre>
+<pre><code>a = [1, 2, 3, 4, 5]
+b = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+</code></pre>
+<h2 id="accessing-elements"><a class="header" href="#accessing-elements">Accessing Elements</a></h2>
+<p><code>head</code>, <code>tail</code>, <code>last</code>, and <code>init</code> all return <code>Maybe</code> values — <code>Just x</code> on
+success, <code>Nothing</code> on an empty list. <code>at</code> returns <code>Maybe</code> for index access.</p>
+<pre><code class="language-milang">xs = [10, 20, 30]
+a = head xs
+b = tail xs
+c = last xs
+d = init xs
+e = at xs 1
+f = head []
+</code></pre>
+<pre><code>xs = [10, 20, 30]
+a = Just {val = 10}
+b = Just {val = [20, 30]}
+c = Just {val = 30}
+d = Just {val = [10, 20]}
+e = Just {val = 20}
+f = Nothing {}
+</code></pre>
+<p><code>len</code> returns the number of elements:</p>
+<pre><code class="language-milang">a = len [1, 2, 3]
+b = len []
+</code></pre>
+<pre><code>a = 3
+b = 0
+</code></pre>
+<h2 id="transforming"><a class="header" href="#transforming">Transforming</a></h2>
+<h3 id="map"><a class="header" href="#map">map</a></h3>
+<p>Apply a function to every element:</p>
+<pre><code class="language-milang">doubled = map (\x -&gt; x * 2) [1, 2, 3, 4, 5]
+</code></pre>
+<pre><code>doubled = [2, 4, 6, 8, 10]
+</code></pre>
+<h3 id="filter"><a class="header" href="#filter">filter</a></h3>
+<p>Keep elements satisfying a predicate:</p>
+<pre><code class="language-milang">evens = filter (\x -&gt; x % 2 == 0) [1, 2, 3, 4, 5, 6]
+</code></pre>
+<pre><code>evens = [2, 4, 6]
+</code></pre>
+<h3 id="fold"><a class="header" href="#fold">fold</a></h3>
+<p>Left-fold with an accumulator:</p>
+<pre><code class="language-milang">total = fold (+) 0 [1, 2, 3, 4, 5]
+</code></pre>
+<pre><code>total = 15
+</code></pre>
+<h3 id="reverse"><a class="header" href="#reverse">reverse</a></h3>
+<pre><code class="language-milang">backwards = reverse [1, 2, 3, 4, 5]
+</code></pre>
+<pre><code>backwards = [5, 4, 3, 2, 1]
+</code></pre>
+<h3 id="take--drop"><a class="header" href="#take--drop">take / drop</a></h3>
+<pre><code class="language-milang">front = take 3 [1, 2, 3, 4, 5]
+back = drop 3 [1, 2, 3, 4, 5]
+</code></pre>
+<pre><code>front = [1, 2, 3]
+back = [4, 5]
+</code></pre>
+<h3 id="zip"><a class="header" href="#zip">zip</a></h3>
+<p>Pair up elements from two lists:</p>
+<pre><code class="language-milang">pairs = zip [1, 2, 3] [10, 20, 30]
+</code></pre>
+<pre><code>pairs = [[1, 10], [2, 20], [3, 30]]
+</code></pre>
+<h3 id="enumerate"><a class="header" href="#enumerate">enumerate</a></h3>
+<p>Produce <code>[index, value]</code> pairs:</p>
+<pre><code class="language-milang">indexed = enumerate ["a", "b", "c"]
+</code></pre>
+<pre><code>indexed = [[0, a], [1, b], [2, c]]
+</code></pre>
+<h2 id="combining-lists"><a class="header" href="#combining-lists">Combining Lists</a></h2>
+<pre><code class="language-milang">joined = concat [1, 2] [3, 4]
+appended = push [1, 2, 3] 4
+</code></pre>
+<pre><code>joined = [1, 2, 3, 4]
+appended = [1, 2, 3, 4]
+</code></pre>
+<p><code>join</code> concatenates a list of strings with a separator:</p>
+<pre><code class="language-milang">csv = join ", " ["alice", "bob", "carol"]
+</code></pre>
+<pre><code>csv = alice, bob, carol
+</code></pre>
+<h2 id="querying"><a class="header" href="#querying">Querying</a></h2>
+<pre><code class="language-milang">xs = [1, 2, 3, 4, 5]
+a = sum xs
+b = product xs
+c = any (\x -&gt; x &gt; 4) xs
+d = all (\x -&gt; x &gt; 0) xs
+e = contains xs 3
+f = contains xs 99
+</code></pre>
+<pre><code>xs = [1, 2, 3, 4, 5]
+a = 15
+b = 120
+c = 1
+d = 1
+e = 1
+f = 0
+</code></pre>
+<h2 id="pipelines"><a class="header" href="#pipelines">Pipelines</a></h2>
+<p>Lists work naturally with the pipe operator for readable data processing:</p>
+<pre><code class="language-milang">result = range 1 11 \
+  |&gt; filter (\x -&gt; x % 2 == 0) \
+  |&gt; map (\x -&gt; x * x) \
+  |&gt; sum
+</code></pre>
+<pre><code>result = 220
+</code></pre>
+<h2 id="pattern-matching-on-lists"><a class="header" href="#pattern-matching-on-lists">Pattern Matching on Lists</a></h2>
+<p>Match by exact length with <code>[a, b, c]</code>, or match <code>head</code> and <code>tail</code> with
+<code>[first, ...rest]</code>:</p>
+<pre><code class="language-milang">xs = [10, 20, 30, 40]
+result = xs -&gt;
+  [a, b, ...rest] = a + b
+  [] = 0
+</code></pre>
+<pre><code>xs = [10, 20, 30, 40]
+result = 30
+</code></pre>
+<p>Recursive functions often pattern-match to walk a list:</p>
+<pre><code class="language-milang">mySum xs = xs -&gt;
+  [x, ...rest] = x + mySum rest
+  [] = 0
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="scopes--bindings"><a class="header" href="#scopes--bindings">Scopes &amp; Bindings</a></h1>
+<p>Scopes are the backbone of milang’s structure. Every indented block and every
+brace-delimited block creates a new scope with its own bindings.</p>
+<h2 id="basic-bindings"><a class="header" href="#basic-bindings">Basic Bindings</a></h2>
+<pre><code class="language-milang">name = expr            -- eager binding
+name := expr           -- lazy binding (thunk, evaluated at most once)
+name params = expr     -- function binding
+</code></pre>
+<pre><code class="language-milang">x = 42
+double x = x * 2
+result = double x
+</code></pre>
+<pre><code>x = 42
+double = &lt;closure&gt;
+result = 84
+</code></pre>
+<h2 id="indentation-sensitive-scoping"><a class="header" href="#indentation-sensitive-scoping">Indentation-Sensitive Scoping</a></h2>
+<p>Indented lines beneath a binding form a scope. There are two modes depending
+on whether an explicit result expression appears after <code>=</code>.</p>
+<h3 id="explicit-body"><a class="header" href="#explicit-body">Explicit Body</a></h3>
+<p>When a binding has an expression directly after <code>=</code>, that expression is the
+scope’s return value. The indented children are local definitions visible only
+inside that scope:</p>
+<pre><code class="language-milang">compute x = result
+  doubled = x * 2
+  result = doubled + 1
+a = compute 7
+</code></pre>
+<pre><code>compute = &lt;closure&gt;
+a = 15
+</code></pre>
+<p>Here <code>doubled</code> and <code>result</code> are local to <code>compute</code>. The value of <code>compute 7</code>
+is the expression after <code>=</code>, which is <code>result</code> (15).</p>
+<h3 id="implicit-record-scope-as-record"><a class="header" href="#implicit-record-scope-as-record">Implicit Record (Scope-as-Record)</a></h3>
+<p>When a binding has <strong>no</strong> expression after <code>=</code> — only indented children — the
+named bindings are collected into a record and returned automatically:</p>
+<pre><code class="language-milang">makeVec x y =
+  sum = x + y
+  product = x * y
+v = makeVec 3 4
+</code></pre>
+<pre><code>makeVec = &lt;closure&gt;
+v =  {sum = 7, product = 12}
+</code></pre>
+<p><code>makeVec 3 4</code> returns <code>{sum = 7, product = 12}</code>. This is milang’s lightweight
+alternative to explicit record construction.</p>
+<h2 id="inner-scopes-shadow-outer-names"><a class="header" href="#inner-scopes-shadow-outer-names">Inner Scopes Shadow Outer Names</a></h2>
+<p>A binding in an inner scope shadows any identically-named binding from an
+enclosing scope. The outer binding is unaffected:</p>
+<pre><code class="language-milang">x = 10
+f = result
+  x = 99
+  result = x + 1
+outer = x
+inner = f
+</code></pre>
+<pre><code>x = 10
+f = 100
+outer = 10
+inner = 100
+</code></pre>
+<h2 id="inline-scopes-with-blocks"><a class="header" href="#inline-scopes-with-blocks">Inline Scopes (With Blocks)</a></h2>
+<p>Braces create an inline scope on a single line. The expression before the
+braces is the return value, and the bindings inside are local:</p>
+<pre><code class="language-milang">f x = result { doubled = x * 2; result = doubled + 1 }
+a = f 7
+</code></pre>
+<pre><code>f = &lt;closure&gt;
+a = 15
+</code></pre>
+<h2 id="bare-expressions-effect-statements"><a class="header" href="#bare-expressions-effect-statements">Bare Expressions (Effect Statements)</a></h2>
+<p>A bare expression in a scope — one not bound to a name — is evaluated for its
+side effect. Its result is discarded and <strong>not</strong> included in any implicit
+record:</p>
+<pre><code class="language-milang">main world =
+  world.io.println "hello"    -- effect, result discarded
+  world.io.println "world"    -- effect, result discarded
+  0                           -- explicit body (exit code)
+</code></pre>
+<p>The first two lines run <code>println</code> for their side effects. The final <code>0</code> is the
+return value of <code>main</code>.</p>
+<h2 id="the-main-function-pattern"><a class="header" href="#the-main-function-pattern">The <code>main</code> Function Pattern</a></h2>
+<p>A typical <code>main</code> combines all three concepts — local bindings, bare effect
+expressions, and an explicit result:</p>
+<pre><code class="language-milang">main world =
+  name = "milang"                      -- local binding
+  world.io.println ("Hello, " + name)  -- bare effect
+  0                                    -- return value (exit code)
+</code></pre>
+<h2 id="binding-order"><a class="header" href="#binding-order">Binding Order</a></h2>
+<ul>
+<li>Bindings evaluate top-to-bottom (left-to-right in brace scopes).</li>
+<li>Later bindings may reference earlier ones.</li>
+<li>The compiler tracks impure (<code>world</code>-tainted) bindings and guarantees they
+execute in declaration order via an auto-monad spine.</li>
+<li>Pure bindings can theoretically be reordered by the optimiser.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="imports--modules"><a class="header" href="#imports--modules">Imports &amp; Modules</a></h1>
+<p>Every <code>.mi</code> file is a module. Importing a module evaluates it and returns a record containing all of its top-level bindings. You bind that record to a name and access its members with dot notation — no special export lists or visibility modifiers.</p>
+<h2 id="local-imports"><a class="header" href="#local-imports">Local Imports</a></h2>
+<p>Use <code>import</code> with a file path (relative to the importing file’s directory):</p>
+<pre><code class="language-milang">math = import "lib/mymath.mi"
+
+area = math.circle_area 5
+</code></pre>
+<p>The result of <code>import</code> is a record, so <code>math.circle_area</code> and <code>math.pi</code> access individual bindings from the imported file.</p>
+<h2 id="a-complete-example"><a class="header" href="#a-complete-example">A Complete Example</a></h2>
+<pre><code class="language-milang">-- Suppose lib/mymath.mi contains:
+--   pi = 3.14159
+--   circle_area r = pi * r * r
+
+-- We can inline the same definitions here to demonstrate:
+pi = 3.14159
+circle_area r = pi * r * r
+
+circumference r = 2 * pi * r
+</code></pre>
+<pre><code>pi = 3.14159
+circle_area = &lt;closure&gt;
+circumference = &lt;closure&gt;
+</code></pre>
+<h2 id="url-imports"><a class="header" href="#url-imports">URL Imports</a></h2>
+<p>Remote modules are imported the same way — just use a URL:</p>
+<pre><code class="language-milang">collections = import "https://example.com/milang-stdlib/collections.mi"
+
+total = collections.sum [1, 2, 3]
+</code></pre>
+<p>The compiler downloads the file and caches it locally. On subsequent runs the cached version is used.</p>
+<h2 id="pinned-imports-with-import"><a class="header" href="#pinned-imports-with-import">Pinned Imports with <code>import'</code></a></h2>
+<p>URL imports must be pinned by their SHA-256 hash using the <code>import'</code> form:</p>
+<pre><code class="language-milang">lib = import' "https://example.com/lib.mi" ({sha256 = "a1b2c3..."})
+</code></pre>
+<p>If the downloaded content does not match the hash, compilation fails. The <code>milang pin</code> command computes the hash for you:</p>
+<pre><code class="language-bash">$ milang pin https://example.com/lib.mi
+sha256 = "a1b2c3d4e5f6..."
+</code></pre>
+<h2 id="c-header-imports"><a class="header" href="#c-header-imports">C Header Imports</a></h2>
+<p>When the path ends in <code>.h</code>, the compiler parses the C header and exposes its functions as milang bindings. See the <a href="#c-ffi">C FFI</a> chapter for details.</p>
+<pre><code class="language-milang">m = import "math.h"
+result = m.sin 1.0
+</code></pre>
+<p>You can also associate C source files and compiler flags with <code>import'</code>:</p>
+<pre><code class="language-milang">lib = import' "mylib.h" ({src = "mylib.c"})
+answer = lib.add_ints 3 4
+</code></pre>
+<h2 id="circular-imports"><a class="header" href="#circular-imports">Circular Imports</a></h2>
+<p>Milang supports circular imports. When module A imports module B and B imports A, the resolver detects the cycle and marks the circular bindings as lazy (thunks) to break the dependency. Both modules load correctly and can reference each other’s bindings.</p>
+<h2 id="diamond-imports"><a class="header" href="#diamond-imports">Diamond Imports</a></h2>
+<p>If two modules both import the same third module, it is loaded and evaluated only once. The two importers share the same record, so there is no duplication or inconsistency.</p>
+<h2 id="visibility"><a class="header" href="#visibility">Visibility</a></h2>
+<p>All top-level bindings in a <code>.mi</code> file are exported — there is no private/public distinction. If you want to signal that a binding is an internal helper, use a naming convention such as an underscore prefix (<code>_helper</code>), but the compiler does not enforce this.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="io--the-world-1"><a class="header" href="#io--the-world-1">IO &amp; the World</a></h1>
+<p>Milang uses a capability-based IO model. Side effects are not global — they flow through an explicit <code>world</code> record that the runtime passes to <code>main</code>. If a function never receives <code>world</code> (or a sub-record of it), it cannot perform IO.</p>
+<h2 id="hello-world-1"><a class="header" href="#hello-world-1">Hello World</a></h2>
+<pre><code class="language-milang">main world =
+  world.io.println "Hello, world!"
+</code></pre>
+<pre><code>Hello, world!
+</code></pre>
+<p><code>main</code> is the program entry point. It receives <code>world</code> and its return value becomes the process exit code.</p>
+<h2 id="the-world-record"><a class="header" href="#the-world-record">The World Record</a></h2>
+<p><code>world</code> is a record containing sub-records for different capabilities:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Path</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>world.io</code></td><td>Console IO (println, print, readLine)</td></tr>
+<tr><td><code>world.fs.read</code></td><td>Read-only filesystem (file, exists)</td></tr>
+<tr><td><code>world.fs.write</code></td><td>Write filesystem (file, append, remove)</td></tr>
+<tr><td><code>world.fs</code></td><td>Full filesystem access (read + write)</td></tr>
+<tr><td><code>world.process</code></td><td>Process execution and exit</td></tr>
+<tr><td><code>world.argv</code></td><td>Command-line arguments (pure — no effect)</td></tr>
+<tr><td><code>world.getEnv</code></td><td>Read environment variables</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="console-io"><a class="header" href="#console-io">Console IO</a></h2>
+<pre><code class="language-milang">world.io.println msg          -- print with trailing newline
+world.io.print msg            -- print without newline
+line = world.io.readLine      -- read one line from stdin
+</code></pre>
+<h2 id="file-io"><a class="header" href="#file-io">File IO</a></h2>
+<p>File operations are split by capability: <code>world.fs.read</code> for reading and
+<code>world.fs.write</code> for writing. This enables fine-grained trait annotations.</p>
+<pre><code class="language-milang">content = world.fs.read.file "data.txt"
+world.fs.write.file "out.txt" content
+world.fs.write.append "log.txt" "new line\n"
+exists = world.fs.read.exists "data.txt"     -- returns 1 or 0
+world.fs.write.remove "tmp.txt"
+</code></pre>
+<h2 id="process"><a class="header" href="#process">Process</a></h2>
+<pre><code class="language-milang">output = world.process.exec "ls -la"      -- run shell command, return output
+world.process.exit 1                       -- exit immediately with status code
+</code></pre>
+<h2 id="command-line-arguments-and-environment"><a class="header" href="#command-line-arguments-and-environment">Command-Line Arguments and Environment</a></h2>
+<p><code>world.argv</code> is an inert list — it does not perform IO, so it is always available:</p>
+<pre><code class="language-milang">main world =
+  world.io.println (len world.argv)
+</code></pre>
+<p><code>world.getEnv</code> reads an environment variable by name:</p>
+<pre><code class="language-milang">home = world.getEnv "HOME"
+</code></pre>
+<h2 id="capability-restriction"><a class="header" href="#capability-restriction">Capability Restriction</a></h2>
+<p>Because capabilities are just record <code>fields</code>, you can restrict what a helper function can do by passing only the sub-record it needs:</p>
+<pre><code class="language-milang">greet io = io.println "hello from restricted IO"
+
+main world =
+  greet world.io
+</code></pre>
+<pre><code>hello from restricted IO
+</code></pre>
+<p><code>greet</code> receives <code>world.io</code> and can print, but it structurally cannot access <code>world.process</code> — there is no way for it to execute shell commands or exit the process.</p>
+<h2 id="exit-code"><a class="header" href="#exit-code">Exit Code</a></h2>
+<p>The return value of <code>main</code> is used as the process exit code. An integer is used directly; any non-integer value (record, string, etc.) defaults to exit code 0.</p>
+<pre><code class="language-milang">main world =
+  world.io.println "exiting with code 0"
+</code></pre>
+<pre><code>exiting with code 0
+</code></pre>
+<h2 id="script-mode"><a class="header" href="#script-mode">Script Mode</a></h2>
+<p>When a file has no <code>main</code> binding that takes a parameter, milang runs in script mode: every top-level binding is evaluated and printed.</p>
+<pre><code class="language-milang">x = 6 * 7
+y = x + 1
+greeting = "hello"
+</code></pre>
+<pre><code>x = 42
+y = 43
+greeting = hello
+</code></pre>
+<p>This is useful for quick calculations and exploring the language without writing a full <code>main</code> function.</p>
+<h2 id="auto-monad-spine"><a class="header" href="#auto-monad-spine">Auto-Monad Spine</a></h2>
+<p>You do not need monads or do-notation in milang. The compiler automatically tracks which expressions are <em><code>world</code>-tainted</em> (they transitively reference <code>world</code>). Impure expressions are guaranteed to execute in the order they appear in the source. Pure expressions can float freely, opening the door for future optimizations. The result is imperative-looking code that is safe and predictable.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="c-ffi"><a class="header" href="#c-ffi">C FFI</a></h1>
+<p>Milang can call C functions directly by importing a <code>.h</code> header file. The compiler parses the header, extracts function signatures, and maps C types to milang types (<code>int</code>/<code>long</code> -&gt; <code>Int</code>, <code>double</code> -&gt; <code>Float</code>, <code>float</code> -&gt; <code>Float' 32</code>, <code>char*</code> -&gt; <code>Str</code>). At code generation time the header is <code>#include</code>d and calls are emitted inline — no wrapper overhead.</p>
+<!-- FFI mapping for sized types
+
+Sized milang types map to fixed-width C integer types in the FFI layer for
+predictable ABI compatibility:
+
+- `Int' 8`  -> `int8_t`
+- `Int' 16` -> `int16_t`
+- `Int' 32` -> `int32_t`
+- `Int' 64` -> `int64_t`
+
+- `UInt' 8`  -> `uint8_t`
+- `UInt' 16` -> `uint16_t`
+- `UInt' 32` -> `uint32_t`
+- `UInt' 64` -> `uint64_t`
+
+Floating milang types map to the natural C floating types for the precision
+requested (e.g. `Float' 32` corresponds to `float`, `Float' 64` to `double`).
+
+When importing C headers the compiler attempts to match C signatures to
+milang types. If a direct mapping is not available the import step will raise
+an error and prompt you to provide an explicit shim or a compatible signature.
+-->
+<h2 id="importing-c-headers"><a class="header" href="#importing-c-headers">Importing C Headers</a></h2>
+<p>Import a system header the same way you import a <code>.mi</code> file:</p>
+<pre><code class="language-milang">m = import "math.h"
+
+result = m.sin 1.0
+root = m.sqrt 144.0
+</code></pre>
+<p>The result is a record whose <code>fields</code> are the C functions declared in the header. Use dot notation to call them.</p>
+<h2 id="selective-import-with-import"><a class="header" href="#selective-import-with-import">Selective Import with <code>import'</code></a></h2>
+<p>If you only need a few functions, or need to attach compilation options, use the <code>import'</code> form:</p>
+<pre><code class="language-milang">m = import' "math.h" ({})
+result = m.cos 0.0
+</code></pre>
+<h2 id="associating-c-source-files"><a class="header" href="#associating-c-source-files">Associating C Source Files</a></h2>
+<p>For your own C libraries, tell the compiler which source files to compile alongside the generated code:</p>
+<pre><code class="language-milang">lib = import' "mylib.h" ({src = "mylib.c"})
+answer = lib.add_ints 3 4
+</code></pre>
+<p>The <code>src</code> field takes a single source file path (relative to the importing <code>.mi</code> file).</p>
+<h2 id="advanced-options"><a class="header" href="#advanced-options">Advanced Options</a></h2>
+<p>The options record passed to <code>import'</code> supports several <code>fields</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>src</code></td><td><code>Str</code></td><td>Single C source file to compile</td></tr>
+<tr><td><code>sources</code></td><td><code>List</code></td><td>Multiple source files: <code>["a.c", "b.c"]</code></td></tr>
+<tr><td><code>flags</code></td><td><code>Str</code></td><td>Additional compiler flags (e.g. <code>"-O2 -Wall"</code>)</td></tr>
+<tr><td><code>include</code></td><td><code>Str</code></td><td>Additional include directory</td></tr>
+<tr><td><code>pkg</code></td><td><code>Str</code></td><td>pkg-config package name — auto-discovers flags and includes</td></tr>
+</tbody>
+</table>
+</div>
+<p>Example with multiple options:</p>
+<pre><code class="language-milang">lib = import' "mylib.h" ({
+  sources = ["mylib.c", "helpers.c"]
+  flags = "-O2"
+  include = "vendor/include"
+})
+</code></pre>
+<p>Using pkg-config for a system library:</p>
+<pre><code class="language-milang">json = import' "json-c/json.h" ({pkg = "json-c"})
+</code></pre>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
+<ol>
+<li>The import resolver reads the <code>.h</code> file and extracts function declarations.</li>
+<li>Each C function becomes an internal <code>CFunction</code> AST node with its milang type signature.</li>
+<li>During C code generation the header is <code>#include</code>d and calls are emitted as direct C function calls.</li>
+<li>Any associated source files are compiled and linked automatically.</li>
+</ol>
+<h2 id="security-considerations"><a class="header" href="#security-considerations">Security Considerations</a></h2>
+<p>C code bypasses milang’s capability model — a C function can perform arbitrary IO, allocate memory, or call system APIs regardless of what capabilities were passed to the milang caller. Use the following flags to restrict FFI access:</p>
+<ul>
+<li><strong><code>--no-ffi</code></strong> — disallow all C header imports. Any <code>import "*.h"</code> will fail.</li>
+<li><strong><code>--no-remote-ffi</code></strong> — allow local <code>.mi</code> files to use C FFI, but prevent URL-imported modules from importing C headers. This stops remote code from escaping the capability sandbox through native calls.</li>
+</ul>
+<p>These flags are especially important when running untrusted or third-party milang code.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="standard-library-reference"><a class="header" href="#standard-library-reference">Standard Library Reference</a></h1>
+<p>This page documents all functions available in the milang prelude, C builtins,
+and operators. Functions marked “extensible” can be extended for user-defined
+types via <a href="#open-function-chaining">open function chaining</a>.</p>
+<h2 id="types"><a class="header" href="#types">Types</a></h2>
+<pre><code class="language-milang">Bool = {True; False}
+List = {Nil; Cons head tail}
+Maybe = {Nothing; Just val}
+
+-- Sized numeric type aliases (Int', UInt', Float' are primitive constructors)
+Int = Int' 64       -- signed 64-bit integer
+UInt = UInt' 64     -- unsigned 64-bit integer
+Float = Float' 64   -- 64-bit floating-point
+Byte = UInt' 8      -- unsigned 8-bit integer
+</code></pre>
+<!-- Sized numeric type constructors
+
+`Int'`, `UInt'`, and `Float'` are primitive type constructors that take a
+compile-time bit-width argument (for example `Int' 8`, `UInt' 32`, `Float' 64`).
+They provide precise control over numeric representation and arithmetic
+semantics:
+
+- `Int' n` — signed two's-complement integer of `n` bits (wraps modulo 2^n)
+- `UInt' n` — unsigned integer of `n` bits (range 0..2^n-1)
+- `Float' n` — floating-point with `n`-bit precision (commonly 32 or 64)
+
+The prelude provides friendly aliases (`Int = Int' 64`, `UInt = UInt' 64`,
+`Float = Float' 64`, `Byte = UInt' 8`) for convenience. Use the sized forms
+when precise width or FFI compatibility is required.
+-->
+<h2 id="extensible-functions"><a class="header" href="#extensible-functions">Extensible Functions</a></h2>
+<p>These functions are designed to be extended via <a href="#open-function-chaining">open function chaining</a> for user-defined types.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>truthy</code></td><td><code>a : Num</code></td><td>Boolean coercion. Falsy: <code>0</code>, <code>0.0</code>, <code>""</code>, <code>False</code>, <code>Nil</code>. Truthy: everything else. Used by <code>if</code>, guards, <code>not</code>, <code>&amp;&amp;</code>, <code>||</code>.</td></tr>
+<tr><td><code>toString</code></td><td><code>a : Str</code></td><td>String conversion. Handles <code>True</code>, <code>False</code>, <code>Nil</code> symbolically; delegates to <code>_toString</code> for primitives (int, float, string).</td></tr>
+<tr><td><code>eq</code></td><td><code>a : a : Num</code></td><td>Equality. Default falls through to structural <code>==</code>. Used by <code>contains</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="core-functions"><a class="header" href="#core-functions">Core Functions</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>id</code></td><td><code>a : a</code></td><td>Identity function.</td></tr>
+<tr><td><code>const</code></td><td><code>a : b : a</code></td><td>Returns first argument, ignores second.</td></tr>
+<tr><td><code>flip</code></td><td><code>(a : b : c) : b : a : c</code></td><td>Flips the first two arguments of a function.</td></tr>
+<tr><td><code>not</code></td><td><code>a : Num</code></td><td>Logical negation via <code>truthy</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="list-functions"><a class="header" href="#list-functions">List Functions</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>null</code></td><td><code>List : Num</code></td><td>Returns <code>1</code> if list is <code>Nil</code>, <code>0</code> otherwise.</td></tr>
+<tr><td><code>head</code></td><td><code>List : Maybe</code></td><td>First element wrapped in <code>Maybe</code> (<code>Nothing</code> if empty).</td></tr>
+<tr><td><code>tail</code></td><td><code>List : Maybe</code></td><td>Tail wrapped in <code>Maybe</code> (<code>Nothing</code> if empty).</td></tr>
+<tr><td><code>fold</code></td><td><code>(a : b : a) : a : List : a</code></td><td>Left fold over a list.</td></tr>
+<tr><td><code>map</code></td><td><code>(a : b) : List : List</code></td><td>Apply function to each element.</td></tr>
+<tr><td><code>filter</code></td><td><code>(a : Num) : List : List</code></td><td>Keep elements where predicate is <code>truthy</code>.</td></tr>
+<tr><td><code>concat</code></td><td><code>List : List : List</code></td><td>Concatenate two lists.</td></tr>
+<tr><td><code>push</code></td><td><code>List : a : List</code></td><td>Append element to end of list.</td></tr>
+<tr><td><code>at</code></td><td><code>List : Num : Maybe</code></td><td>Get element at index (zero-based); returns <code>Nothing</code> if out of bounds. <code>at'</code> takes index first.</td></tr>
+<tr><td><code>sum</code></td><td><code>List : Num</code></td><td>Sum of numeric list.</td></tr>
+<tr><td><code>product</code></td><td><code>List : Num</code></td><td>Product of numeric list.</td></tr>
+<tr><td><code>any</code></td><td><code>(a : Num) : List : Num</code></td><td><code>1</code> if predicate is <code>truthy</code> for any element.</td></tr>
+<tr><td><code>all</code></td><td><code>(a : Num) : List : Num</code></td><td><code>1</code> if predicate is <code>truthy</code> for all elements.</td></tr>
+<tr><td><code>contains</code></td><td><code>List : a : Num</code></td><td><code>1</code> if list contains element (via <code>eq</code>).</td></tr>
+<tr><td><code>range</code></td><td><code>Num : Num : List</code></td><td>Integer range <code>[start, end)</code>.</td></tr>
+<tr><td><code>zip</code></td><td><code>List : List : List</code></td><td>Pair corresponding elements into 2-element lists.</td></tr>
+<tr><td><code>last</code></td><td><code>List : Maybe</code></td><td>Last element wrapped in <code>Maybe</code> (<code>Nothing</code> if empty).</td></tr>
+<tr><td><code>init</code></td><td><code>List : Maybe</code></td><td>All elements except the <code>last</code> wrapped in <code>Maybe</code> (<code>Nothing</code> if empty).</td></tr>
+<tr><td><code>reverse</code></td><td><code>List : List</code></td><td>Reverse a list.</td></tr>
+<tr><td><code>take</code></td><td><code>Num : List : List</code></td><td>First <code>n</code> elements.</td></tr>
+<tr><td><code>drop</code></td><td><code>Num : List : List</code></td><td>Drop first <code>n</code> elements.</td></tr>
+<tr><td><code>enumerate</code></td><td><code>List : List</code></td><td>Pair each element with its index: <code>[[0, a], [1, b], ...]</code>.</td></tr>
+<tr><td><code>join</code></td><td><code>Str : List : Str</code></td><td>Join string list with separator.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="numeric-functions"><a class="header" href="#numeric-functions">Numeric Functions</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>abs</code></td><td><code>Num : Num</code></td><td>Absolute value.</td></tr>
+<tr><td><code>neg</code></td><td><code>Num : Num</code></td><td>Negation (<code>0 - x</code>).</td></tr>
+<tr><td><code>min</code></td><td><code>Num : Num : Num</code></td><td>Minimum of two numbers.</td></tr>
+<tr><td><code>max</code></td><td><code>Num : Num : Num</code></td><td>Maximum of two numbers.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="string-builtins"><a class="header" href="#string-builtins">String Builtins</a></h2>
+<p>String operations provided by the C runtime:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>len</code></td><td><code>a : Num</code></td><td>Length of a string or list; returns <code>0</code> for non-iterable values.</td></tr>
+<tr><td><code>strlen</code></td><td><code>Str : Num</code></td><td>Length of a string (alias for <code>len</code>).</td></tr>
+<tr><td><code>charAt</code></td><td><code>Str : Num : Maybe</code></td><td>Character at index; returns <code>Just</code> a single-char string when index is valid, or <code>Nothing</code> when out of range.</td></tr>
+<tr><td><code>indexOf</code></td><td><code>Str : Str : Num</code></td><td>Index of first occurrence of substring (<code>-1</code> if not found).</td></tr>
+<tr><td><code>slice</code></td><td><code>Str : Num : Num : Str</code></td><td>Substring from start index to end index.</td></tr>
+<tr><td><code>split</code></td><td><code>Str : Str : List</code></td><td>Split string by delimiter.</td></tr>
+<tr><td><code>trim</code></td><td><code>Str : Str</code></td><td>Remove leading/trailing whitespace.</td></tr>
+<tr><td><code>toUpper</code></td><td><code>Str : Str</code></td><td>Convert to uppercase.</td></tr>
+<tr><td><code>toLower</code></td><td><code>Str : Str</code></td><td>Convert to lowercase.</td></tr>
+<tr><td><code>replace</code></td><td><code>Str : Str : Str : Str</code></td><td>Replace all occurrences: <code>replace old new str</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="type-conversion-builtins"><a class="header" href="#type-conversion-builtins">Type Conversion Builtins</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>toString</code></td><td><code>a : Str</code></td><td>Convert to string (extensible — see above).</td></tr>
+<tr><td><code>toInt</code></td><td><code>a : Maybe</code></td><td>Convert to integer; returns <code>Just</code> on success (parsing or conversion), <code>Nothing</code> on failure.</td></tr>
+<tr><td><code>toFloat</code></td><td><code>a : Maybe</code></td><td>Convert to float; returns <code>Just</code> on success, <code>Nothing</code> on failure.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="record-introspection-builtins"><a class="header" href="#record-introspection-builtins">Record Introspection Builtins</a></h2>
+<p>Functions for inspecting and modifying record structure at runtime:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>tag</code></td><td><code>Record : Str</code></td><td>Constructor <code>tag</code> name (e.g., <code>tag (Just 1)</code> -&gt; <code>"Just"</code>).</td></tr>
+<tr><td><code>fields</code></td><td><code>Record : List</code></td><td>List of field values; returns <code>[]</code> for non-record values.</td></tr>
+<tr><td><code>fieldNames</code></td><td><code>Record : List</code></td><td>List of field names; returns <code>[]</code> for non-record values.</td></tr>
+<tr><td><code>getField</code></td><td><code>Record : Str : Maybe</code></td><td>Dynamic field access by name; returns <code>Just value</code> if present, <code>Nothing</code> otherwise.</td></tr>
+<tr><td><code>setField</code></td><td><code>Record : Str : a : Record</code></td><td>Return copy with field updated; on non-record values returns the original value unchanged.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="operators-2"><a class="header" href="#operators-2">Operators</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Operator</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>|&gt;</code></td><td><code>a : (a : b) : b</code></td><td>Pipe forward: <code>x |&gt; f</code> = <code>f x</code>.</td></tr>
+<tr><td><code>&gt;&gt;</code></td><td><code>(a : b) : (b : c) : a : c</code></td><td>Forward composition.</td></tr>
+<tr><td><code>&lt;&lt;</code></td><td><code>(b : c) : (a : b) : a : c</code></td><td>Backward composition.</td></tr>
+<tr><td><code>&lt;-</code></td><td><code>Record : Record : Record</code></td><td>Record merge: <code>base &lt;- overlay</code>.</td></tr>
+<tr><td><code>&amp;&amp;</code></td><td><code>a : a : Num</code></td><td>Short-circuit logical AND (via <code>truthy</code>).</td></tr>
+<tr><td><code>||</code></td><td><code>a : a : Num</code></td><td>Short-circuit logical OR (via <code>truthy</code>).</td></tr>
+<tr><td><code>:</code></td><td><code>a : List : List</code></td><td>Cons (prepend element to list).</td></tr>
+<tr><td><code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>%</code> <code>**</code></td><td><code>Num : Num : Num</code></td><td>Arithmetic (<code>+</code> also concatenates strings; <code>**</code> takes an integer exponent).</td></tr>
+<tr><td><code>==</code> <code>/=</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code></td><td><code>a : a : Num</code></td><td>Comparison (structural equality for records).</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="maybe-examples"><a class="header" href="#maybe-examples">Maybe examples</a></h2>
+<pre><code class="language-milang">-- Maybe-returning stdlib usage
+p1 = toInt "123"
+p2 = toInt "abc"
+p3 = toFloat "3.14"
+r = {a = 1}
+
+show mi = mi -&gt; Just {val} = toString val; Nothing = "Nothing"
+
+main world =
+  world.io.println (show p1)
+  world.io.println (show p2)
+  world.io.println (toString p3)
+  world.io.println (show (getField r "a"))
+  world.io.println (show (getField r "b"))
+</code></pre>
+<pre><code>123
+Nothing
+Just(3.14)
+1
+Nothing
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="type-annotations-"><a class="header" href="#type-annotations-">Type Annotations (<code>::</code>)</a></h1>
+<p>Type annotations in milang are optional — the compiler infers types. When you do annotate, you use the <code>::</code> domain to attach a type expression to a binding. Annotations are separate lines that merge with the corresponding value binding.</p>
+<h2 id="syntax"><a class="header" href="#syntax">Syntax</a></h2>
+<pre><code class="language-milang">name :: typeExpr
+name args = body
+</code></pre>
+<p>Inside a type expression, <code>:</code> means “function type” and is right-associative. So <code>Num : Num : Num</code> means “a function that takes a <code>Num</code>, then a <code>Num</code>, and returns a <code>Num</code>.”</p>
+<h2 id="primitive-types"><a class="header" href="#primitive-types">Primitive Types</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Num</code></td><td>Alias for <code>Int</code> (backward compatibility)</td></tr>
+<tr><td><code>Int</code></td><td>Signed 64-bit integer (alias for <code>Int' 64</code>)</td></tr>
+<tr><td><code>UInt</code></td><td>Unsigned 64-bit integer (alias for <code>UInt' 64</code>)</td></tr>
+<tr><td><code>Float</code></td><td>64-bit floating-point (alias for <code>Float' 64</code>)</td></tr>
+<tr><td><code>Byte</code></td><td>Unsigned 8-bit integer (alias for <code>UInt' 8</code>)</td></tr>
+<tr><td><code>Str</code></td><td>String</td></tr>
+<tr><td><code>List</code></td><td>Linked list (Cons/<code>Nil</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="sized-numeric-types"><a class="header" href="#sized-numeric-types">Sized Numeric Types</a></h3>
+<p>The primitive type constructors <code>Int'</code>, <code>UInt'</code>, and <code>Float'</code> take a compile-time bit width:</p>
+<pre><code class="language-milang">add8 :: Int' 8 : Int' 8 : Int' 8
+add8 a b = a + b
+
+compact :: Float' 32 : Float' 32
+compact x = x * 1.0
+</code></pre>
+<p>The prelude defines convenient aliases:</p>
+<pre><code class="language-milang">Int = Int' 64
+UInt = UInt' 64
+Float = Float' 64
+Byte = UInt' 8
+</code></pre>
+<p>You can define your own aliases:</p>
+<pre><code class="language-milang">Short = Int' 16
+Word = UInt' 32
+</code></pre>
+<h3 id="details-on-sized-numeric-types"><a class="header" href="#details-on-sized-numeric-types">Details on Sized Numeric Types</a></h3>
+<p>The primitive constructors <code>Int'</code>, <code>UInt'</code>, and <code>Float'</code> take a compile-time
+bit-width argument and provide fixed-width numeric types. The language treats
+these as distinct primitive types rather than mere annotations:</p>
+<ul>
+<li>
+<p>Signed integers (<code>Int' n</code>) use two’s-complement semantics; arithmetic on
+signed integers is performed modulo 2^n and results are interpreted in two’s
+complement when read as signed values. Overflow wraps around (modular
+arithmetic).</p>
+</li>
+<li>
+<p>Unsigned integers (<code>UInt' n</code>) are arithmetic modulo 2^n with values in the
+range [0, 2^n-1]. Mixing signed and unsigned operands follows a conservative
+promotion model: the operands are first promoted to the wider bit-width and
+if any operand is unsigned the operation is performed in the unsigned domain
+of that width.</p>
+</li>
+<li>
+<p>Floating-point types (<code>Float' 32</code>, <code>Float' 64</code>) correspond to standard
+IEEE-like single- and double-precision floats. Arithmetic on mixed-width
+floats promotes to the wider precision before performing the operation.</p>
+</li>
+</ul>
+<h4 id="promotion-and-result-width"><a class="header" href="#promotion-and-result-width">Promotion and Result Width</a></h4>
+<ul>
+<li>For integer arithmetic, the result width is the maximum of the operand widths
+after promotion; the resulting value is wrapped/clamped to that width as
+described above.</li>
+<li>For mixed signed/unsigned arithmetic the operation is performed in the
+unsigned interpretation of the promoted width.</li>
+</ul>
+<h4 id="compile-time-requirements-and-partial-evaluation"><a class="header" href="#compile-time-requirements-and-partial-evaluation">Compile-time Requirements and Partial Evaluation</a></h4>
+<ul>
+<li>The bit-width argument (the <code>n</code> in <code>Int' n</code>) must be a compile-time
+constant. The reducer treats sized-type aliases (for example <code>Int = Int' 64</code>)
+as syntactic sugar and reduces type aliases away.</li>
+<li>Note: currently the compiler treats sized types primarily as type-level
+annotations and for FFI/representation purposes. Constant arithmetic is
+evaluated by the reducer using Milang’s unbounded numeric semantics (or the
+platform default) and is not automatically wrapped/clamped to a target bit
+width. If exact width-limited arithmetic is required, use explicit conversion
+primitives or perform the operation in C via the FFI.</li>
+</ul>
+<h4 id="practical-notes"><a class="header" href="#practical-notes">Practical Notes</a></h4>
+<ul>
+<li>Use sized types when you need explicit control over representation and
+ABI compatibility (FFI interop, binary formats, embedded targets).</li>
+<li>The prelude exposes convenient aliases (<code>Int</code>, <code>UInt</code>, <code>Float</code>, <code>Byte</code>) for
+common widths; you can define your own aliases like <code>Short = Int' 16</code>.</li>
+</ul>
+<h2 id="basic-examples"><a class="header" href="#basic-examples">Basic Examples</a></h2>
+<pre><code class="language-milang">double :: Num : Num
+double x = x * 2
+
+add :: Num : Num : Num
+add a b = a + b
+
+greeting :: Str : Str
+greeting name = "Hello, " + name
+
+result = add (double 3) 4
+message = greeting "milang"
+</code></pre>
+<pre><code>double = &lt;closure&gt;
+add = &lt;closure&gt;
+greeting = &lt;closure&gt;
+result = 10
+message = Hello, milang
+</code></pre>
+<h2 id="record-types"><a class="header" href="#record-types">Record Types</a></h2>
+<p>Record types describe the shape of a record — field names and their types:</p>
+<pre><code class="language-milang">Point :: {x = Num; y = Num}
+</code></pre>
+<p>You can use a named record type in function signatures:</p>
+<pre><code class="language-milang">Point :: {x = Num; y = Num}
+
+mkPoint :: Num : Num : Point
+mkPoint x y = {x = x; y = y}
+
+p = mkPoint 3 4
+</code></pre>
+<pre><code>mkPoint = &lt;closure&gt;
+p =  {x = 3, y = 4}
+</code></pre>
+<h2 id="polymorphism-type-variables"><a class="header" href="#polymorphism-type-variables">Polymorphism (Type Variables)</a></h2>
+<p>Any unbound identifier in a type expression is automatically a type variable. There is no <code>forall</code> keyword — just use lowercase names:</p>
+<pre><code class="language-milang">apply :: (a : b) : a : b
+apply f x = f x
+</code></pre>
+<p>Here <code>a</code> and <code>b</code> are type variables. <code>apply</code> works for any function type <code>a : b</code> applied to an <code>a</code>, producing a <code>b</code>.</p>
+<pre><code class="language-milang">apply :: (a : b) : a : b
+apply f x = f x
+
+double x = x * 2
+result = apply double 21
+</code></pre>
+<pre><code>apply = &lt;closure&gt;
+double = &lt;closure&gt;
+result = 42
+</code></pre>
+<h2 id="adt-types"><a class="header" href="#adt-types">ADT Types</a></h2>
+<p>You can annotate functions that operate on algebraic data types:</p>
+<pre><code class="language-milang">Shape = {Circle radius; Rect width height}
+
+area :: Shape : Num
+area s = s -&gt;
+  Circle = 3 * s.radius * s.radius
+  Rect = s.width * s.height
+
+a = area (Circle 5)
+b = area (Rect 3 4)
+</code></pre>
+<pre><code>Shape = _module_ {Circle = &lt;closure&gt;, Rect = &lt;closure&gt;}
+Circle = &lt;closure&gt;
+Rect = &lt;closure&gt;
+area = &lt;closure&gt;
+a = 75
+b = 12
+</code></pre>
+<h2 id="the-dual-meaning-of-"><a class="header" href="#the-dual-meaning-of-">The Dual Meaning of <code>:</code></a></h2>
+<p>The <code>:</code> symbol is overloaded depending on context:</p>
+<ul>
+<li><strong>Value domain:</strong> cons operator — <code>1 : [2, 3]</code> builds a list</li>
+<li><strong>Type domain:</strong> function arrow — <code>Num : Num : Num</code> describes a function</li>
+</ul>
+<p>This works because <code>::</code> on its own line clearly marks the boundary between value code and type code. There is never ambiguity.</p>
+<h2 id="type-checking-behavior"><a class="header" href="#type-checking-behavior">Type Checking Behavior</a></h2>
+<p>The type checker is bidirectional: it pushes <code>::</code> annotations downward and infers types bottom-up. Type errors are reported as errors. Checking is structural — records match by shape (field names and types), not by name. Any record with the right <code>fields</code> satisfies a record type.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="traits--effects-"><a class="header" href="#traits--effects-">Traits &amp; Effects (<code>:~</code>)</a></h1>
+<p>The <code>:~</code> annotation domain attaches trait or effect information to a binding. It describes <em>what capabilities</em> a function uses — console IO, file reads, process execution, and so on. Traits annotations are orthogonal to type annotations (<code>::</code>) and can coexist on the same binding.</p>
+<h2 id="syntax-1"><a class="header" href="#syntax-1">Syntax</a></h2>
+<pre><code class="language-milang">name :~ traitsExpr
+</code></pre>
+<p>The traits expression is typically a list of effect names:</p>
+<pre><code class="language-milang">greet :~ [console]
+greet world = world.io.println "hello"
+</code></pre>
+<h2 id="effect-names"><a class="header" href="#effect-names">Effect Names</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Effect</th><th>Capabilities covered</th></tr>
+</thead>
+<tbody>
+<tr><td><code>console</code></td><td><code>println</code>, <code>print</code>, <code>readLine</code></td></tr>
+<tr><td><code>fs.read</code></td><td><code>readFile</code>, <code>exists</code></td></tr>
+<tr><td><code>fs.write</code></td><td><code>writeFile</code>, <code>appendFile</code>, <code>remove</code></td></tr>
+<tr><td><code>exec</code></td><td><code>process.exec</code></td></tr>
+<tr><td><code>env</code></td><td><code>getEnv</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Use <code>[]</code> (empty list) or define a name bound to <code>[]</code> to declare a function as pure:</p>
+<pre><code class="language-milang">pure :~ []
+
+add :~ pure
+add a b = a + b
+</code></pre>
+<h2 id="defining-effect-groups"><a class="header" href="#defining-effect-groups">Defining Effect Groups</a></h2>
+<p>You can define reusable groups of effects:</p>
+<pre><code class="language-milang">readonly :~ [console, fs.read]
+readwrite :~ [console, fs.read, fs.write]
+</code></pre>
+<p>Then reference those groups in other annotations.</p>
+<h2 id="example"><a class="header" href="#example">Example</a></h2>
+<pre><code class="language-milang">distance :~ []
+distance x1 y1 x2 y2 = (x2 - x1)**2 + (y2 - y1)**2
+
+main world =
+  world.io.println (distance 0 0 3 4)
+</code></pre>
+<pre><code>25
+</code></pre>
+<h2 id="combining-with-other-domains"><a class="header" href="#combining-with-other-domains">Combining with Other Domains</a></h2>
+<p>All annotation domains can coexist on a single binding:</p>
+<pre><code class="language-milang">add :? "Add two numbers"
+add :: Num : Num : Num
+add :~ []
+add a b = a + b
+</code></pre>
+<h2 id="current-status"><a class="header" href="#current-status">Current Status</a></h2>
+<p>Trait annotations are parsed, stored, and <strong>enforced</strong> by the compiler. The compiler performs taint analysis: it tracks the <code>world</code> value and any names that transitively reference it (via aliasing or closures), then infers the effect set of every binding. If a function’s inferred effects are not a subset of its declared traits, the compiler emits an error.</p>
+<p><strong>Functions without a <code>:~</code> annotation are assumed pure</strong> (<code>:~ []</code>). This means any function that performs IO must declare its effects. The only exception is <code>main</code>, which is implicitly granted all capabilities.</p>
+<p>For example, declaring <code>:~ []</code> (pure) but calling <code>world.io.println</code> inside the body is a compile error — and so is omitting the annotation entirely:</p>
+<pre><code class="language-milang">-- This is an error: no annotation, so assumed pure, but uses console
+helper world = world.io.println "oops"
+
+-- Fix: add trait annotation
+helper :~ [console]
+helper world = world.io.println "ok"
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="documentation-"><a class="header" href="#documentation-">Documentation (<code>:?</code>)</a></h1>
+<p>The <code>:?</code> annotation domain attaches documentation to a binding. Doc expressions are ordinary milang expressions — usually strings or structured records — that the compiler stores as compile-time metadata. They do not affect runtime behavior.</p>
+<h2 id="simple-string-docs"><a class="header" href="#simple-string-docs">Simple String Docs</a></h2>
+<p>The most common form is a short description string:</p>
+<pre><code class="language-milang">add :? "Add two numbers"
+add a b = a + b
+</code></pre>
+<h2 id="structured-docs"><a class="header" href="#structured-docs">Structured Docs</a></h2>
+<p>For richer documentation, use a record with <code>fields</code> like <code>summary</code>, <code>params</code>, and <code>returns</code>:</p>
+<pre><code class="language-milang">distance :? {
+  summary = "Squared distance between two points"
+  params = {
+    x1 = "First x coordinate"
+    y1 = "First y coordinate"
+    x2 = "Second x coordinate"
+    y2 = "Second y coordinate"
+  }
+  returns = "The squared distance as a number"
+}
+distance x1 y1 x2 y2 = (x2 - x1)**2 + (y2 - y1)**2
+</code></pre>
+<p>The field names are not enforced — you can use whatever structure makes sense for your project.</p>
+<h2 id="triple-quoted-string-docs"><a class="header" href="#triple-quoted-string-docs">Triple-Quoted String Docs</a></h2>
+<p>For multi-line documentation, use triple-quoted strings. Margin stripping (based on the closing <code>"""</code> indentation) keeps the source tidy:</p>
+<pre><code class="language-milang">greet :? """
+  Greet a person by name.
+  Prints a friendly message to the console.
+  """
+greet world name = world.io.println ("Hello, " + name + "!")
+</code></pre>
+<h2 id="example-1"><a class="header" href="#example-1">Example</a></h2>
+<pre><code class="language-milang">add :? "Add two numbers"
+add :: Num : Num : Num
+add a b = a + b
+
+distance :? {summary = "Squared distance"; returns = "Num"}
+distance x1 y1 x2 y2 = (x2 - x1)**2 + (y2 - y1)**2
+
+main world =
+  world.io.println (add 3 4)
+  world.io.println (distance 0 0 3 4)
+</code></pre>
+<pre><code>7
+25
+</code></pre>
+<p>Doc annotations do not change execution — the output above is the same with or without <code>:?</code> lines.</p>
+<h2 id="combining-all-five-domains"><a class="header" href="#combining-all-five-domains">Combining All Five Domains</a></h2>
+<p>Every annotation domain can coexist on a single binding:</p>
+<pre><code class="language-milang">distance :? "Squared Euclidean distance"
+distance :: Num : Num : Num : Num : Num
+distance :~ []
+distance x1 y1 x2 y2 = (x2 - x1)**2 + (y2 - y1)**2
+</code></pre>
+<p>The domains are <code>=</code> (value), <code>::</code> (type), <code>:~</code> (traits), <code>:?</code> (docs), and <code>:!</code> (parse). They are independent and can appear in any order before the value binding.</p>
+<h2 id="future-milang-doc"><a class="header" href="#future-milang-doc">Future: <code>milang doc</code></a></h2>
+<p>A planned <code>milang doc</code> command will extract <code>:?</code> annotations from source files and generate reference documentation automatically.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="parse-declarations-"><a class="header" href="#parse-declarations-">Parse Declarations (<code>:!</code>)</a></h1>
+<p>The <code>:!</code> annotation domain declares how the parser should handle a user-defined operator — specifically its precedence and associativity. The parser pre-scans the source for <code>:!</code> declarations before parsing expressions, so they take effect immediately.</p>
+<h2 id="syntax-2"><a class="header" href="#syntax-2">Syntax</a></h2>
+<pre><code class="language-milang">(op) :! {prec = N; assoc = Left}
+</code></pre>
+<ul>
+<li><strong><code>prec</code></strong> — an integer precedence level. Higher values bind more tightly.</li>
+<li><strong><code>assoc</code></strong> — one of <code>Left</code>, <code>Right</code>, or <code>None</code>. Determines how chains of the same operator group:
+<ul>
+<li><code>Left</code>: <code>a op b op c</code> parses as <code>(a op b) op c</code></li>
+<li><code>Right</code>: <code>a op b op c</code> parses as <code>a op (b op c)</code></li>
+<li><code>None</code>: chaining is a parse error; explicit parentheses are required.</li>
+</ul>
+</li>
+</ul>
+<h2 id="example-2"><a class="header" href="#example-2">Example</a></h2>
+<pre><code class="language-milang">(&lt;=&gt;) :! {prec = 30; assoc = Left}
+(&lt;=&gt;) a b = if (a == b) 0 (if (a &gt; b) 1 (0 - 1))
+
+cmp1 = 5 &lt;=&gt; 3
+cmp2 = 3 &lt;=&gt; 3
+cmp3 = 1 &lt;=&gt; 5
+</code></pre>
+<pre><code>&lt;=&gt; = &lt;closure&gt;
+cmp1 = 1
+cmp2 = 0
+cmp3 = -1
+</code></pre>
+<h2 id="built-in-operator-precedences"><a class="header" href="#built-in-operator-precedences">Built-in Operator Precedences</a></h2>
+<p>For reference, the approximate precedence levels of built-in operators:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Precedence</th><th>Operators</th><th>Associativity</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td><code>|&gt;</code> <code>&gt;&gt;</code> <code>&lt;&lt;</code></td><td>Left</td></tr>
+<tr><td>2</td><td><code>||</code></td><td>Left</td></tr>
+<tr><td>3</td><td><code>&amp;&amp;</code></td><td>Left</td></tr>
+<tr><td>4</td><td><code>==</code> <code>/=</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code></td><td>Left</td></tr>
+<tr><td>5</td><td><code>:</code></td><td>Right</td></tr>
+<tr><td>6</td><td><code>+</code> <code>-</code> <code>++</code></td><td>Left</td></tr>
+<tr><td>7</td><td><code>*</code> <code>/</code> <code>%</code></td><td>Left</td></tr>
+<tr><td>8</td><td><code>**</code></td><td>Right</td></tr>
+</tbody>
+</table>
+</div>
+<p>User-defined operators without a <code>:!</code> declaration receive a default precedence. Define <code>:!</code> to override this and integrate your operator naturally with built-in ones.</p>
+<h2 id="metaprogramming-hook"><a class="header" href="#metaprogramming-hook">Metaprogramming Hook</a></h2>
+<p>Because <code>:!</code> declarations are processed during parsing (before evaluation), they serve as a metaprogramming hook — they let you reshape how the parser reads subsequent expressions. Combined with user-defined operators, this gives you control over the syntactic structure of your programs.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="open-function-chaining"><a class="header" href="#open-function-chaining">Open Function Chaining</a></h1>
+<p>Milang supports <strong>open function chaining</strong> — when you redefine a function
+that uses pattern matching (the <code>-&gt;</code> arrow), your new alternatives are
+automatically prepended to the existing definition. The previous definition
+becomes the fallback for values that don’t match your new patterns.</p>
+<p>This is milang’s answer to typeclasses: no new syntax, no special declarations.
+<code>Just</code> define the same function again with new patterns.</p>
+<h2 id="how-it-works-1"><a class="header" href="#how-it-works-1">How It Works</a></h2>
+<p>When a binding is redefined in the same scope and the new definition uses
+pattern matching (<code>-&gt;</code>) <strong>without a catch-all wildcard</strong> (<code>_</code>), the compiler
+chains the two definitions together. The new alternatives are tried first;
+if none match, the old definition handles the value.</p>
+<p>If the new definition <strong>includes</strong> a catch-all wildcard, it fully replaces
+the old definition — the catch-all means “I handle everything.”</p>
+<pre><code class="language-milang">-- Base: has catch-all
+describe val = val -&gt; _ = "unknown"
+
+-- Extension: no catch-all — chains with base
+describe val = val -&gt; Circle = "a circle"; Rect = "a rectangle"
+</code></pre>
+<p>Now <code>describe (Circle 5)</code> returns <code>"a circle"</code> and <code>describe 42</code> falls
+through to the base, returning <code>"unknown"</code>.</p>
+<h2 id="extensible-builtins"><a class="header" href="#extensible-builtins">Extensible Builtins</a></h2>
+<p>Three core prelude functions are designed to be extended this way:</p>
+<h3 id="truthy"><a class="header" href="#truthy"><code>truthy</code></a></h3>
+<p><code>truthy</code> is the universal boolean coercion point. It is called internally
+by <code>if</code>, guards, <code>not</code>, <code>&amp;&amp;</code>, and <code>||</code>. The prelude default treats <code>0</code>,
+<code>0.0</code>, <code>""</code>, <code>False</code>, <code>Nil</code>, and <code>Nothing</code> as falsy (returns <code>0</code>);
+everything else is <code>truthy</code> (returns <code>1</code>).</p>
+<p>Extend <code>truthy</code> to teach the language how your types behave in boolean
+contexts:</p>
+<pre><code class="language-milang">Result = {Err msg; Ok val}
+truthy val = val -&gt; Err = 0; Ok = 1
+
+main world =
+  world.io.println (toString (if (Ok 42) "yes" "no"))
+  world.io.println (toString (if (Err "oops") "yes" "no"))
+  world.io.println (toString (not (Err "fail")))
+</code></pre>
+<pre><code>yes
+no
+1
+</code></pre>
+<h3 id="tostring"><a class="header" href="#tostring"><code>toString</code></a></h3>
+<p><code>toString</code> converts values to their string representation. The prelude
+handles <code>True</code>, <code>False</code>, <code>Nil</code>, <code>Nothing</code>, and <code>Just</code> symbolically, then
+falls through to <code>_toString</code> (the C-level primitive) for ints, floats, and
+strings. Extend it for your own types:</p>
+<pre><code class="language-milang">Pair = {Pair fst snd}
+toString val = val -&gt; Pair = "(" + toString val.fst + ", " + toString val.snd + ")"
+
+main world =
+  world.io.println (toString (Pair 1 2))
+  world.io.println (toString (Pair "hello" True))
+</code></pre>
+<pre><code>(1, 2)
+(hello, True)
+</code></pre>
+<h3 id="eq"><a class="header" href="#eq"><code>eq</code></a></h3>
+<p><code>eq</code> is the extensible equality function. The prelude default falls through
+to structural <code>==</code>. The <code>contains</code> function uses <code>eq</code>, so extending <code>eq</code>
+automatically affects list membership checks:</p>
+<pre><code class="language-milang">Card = {Card rank suit}
+eq a b = a -&gt; Card = a.rank == b.rank
+
+main world =
+  world.io.println (toString (eq (Card 10 "H") (Card 10 "S")))
+  world.io.println (toString (contains [Card 10 "H", Card 5 "D"] (Card 10 "S")))
+</code></pre>
+<pre><code>1
+0
+</code></pre>
+<h2 id="scope-chaining"><a class="header" href="#scope-chaining">Scope Chaining</a></h2>
+<p>Open chaining works across scopes. A redefinition inside a function body
+(a <code>With</code> block) chains with the outer scope’s definition, not just
+same-scope duplicates. Multiple levels of chaining compose naturally:</p>
+<pre><code class="language-milang">Result = {Err msg; Ok val}
+truthy val = val -&gt; Err = 0; Ok = 1
+
+main world =
+  Severity = {Low; High}
+  truthy val = val -&gt; Low = 0; High = 1
+  -- truthy now handles Result, Severity, AND all prelude types
+  world.io.println (toString (truthy (Ok 1)))
+  world.io.println (toString (truthy (Err "x")))
+  world.io.println (toString (truthy High))
+  world.io.println (toString (truthy Low))
+  world.io.println (toString (truthy Nothing))
+</code></pre>
+<pre><code>1
+0
+1
+0
+0
+</code></pre>
+<h2 id="writing-extensible-functions"><a class="header" href="#writing-extensible-functions">Writing Extensible Functions</a></h2>
+<p>To make your own functions extensible, follow this pattern:</p>
+<ol>
+<li><strong>Define a base</strong> with a catch-all wildcard — this provides default behavior.</li>
+<li><strong>Extend without a catch-all</strong> — your new alternatives are prepended; the base stays as fallback.</li>
+</ol>
+<pre><code class="language-milang">-- Base definition (has catch-all)
+describe val = val -&gt; _ = "something"
+
+-- Extension (no catch-all — chains)
+Shape = {Circle radius; Rect width height}
+describe val = val -&gt; Circle = "a circle"; Rect = "a rectangle"
+
+main world =
+  world.io.println (describe (Circle 5))
+  world.io.println (describe (Rect 3 4))
+  world.io.println (describe 42)
+</code></pre>
+<pre><code>a circle
+a rectangle
+something
+</code></pre>
+<p>If you include a catch-all in an extension, it fully replaces the base —
+use this when you genuinely want to override all behavior.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="partial-evaluation"><a class="header" href="#partial-evaluation">Partial Evaluation</a></h1>
+<p>Partial evaluation is milang’s core compilation model. There is no separate
+optimisation pass — the compiler itself evaluates every expression whose inputs
+are known at compile time and emits C code only for what remains. The result is
+that high-level abstractions (helper functions, configuration records, computed
+constants) often carry <strong>zero runtime cost</strong>.</p>
+<h2 id="how-it-works-2"><a class="header" href="#how-it-works-2">How it works</a></h2>
+<p>When the compiler processes a binding it walks the expression tree with a
+recursive reducer (<code>reduceD</code>). At each node it checks whether the operands are
+<em>concrete</em> — literal integers, floats, strings, lambdas, or records whose
+<code>fields</code> are themselves concrete. If they are, the expression is evaluated
+immediately and replaced by its result. If any operand is unknown (a function
+parameter, an IO result, etc.) the expression is left as <em>residual code</em> for
+the C back-end to emit.</p>
+<pre><code class="language-milang">-- Fully reduced at compile time:
+x = 6 * 7              -- becomes: x = 42
+f a = a * 2
+y = f 21                -- becomes: y = 42
+
+-- Stays as residual code (parameter unknown):
+double a = a * 2        -- emitted as a C function
+</code></pre>
+<h3 id="scc-dependency-analysis"><a class="header" href="#scc-dependency-analysis">SCC dependency analysis</a></h3>
+<p>Bindings are sorted into <em>strongly connected components</em> so that each group is
+reduced in dependency order. Mutually-recursive bindings land in the same SCC
+and are handled together.</p>
+<h3 id="depth-limited-recursion"><a class="header" href="#depth-limited-recursion">Depth-limited recursion</a></h3>
+<p>Recursive functions are unrolled only when every argument is concrete, and
+reduction is capped at a fixed depth (128 steps). This prevents the compiler
+from looping on unbounded recursion while still collapsing finite recursive
+computations at compile time.</p>
+<h2 id="zero-cost-abstractions"><a class="header" href="#zero-cost-abstractions">Zero-cost abstractions</a></h2>
+<p>Because the reducer runs before code generation, any abstraction that is fully
+known at compile time disappears entirely from the output:</p>
+<pre><code class="language-milang">-- Configuration record — reduced away at compile time
+config = {width = 800; height = 600}
+pixels = config.width * config.height
+</code></pre>
+<pre><code>config =  {width = 800, height = 600}
+pixels = 480000
+</code></pre>
+<p>The binding <code>pixels</code> is reduced to the integer <code>480000</code> before any C code is
+generated. No record allocation, no field lookup — just a constant.</p>
+<h2 id="inspecting-the-reducer-output"><a class="header" href="#inspecting-the-reducer-output">Inspecting the reducer output</a></h2>
+<p>milang ships two commands for inspecting what the compiler sees:</p>
+<pre><code class="language-bash">milang dump file.mi      -- parsed AST (before reduction)
+milang reduce file.mi    -- AST after partial evaluation (what codegen sees)
+</code></pre>
+<p>Comparing the two on the same file shows exactly which expressions were
+collapsed and which remain as residual code. This is the primary tool for
+understanding compile-time behaviour.</p>
+<h2 id="what-stays-as-residual-code"><a class="header" href="#what-stays-as-residual-code">What stays as residual code</a></h2>
+<p>Anything that depends on a value unknown at compile time is left for the C
+back-end:</p>
+<pre><code class="language-milang">main world =
+  line = world.io.readLine    -- runtime IO — cannot reduce
+  world.io.println line       -- emitted as C call
+</code></pre>
+<p>Function parameters, IO results, and any expression transitively depending on
+them are residual. Everything else is reduced.</p>
+<!-- Sized types and partial evaluation
+
+When the reducer encounters expressions involving sized numeric types the
+following notes explain the current behaviour and constraints:
+
+- The width argument to `Int'`, `UInt'`, or `Float'` must be a compile-time
+  constant. The reducer requires concrete `n` values to reason about types;
+  expressions like `Int' (4 * 8)` will reduce to `Int' 32` when the arithmetic
+  inside the type expression is concrete.
+
+- Type aliases such as `Int = Int' 64` are treated as syntactic sugar and are
+  resolved during reduction; they do not remain at runtime.
+
+- Current implementation note: sized types are primarily type-level and used
+  for ABI/representation and annotation. The reducer evaluates constant
+  arithmetic using Milang's general numeric semantics and does not automatically
+  wrap or clamp values to a narrower machine width. If strict fixed-width
+  arithmetic is required, use explicit conversion primitives or the C FFI,
+  which maps milang sized types to fixed-width C types.
+
+- Future work may include full width-aware reduction (clamping/wrapping at
+  reduction time) and richer type-level computation.
+
+-->
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="thunks--laziness-1"><a class="header" href="#thunks--laziness-1">Thunks &amp; Laziness</a></h1>
+<p>Milang is <strong>eager by default</strong> — every expression is evaluated as soon as it is
+bound. The tilde operator <code>~</code> lets you opt into delayed evaluation where you
+need it.</p>
+<h2 id="creating-thunks-with-"><a class="header" href="#creating-thunks-with-">Creating thunks with <code>~</code></a></h2>
+<p>Prefixing an expression with <code>~</code> wraps it in a <em>thunk</em>: a suspended computation
+that is not executed until its value is actually needed.</p>
+<pre><code class="language-milang">eager = 1 + 2       -- evaluated immediately
+delayed = ~(1 + 2)  -- wrapped in a thunk; not yet evaluated
+result = delayed     -- forced here: evaluates to 3
+</code></pre>
+<pre><code>eager = 3
+delayed = 3
+result = 3
+</code></pre>
+<p>When a thunk is used in a context that needs its value (passed to an operator,
+printed, pattern-matched, etc.) it is <em>forced</em> automatically — you never call a
+thunk explicitly.</p>
+<h2 id="if-and-auto-quote-parameters"><a class="header" href="#if-and-auto-quote-parameters"><code>if</code> and auto-quote parameters</a></h2>
+<p>In earlier versions of milang, <code>if</code> required explicit thunks on both branches
+to prevent eager evaluation:</p>
+<pre><code class="language-milang">-- Old style (still works, but no longer necessary):
+result = if (x &gt; 5) (x * 2) (x * 3)
+</code></pre>
+<p>The <code>if</code> conditional quotes its branches implicitly; write conditionals like this:</p>
+<pre><code class="language-milang">x = 10
+result = if (x &gt; 5) (x * 2) (x * 3)
+</code></pre>
+<pre><code>x = 10
+result = 20
+</code></pre>
+<p>Both styles work — if you pass a thunk to an auto-quote parameter, the thunk
+is forced after splicing. See the <a href="#metaprogramming-1">Metaprogramming</a> chapter
+for details on <code>#</code>-params.</p>
+<h2 id="nested-conditionals"><a class="header" href="#nested-conditionals">Nested conditionals</a></h2>
+<p>Conditionals compose naturally:</p>
+<pre><code class="language-milang">z = 7
+result = if (z &gt; 10) 100 (if (z &gt; 5) 50 0)
+</code></pre>
+<pre><code>z = 7
+result = 50
+</code></pre>
+<p>Each inner <code>if</code> is only evaluated when its enclosing branch is selected.</p>
+<h2 id="lazy-bindings-with-"><a class="header" href="#lazy-bindings-with-">Lazy bindings with <code>:=</code></a></h2>
+<p>The <code>:=</code> operator creates a <em>lazy binding</em> — syntactic sugar for a thunk that
+caches its result after the first force:</p>
+<pre><code class="language-milang">x = 3
+y := x + 10   -- not evaluated until y is used
+z = y * 2     -- forces y here; y becomes 13, z becomes 26
+</code></pre>
+<pre><code>x = 3
+y = &lt;closure&gt;
+z = 26
+</code></pre>
+<p>Lazy bindings are useful for expensive computations that may never be needed, or
+for establishing declaration-order dependencies without paying upfront cost.</p>
+<h2 id="when-to-use-thunks"><a class="header" href="#when-to-use-thunks">When to use thunks</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Situation</th><th>Mechanism</th></tr>
+</thead>
+<tbody>
+<tr><td>Conditional branches (<code>if</code>)</td><td>Auto-quoted branch parameters handle this</td></tr>
+<tr><td>Short-circuit logic (<code>&amp;&amp;</code>, <code>||</code>)</td><td>Auto-quote params handle the lazy operand</td></tr>
+<tr><td>Deferred expensive work</td><td>Lazy binding <code>:=</code></td></tr>
+<tr><td>Controlling IO ordering</td><td>Thunks delay side effects until forced</td></tr>
+</tbody>
+</table>
+</div>
+<p>The general rule: reach for <code>~</code> whenever you need to <strong>control when</strong> an
+expression is evaluated rather than relying on milang’s default left-to-right
+eager order.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="metaprogramming-1"><a class="header" href="#metaprogramming-1">Metaprogramming</a></h1>
+<p>Milang provides two complementary operators for working with syntax at compile
+time: <strong>quote</strong> (<code>#</code>) captures an expression as a data structure, and <strong>splice</strong>
+(<code>$</code>) evaluates a data structure back into code. Combined with partial
+evaluation these give you compile-time code generation without a separate macro
+system.</p>
+<h2 id="quote-expr"><a class="header" href="#quote-expr">Quote: <code>#expr</code></a></h2>
+<p>The <code>#</code> operator captures the <em>abstract syntax tree</em> of its operand as a tagged
+record. The expression is <strong>not</strong> evaluated — only its structure is recorded.</p>
+<pre><code class="language-milang">q_int = #42
+q_op  = #(1 + 2)
+</code></pre>
+<pre><code>q_int = Int {val = 42}
+q_op = Op {op = +, left = Int {val = 1}, right = Int {val = 2}}
+</code></pre>
+<p>Each syntactic form maps to a specific record <code>tag</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Syntax</th><th>Quoted form</th></tr>
+</thead>
+<tbody>
+<tr><td><code>#42</code></td><td><code>Int {val = 42}</code></td></tr>
+<tr><td><code>#"hello"</code></td><td><code>Str {val = "hello"}</code></td></tr>
+<tr><td><code>#x</code></td><td><code>Var {name = "x"}</code></td></tr>
+<tr><td><code>#(f x)</code></td><td><code>App {fn = Var {name = "f"}; arg = Var {name = "x"}}</code></td></tr>
+<tr><td><code>#(a + b)</code></td><td><code>Op {op = "+"; left = ...; right = ...}</code></td></tr>
+<tr><td><code>#(\x -&gt; x)</code></td><td><code>Fn {param = "x"; body = ...}</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Because quoted ASTs are ordinary records you can inspect their <code>fields</code>, pass them
+to functions, and build new ASTs by constructing records directly.</p>
+<h2 id="splice-expr"><a class="header" href="#splice-expr">Splice: <code>$expr</code></a></h2>
+<p>The <code>$</code> operator takes a record that represents an AST node and evaluates it as
+code:</p>
+<pre><code class="language-milang">ast = #(1 + 2)
+result = $ast
+</code></pre>
+<pre><code>ast = Op {op = +, left = Int {val = 1}, right = Int {val = 2}}
+result = 3
+</code></pre>
+<p>Splicing a quoted literal round-trips back to its value. More usefully, you can
+build AST records by hand and splice them:</p>
+<pre><code class="language-milang">ast = Op {op = "*"; left = Int {val = 6}; right = Int {val = 7}}
+answer = $ast
+</code></pre>
+<pre><code>ast = Op {op = *, left = Int {val = 6}, right = Int {val = 7}}
+answer = 42
+</code></pre>
+<h2 id="writing-macros"><a class="header" href="#writing-macros">Writing macros</a></h2>
+<p>A macro in milang is just a function that takes and returns AST records. Because
+the partial evaluator runs at compile time, macro expansion happens before code
+generation — there is no runtime cost.</p>
+<pre><code class="language-milang">-- Macro: double an expression (x + x)
+double_ast expr = Op {op = "+"; left = expr; right = expr}
+r1 = $(double_ast #5)
+
+-- Macro: negate (0 - x)
+negate_ast expr = Op {op = "-"; left = Int {val = 0}; right = expr}
+r2 = $(negate_ast #42)
+</code></pre>
+<pre><code>double_ast = &lt;closure&gt;
+r1 = 10
+negate_ast = &lt;closure&gt;
+r2 = -42
+</code></pre>
+<p>Macros compose — you can pass one macro’s output as another’s input:</p>
+<pre><code class="language-milang">double_ast expr = Op {op = "+"; left = expr; right = expr}
+negate_ast expr = Op {op = "-"; left = Int {val = 0}; right = expr}
+r = $(double_ast (negate_ast #7))
+</code></pre>
+<pre><code>double_ast = &lt;closure&gt;
+negate_ast = &lt;closure&gt;
+r = -14
+</code></pre>
+<h2 id="pattern-matching-on-asts"><a class="header" href="#pattern-matching-on-asts">Pattern matching on ASTs</a></h2>
+<p>Because quoted expressions are records, you can pattern-match on them to
+transform code structurally:</p>
+<pre><code class="language-milang">-- Swap the arguments of a binary operator
+swap_op ast = ast -&gt;
+  Op {op = op; left = l; right = r} = Op {op = op; left = r; right = l}
+  _ = ast
+</code></pre>
+<h2 id="auto-quote-parameters-param"><a class="header" href="#auto-quote-parameters-param">Auto-Quote Parameters (<code>#param</code>)</a></h2>
+<p>When defining a function (or binding), prefixing a parameter name with <code>#</code>
+tells the compiler to <strong>automatically quote</strong> the corresponding argument at the
+call site. Inside the body, <code>$param</code> splices the captured AST back into code
+and evaluates it. The caller writes ordinary expressions — no sigils needed.</p>
+<pre><code class="language-milang">-- 'if' is defined in the prelude using auto-quote params:
+--   if cond #t #e = (truthy cond) -&gt; 0 = $e; _ = $t
+-- The caller just writes:
+x = 10
+result = if (x &gt; 5) (x * 2) (x * 3)
+</code></pre>
+<pre><code>x = 10
+result = 20
+</code></pre>
+<p>Because the <code>#t</code> and <code>#e</code> parameters auto-quote their arguments, neither
+branch is evaluated until the matching <code>$t</code> or <code>$e</code> splice runs. This is how
+milang achieves lazy branching without keywords or special forms — <code>if</code> is an
+ordinary user-defined function.</p>
+<p>Auto-quote parameters work with any function, not just <code>if</code>:</p>
+<pre><code class="language-milang">-- A logging wrapper that only evaluates its message when enabled
+log_if enabled #msg world = if enabled (world.io.println $msg) 0
+</code></pre>
+<p>Note that <code>world</code> must be threaded through explicitly: <code>world.io.println</code> requires the <code>world</code> value to be in scope, so any function calling IO must accept it as a parameter.</p>
+<h3 id="how-it-works-3"><a class="header" href="#how-it-works-3">How it works</a></h3>
+<ol>
+<li>The function definition declares <code>#param</code> — the <code>#</code> is part of the parameter
+name in the source but is stripped for binding purposes.</li>
+<li>At each call site, the compiler wraps the corresponding argument in <code>#(...)</code>,
+producing a quoted AST record.</li>
+<li>In the body, <code>$param</code> splices the record back into an expression and
+evaluates it in the current environment.</li>
+<li>If the spliced expression contains a thunk (<code>~expr</code>), the thunk is
+automatically forced after splicing — so old-style <code>~</code> code remains
+backward-compatible.</li>
+</ol>
+<h3 id="relation-to-thunks"><a class="header" href="#relation-to-thunks">Relation to thunks</a></h3>
+<p>Auto-quote parameters are strictly more general than thunks (<code>~</code>). A thunk
+delays evaluation of a single expression; a quoted parameter captures the full
+AST, which can be inspected, transformed, or conditionally evaluated. For
+simple conditional laziness (like <code>if</code>), the effect is the same — but
+auto-quote opens the door to user-defined control flow, macros that inspect
+their arguments, and other metaprogramming patterns.</p>
+<h2 id="inspection-commands"><a class="header" href="#inspection-commands">Inspection commands</a></h2>
+<p>Two CLI commands help you understand what the compiler sees:</p>
+<pre><code class="language-bash">milang dump file.mi      -- show the parsed AST (before reduction)
+milang reduce file.mi    -- show the AST after partial evaluation
+</code></pre>
+<p>Use <code>dump</code> to verify that quoting produces the record structure you expect, and
+<code>reduce</code> to confirm that your macros expand correctly at compile time.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="user-defined-operators-1"><a class="header" href="#user-defined-operators-1">User-Defined Operators</a></h1>
+<p>In milang operators are ordinary functions whose names are made of operator
+characters (<code>+ - * / ^ &lt; &gt; = ! &amp; | @ % ? :</code>). You define, use, and pass them
+around exactly like any other function.</p>
+<h2 id="defining-an-operator"><a class="header" href="#defining-an-operator">Defining an operator</a></h2>
+<p>Wrap the operator name in parentheses and define it as a normal function:</p>
+<pre><code class="language-milang">(&lt;=&gt;) a b = if (a == b) 0 (if (a &gt; b) 1 (0 - 1))
+cmp1 = 5 &lt;=&gt; 3
+cmp2 = 3 &lt;=&gt; 3
+cmp3 = 1 &lt;=&gt; 5
+</code></pre>
+<pre><code>&lt;=&gt; = &lt;closure&gt;
+cmp1 = 1
+cmp2 = 0
+cmp3 = -1
+</code></pre>
+<p>The definition <code>(&lt;=&gt;) a b = ...</code> creates a two-argument function. You then use
+it infix without parentheses: <code>5 &lt;=&gt; 3</code>.</p>
+<h2 id="setting-precedence-and-associativity"><a class="header" href="#setting-precedence-and-associativity">Setting precedence and associativity</a></h2>
+<p>By default a user-defined operator gets a low precedence. Use a <strong>parse
+declaration</strong> (<code>:!</code>) to set the precedence level and associativity. The
+declaration must appear before the operator’s first infix use:</p>
+<pre><code class="language-milang">(&lt;+&gt;) :! {prec = 6; assoc = Left}
+(&lt;+&gt;) a b = {x = a.x + b.x; y = a.y + b.y}
+
+result = {x=1;y=2} &lt;+&gt; {x=3;y=4}
+</code></pre>
+<ul>
+<li><code>prec</code> — an integer; higher binds tighter (e.g. <code>*</code> is 7, <code>+</code> is 6).</li>
+<li><code>assoc</code> — <code>Left</code> or <code>Right</code>; controls grouping of chained uses.</li>
+</ul>
+<h2 id="operators-as-first-class-values"><a class="header" href="#operators-as-first-class-values">Operators as first-class values</a></h2>
+<p>Wrapping a built-in or user-defined operator in parentheses gives you a function
+value you can pass to higher-order functions:</p>
+<pre><code class="language-milang">add = (+)
+result = add 3 4
+</code></pre>
+<pre><code>add = &lt;closure&gt;
+result = 7
+</code></pre>
+<p>This is especially useful with folds and maps:</p>
+<pre><code class="language-milang">total = fold (+) 0 [1, 2, 3, 4, 5]
+</code></pre>
+<h2 id="functions-as-infix-operators-1"><a class="header" href="#functions-as-infix-operators-1">Functions as infix operators</a></h2>
+<p>The backtick syntax lets you use any two-argument function in infix position:</p>
+<pre><code class="language-milang">div a b = a / b
+result = 10 `div` 2
+</code></pre>
+<pre><code>div = &lt;closure&gt;
+result = 5
+</code></pre>
+<p><code>a `f` b</code> is equivalent to <code>f a b</code>. This works with any function, not just
+operator-named ones.</p>
+<h2 id="prefix-vs-infix"><a class="header" href="#prefix-vs-infix">Prefix vs. infix</a></h2>
+<p>Every operator can be used both ways:</p>
+<pre><code class="language-milang">-- Infix (the usual way)
+r1 = 5 &lt;=&gt; 3
+
+-- Prefix (wrap in parens)
+r2 = (&lt;=&gt;) 5 3
+</code></pre>
+<p>Both forms are interchangeable. Prefix is handy when you want to partially apply
+an operator or pass it as an argument.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="security--capabilities"><a class="header" href="#security--capabilities">Security &amp; Capabilities</a></h1>
+<p>Milang’s security model is <strong>structural</strong>: if a function does not receive a
+capability, it physically cannot use it. There is no global mutable state, no
+ambient authority, and no <code>unsafePerformIO</code> escape hatch.</p>
+<h2 id="capability-based-io"><a class="header" href="#capability-based-io">Capability-based IO</a></h2>
+<p>All side effects flow through the <code>world</code> record that the runtime passes to
+<code>main</code>. The record contains sub-records — <code>world.io</code>, <code>world.process</code>, etc. —
+each granting access to a specific class of operations.</p>
+<p>You restrict a function’s power by passing only the sub-record it needs:</p>
+<pre><code class="language-milang">-- greet can print but cannot access the filesystem or exec processes
+greet io = io.println "hello"
+
+main world = greet world.io
+</code></pre>
+<p>Because <code>greet</code> receives <code>world.io</code> and nothing else, it is structurally
+impossible for it to read files, spawn processes, or access environment
+variables. This is milang’s equivalent of the principle of least privilege —
+enforced by the language, not by convention.</p>
+<h2 id="remote-import-pinning"><a class="header" href="#remote-import-pinning">Remote import pinning</a></h2>
+<p>Milang supports importing modules by URL. To prevent supply-chain attacks every
+remote import must be <em>pinned</em> to a SHA-256 content hash:</p>
+<pre><code class="language-bash">milang pin file.mi
+</code></pre>
+<p>This command scans <code>file.mi</code> for URL imports, fetches each one, computes its
+hash, and records the result. On subsequent compilations the compiler verifies
+that the fetched content matches the pinned hash and refuses to proceed if it
+does not.</p>
+<h2 id="c-ffi-security"><a class="header" href="#c-ffi-security">C FFI security</a></h2>
+<p>Milang can call C functions via its FFI. Native C code operates outside the
+capability model, so FFI is the one place where the structural guarantee can be
+bypassed. Two CLI flags are described to let you lock this down (note: these flags are not currently implemented in the core compiler):</p>
+<ul>
+<li><strong><code>--no-ffi</code></strong> — disallow all C FFI imports. The program may only use pure
+milang and the built-in <code>world</code> capabilities.</li>
+<li><strong><code>--no-remote-ffi</code></strong> — allow C FFI in local <code>.mi</code> files but forbid it in any
+module imported by URL (and any module transitively imported from that URL
+module). This lets you trust your own native code while sandboxing third-party
+libraries.</li>
+</ul>
+<p>Trust is transitive: if your local file imports a remote module <code>A</code>, and <code>A</code>
+imports a relative module <code>B</code>, then <code>B</code> is also in the remote trust zone and
+subject to <code>--no-remote-ffi</code>.</p>
+<h2 id="structural-security-summary"><a class="header" href="#structural-security-summary">Structural security summary</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Layer</th><th>Mechanism</th></tr>
+</thead>
+<tbody>
+<tr><td>Function-level isolation</td><td>Pass minimal <code>world</code> sub-records</td></tr>
+<tr><td>Supply-chain integrity</td><td><code>milang pin</code> + SHA-256 verification</td></tr>
+<tr><td>Native code gating</td><td><code>--no-ffi</code>, <code>--no-remote-ffi</code></td></tr>
+<tr><td>Purity tracking</td><td>Compiler tracks <code>world</code>-tainted expressions; pure code cannot perform IO</td></tr>
+</tbody>
+</table>
+</div>
+<p>The design principle is simple: the only way to perform a side effect is to hold
+the right capability, and capabilities can only travel through explicit function
+arguments. The FFI gating flags close the one remaining loophole by controlling
+access to native C code.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="tooling--build-notes"><a class="header" href="#tooling--build-notes">Tooling &amp; Build Notes</a></h1>
+<p>This page collects practical tips for building Milang programs and the documentation.</p>
+<h2 id="running-examples-and-the-cli"><a class="header" href="#running-examples-and-the-cli">Running examples and the CLI</a></h2>
+<ul>
+<li>Use the local <code>./milang</code> binary in the repository root for running and experimenting with <code>.mi</code> files; if you installed <code>milang</code> on your PATH you can omit <code>./</code>.</li>
+<li>Useful commands:
+<ul>
+<li><code>./milang run file.mi</code> — compile and run</li>
+<li><code>./milang compile file.mi output.c</code> — emit standalone C</li>
+<li><code>./milang dump file.mi</code> — show parsed AST (before reduction)</li>
+<li><code>./milang reduce file.mi</code> — show partially-evaluated AST (what the codegen sees)</li>
+<li><code>./milang repl</code> — interactive REPL</li>
+</ul>
+</li>
+</ul>
+<h2 id="c-toolchain"><a class="header" href="#c-toolchain">C toolchain</a></h2>
+<p>Milang emits C and requires a working C toolchain (gcc or clang). On Debian/Ubuntu:</p>
+<pre><code class="language-bash">sudo apt-get install build-essential pkg-config
+</code></pre>
+<h2 id="building-the-docs-mdbook"><a class="header" href="#building-the-docs-mdbook">Building the docs (mdBook)</a></h2>
+<p>The repo includes an <code>mdbook</code>-style source under <code>docs/src</code> and a small preprocessor <code>docs/mdbook-milang.py</code> that executes code blocks tagged <code>milang,run</code> and appends their output. Two ways to build:</p>
+<ul>
+<li>If the project has a <code>Makefile</code>, run <code>make docs</code> (required if available).</li>
+<li>Or, install mdBook and run:</li>
+</ul>
+<pre><code class="language-bash">mdbook build docs/src -d docs/out
+</code></pre>
+<p>Ensure your mdBook configuration registers the <code>mdbook-milang.py</code> preprocessor, or run the script manually when verifying examples.</p>
+<h2 id="common-issues--debugging"><a class="header" href="#common-issues--debugging">Common issues &amp; debugging</a></h2>
+<ul>
+<li>Parsing ambiguity with inline record literals: when passing a record literal directly as an argument, parenthesize it or bind it to a name, e.g. <code>getField ({a = 1}) "a"</code> or <code>r = {a = 1} getField r "a"</code>.</li>
+<li><code>toInt</code> / <code>toFloat</code> return <code>Nothing</code> on parse failure — check results with pattern matching on <code>Just</code> / <code>Nothing</code>.</li>
+<li><code>charAt</code> and <code>getField</code> return <code>Nothing</code> when out-of-bounds or missing.</li>
+<li>Division/modulo by zero is handled at the runtime/C level (implementation-defined); avoid relying on undefined behaviour in portable code.</li>
+<li>Use <code>milang dump</code> to inspect how the parser grouped expressions if you hit unexpected parse errors.</li>
+</ul>
+<h2 id="quick-checklist"><a class="header" href="#quick-checklist">Quick checklist</a></h2>
+<ul>
+<li><code>./milang dump</code> to verify parser grouping</li>
+<li><code>./milang reduce</code> to verify partial evaluation</li>
+<li><code>mdbook build</code> (or <code>make docs</code>) to render the site</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="repl"><a class="header" href="#repl">REPL</a></h1>
+<p>The milang REPL (Read-Eval-Print Loop) lets you evaluate expressions and define bindings interactively.</p>
+<h2 id="starting-the-repl"><a class="header" href="#starting-the-repl">Starting the REPL</a></h2>
+<pre><code class="language-bash">./milang repl
+</code></pre>
+<p>You’ll see a <code>λ&gt;</code> prompt. Type any expression and press Enter to evaluate it:</p>
+<pre><code class="language-text">λ&gt; 2 + 3
+5
+λ&gt; "hello" + " " + "world"
+"hello world"
+</code></pre>
+<p>Type <code>:q</code> or press <strong>Ctrl-D</strong> to exit.</p>
+<h2 id="defining-bindings"><a class="header" href="#defining-bindings">Defining Bindings</a></h2>
+<p>Bindings persist across inputs, so you can build up definitions incrementally:</p>
+<pre><code class="language-text">λ&gt; double x = x * 2
+double = (\x -&gt; (x * 2))
+λ&gt; double 21
+42
+λ&gt; quadruple x = double (double x)
+quadruple = (\x -&gt; (double (double x)))
+λ&gt; quadruple 5
+20
+</code></pre>
+<h2 id="single-line-input"><a class="header" href="#single-line-input">Single-line Input</a></h2>
+<p>The REPL reads one line at a time. Each binding must fit on a single line. Use semicolons to separate alternatives within a <code>-&gt;</code> pattern match:</p>
+<pre><code class="language-text">λ&gt; area s = s -&gt; Circle = 3.14 * s.radius * s.radius; Rect = s.width * s.height
+</code></pre>
+<p>Multi-line indented definitions must be written in a <code>.mi</code> file and loaded via <code>milang run</code>.</p>
+<h2 id="prelude-functions"><a class="header" href="#prelude-functions">Prelude Functions</a></h2>
+<p>All standard prelude functions are available immediately — no imports needed:</p>
+<pre><code class="language-text">λ&gt; map (\x = x * x) [1, 2, 3, 4, 5]
+Cons {head = 1, tail = Cons {head = 4, tail = ...}}
+λ&gt; filter (\x = x &gt; 3) [1, 2, 3, 4, 5]
+Cons {head = 4, tail = Cons {head = 5, tail = Nil {}}}
+λ&gt; fold (\acc x = acc + x) 0 [1, 2, 3]
+6
+λ&gt; len [10, 20, 30]
+3
+</code></pre>
+<blockquote>
+<p><strong>Note:</strong> Lists are displayed as raw <code>Cons</code>/<code>Nil</code> record expressions — the REPL shows the partially-evaluated AST, not a pretty-printed representation.</p>
+</blockquote>
+<h2 id="type-annotations"><a class="header" href="#type-annotations">Type Annotations</a></h2>
+<p>You can add type annotations to bindings:</p>
+<pre><code class="language-text">λ&gt; x :: Int
+λ&gt; x = 42
+x = 42
+</code></pre>
+<p>The type is associated with the binding and checked when the value is defined.</p>
+<h2 id="viewing-bindings"><a class="header" href="#viewing-bindings">Viewing Bindings</a></h2>
+<p>Use <code>:env</code> to show all user-defined bindings (prelude bindings are hidden):</p>
+<pre><code class="language-text">λ&gt; double x = x * 2
+double = (\x -&gt; (x * 2))
+λ&gt; :env
+double = (\x -&gt; (x * 2))
+</code></pre>
+<h2 id="how-it-works-4"><a class="header" href="#how-it-works-4">How It Works</a></h2>
+<p>Each REPL input is:</p>
+<ol>
+<li>Parsed as either a binding (namespace) or a bare expression</li>
+<li>Reduced using the same partial evaluator as <code>milang reduce</code></li>
+<li>The reduced form is printed</li>
+</ol>
+<p>New bindings extend the accumulated environment for all subsequent inputs. This is a <strong>pure partial evaluator</strong> — there is no C compilation or gcc invocation in the REPL. Residuals (expressions that cannot be further reduced) are printed as-is.</p>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<ul>
+<li><strong>No IO</strong> — the REPL evaluates pure expressions only. There is no <code>world</code> value available, so <code>world.io.println</code> and similar IO operations cannot be used.</li>
+<li><strong>No imports</strong> — <code>import</code> declarations are not supported in the REPL.</li>
+<li><strong>No multi-line input</strong> — each input must fit on a single line. Write multi-line programs in <code>.mi</code> files.</li>
+<li><strong>No command history</strong> — the up/down arrow keys do not recall previous inputs.</li>
+<li><strong>Raw list output</strong> — lists are printed as <code>Cons</code>/<code>Nil</code> record expressions, not <code>[1, 2, 3]</code>.</li>
+</ul>
+<p>For IO and imports, write a <code>.mi</code> file and use <code>milang run</code> instead.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="compiler-modes-1"><a class="header" href="#compiler-modes-1">Compiler Modes</a></h1>
+<p>The <code>milang</code> binary supports six commands. Each operates on a <code>.mi</code> source file and exercises different parts of the compilation pipeline.</p>
+<h2 id="milang-run"><a class="header" href="#milang-run"><code>milang run</code></a></h2>
+<pre><code class="language-bash">./milang run file.mi
+</code></pre>
+<p>The most common command. It parses the file, resolves imports, partially evaluates, generates C, compiles with <code>gcc -O2</code>, runs the resulting binary, and cleans up temporary files.</p>
+<p>If the file defines <code>main world = ...</code>, the program runs as a normal executable and <code>main</code>’s return value becomes the process exit code. If there is no <code>main</code> binding with a parameter, milang runs in <strong>script mode</strong> (see below).</p>
+<h3 id="example-3"><a class="header" href="#example-3">Example</a></h3>
+<pre><code class="language-milang">main world =
+  world.io.println "running!"
+</code></pre>
+<pre><code>running!
+</code></pre>
+<h2 id="milang-compile"><a class="header" href="#milang-compile"><code>milang compile</code></a></h2>
+<pre><code class="language-bash">./milang compile file.mi            # writes file.c
+./milang compile file.mi output.c   # writes output.c
+./milang compile file.mi -          # prints C to stdout
+</code></pre>
+<p>Emits a self-contained C source file. The milang runtime is embedded in the output, so the generated file has no external dependencies beyond the standard C library.</p>
+<p>Compile it yourself:</p>
+<pre><code class="language-bash">gcc output.c -o program
+./program
+</code></pre>
+<p>This is useful when you want to inspect the generated code, cross-compile, or integrate milang output into a larger C project.</p>
+<h2 id="milang-dump"><a class="header" href="#milang-dump"><code>milang dump</code></a></h2>
+<pre><code class="language-bash">./milang dump file.mi
+</code></pre>
+<p>Prints the <strong>parsed AST</strong> before import resolution or partial evaluation. This shows you exactly how the parser interpreted your source, including all five annotation domains (<code>=</code>, <code>::</code>, <code>:~</code>, <code>:?</code>, <code>:!</code>).</p>
+<p>Use this to debug syntax issues — if the parser grouped your expressions differently than you expected, <code>dump</code> will show it.</p>
+<h2 id="milang-reduce"><a class="header" href="#milang-reduce"><code>milang reduce</code></a></h2>
+<pre><code class="language-bash">./milang reduce file.mi
+</code></pre>
+<p>Prints the AST <strong>after partial evaluation</strong>. This is what the code generator actually sees. Any expression that could be computed at compile time has been reduced to a literal value.</p>
+<p>Use this to verify that the partial evaluator is doing what you expect:</p>
+<pre><code class="language-milang">square x = x * 2
+answer = square 21
+</code></pre>
+<pre><code>square = &lt;closure&gt;
+answer = 42
+</code></pre>
+<p>Running <code>milang reduce</code> on this file would show <code>answer = 42</code> — the function call was evaluated at compile time.</p>
+<p>If you need to see reduction without the prelude injected, use <code>milang raw-reduce file.mi</code> to view the reduced AST for the file alone.</p>
+<h2 id="milang-pin"><a class="header" href="#milang-pin"><code>milang pin</code></a></h2>
+<pre><code class="language-bash">./milang pin file.mi
+</code></pre>
+<p>Finds all URL imports in the file, fetches them, computes a Merkle hash (SHA-256 of the content plus all transitive sub-imports), and rewrites the source file to include the hash:</p>
+<p>Before:</p>
+<pre><code class="language-milang">utils = import "https://example.com/utils.mi"
+</code></pre>
+<p>After:</p>
+<pre><code class="language-milang">utils = import' "https://example.com/utils.mi" ({sha256 = "a1b2c3..."})
+</code></pre>
+<p>This ensures that the imported code hasn’t changed since you <code>last</code> pinned it. If the content changes, the compiler will report a hash mismatch and refuse to proceed.</p>
+<h2 id="milang-repl"><a class="header" href="#milang-repl"><code>milang repl</code></a></h2>
+<pre><code class="language-bash">./milang repl
+</code></pre>
+<p>Starts an interactive REPL where you can evaluate expressions and define bindings. See the <a href="#repl">REPL</a> chapter for details.</p>
+<h2 id="script-mode-1"><a class="header" href="#script-mode-1">Script Mode</a></h2>
+<p>When a <code>.mi</code> file has no <code>main</code> binding that takes a parameter, <code>milang run</code> operates in <strong>script mode</strong>: it evaluates every top-level binding and prints each name-value pair.</p>
+<pre><code class="language-milang">a = 2 + 3
+b = a * a
+greeting = "hello"
+</code></pre>
+<pre><code>a = 5
+b = 25
+greeting = hello
+</code></pre>
+<p>Script mode is ideal for quick calculations and testing small snippets. Prelude definitions are automatically hidden from the output.</p>
+<h2 id="security-flags"><a class="header" href="#security-flags">Security Flags</a></h2>
+<p>Milang supports flags to restrict what imported code can do (note: these flags are not currently implemented in the core compiler; see .github/ROADMAP.md):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--no-ffi</code></td><td>Disables all C FFI imports (no <code>.h</code> files can be imported)</td></tr>
+<tr><td><code>--no-remote-ffi</code></td><td>Disallows C FFI for remote (URL) imports specifically</td></tr>
+</tbody>
+</table>
+</div>
+<p>These flags are useful when running untrusted code. A URL import might try to <code>import "/usr/include/stdlib.h"</code> and call arbitrary C functions — <code>--no-remote-ffi</code> prevents this while still allowing your own local FFI usage.</p>
+<h2 id="summary"><a class="header" href="#summary">Summary</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>run file.mi</code></td><td>Compile and execute</td></tr>
+<tr><td><code>compile file.mi [out.c]</code></td><td>Emit standalone C</td></tr>
+<tr><td><code>dump file.mi</code></td><td>Show parsed AST</td></tr>
+<tr><td><code>reduce file.mi</code></td><td>Show partially-evaluated AST</td></tr>
+<tr><td><code>pin file.mi</code></td><td>Fetch URL imports, write SHA-256 hashes</td></tr>
+<tr><td><code>repl</code></td><td>Interactive evaluation</td></tr>
+</tbody>
+</table>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>

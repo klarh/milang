@@ -1,0 +1,36 @@
+[Header 1 ("c-ffi", [], []) [Str "C FFI"], Para [Str "Milang can call C functions directly by importing a ", Code ("", [], []) ".h", Str " header file. The compiler parses the header, extracts function signatures, and maps C types to milang types (", Code ("", [], []) "int", Str "/", Code ("", [], []) "long", Str " -> ", Code ("", [], []) "Int", Str ", ", Code ("", [], []) "double", Str " -> ", Code ("", [], []) "Float", Str ", ", Code ("", [], []) "float", Str " -> ", Code ("", [], []) "Float' 32", Str ", ", Code ("", [], []) "char*", Str " -> ", Code ("", [], []) "Str", Str "). At code generation time the header is ", Code ("", [], []) "#include", Str "d and calls are emitted inline — no wrapper overhead."], RawBlock (Format "html") "<!-- FFI mapping for sized types
+
+Sized milang types map to fixed-width C integer types in the FFI layer for
+predictable ABI compatibility:
+
+- `Int' 8`  -> `int8_t`
+- `Int' 16` -> `int16_t`
+- `Int' 32` -> `int32_t`
+- `Int' 64` -> `int64_t`
+
+- `UInt' 8`  -> `uint8_t`
+- `UInt' 16` -> `uint16_t`
+- `UInt' 32` -> `uint32_t`
+- `UInt' 64` -> `uint64_t`
+
+Floating milang types map to the natural C floating types for the precision
+requested (e.g. `Float' 32` corresponds to `float`, `Float' 64` to `double`).
+
+When importing C headers the compiler attempts to match C signatures to
+milang types. If a direct mapping is not available the import step will raise
+an error and prompt you to provide an explicit shim or a compatible signature.
+-->", Header 2 ("importing-c-headers", ["unnumbered", "unlisted"], []) [Str "Importing C Headers"], Para [Str "Import a system header the same way you import a ", Code ("", [], []) ".mi", Str " file:"], CodeBlock ("", ["milang"], []) "m = import \"math.h\"
+
+result = m.sin 1.0
+root = m.sqrt 144.0
+", Para [Str "The result is a record whose ", Code ("", [], []) "fields", Str " are the C functions declared in the header. Use dot notation to call them."], Header 2 ("selective-import-with-import", ["unnumbered", "unlisted"], []) [Str "Selective Import with ", Code ("", [], []) "import'"], Para [Str "If you only need a few functions, or need to attach compilation options, use the ", Code ("", [], []) "import'", Str " form:"], CodeBlock ("", ["milang"], []) "m = import' \"math.h\" ({})
+result = m.cos 0.0
+", Header 2 ("associating-c-source-files", ["unnumbered", "unlisted"], []) [Str "Associating C Source Files"], Para [Str "For your own C libraries, tell the compiler which source files to compile alongside the generated code:"], CodeBlock ("", ["milang"], []) "lib = import' \"mylib.h\" ({src = \"mylib.c\"})
+answer = lib.add_ints 3 4
+", Para [Str "The ", Code ("", [], []) "src", Str " field takes a single source file path (relative to the importing ", Code ("", [], []) ".mi", Str " file)."], Header 2 ("advanced-options", ["unnumbered", "unlisted"], []) [Str "Advanced Options"], Para [Str "The options record passed to ", Code ("", [], []) "import'", Str " supports several ", Code ("", [], []) "fields", Str ":"], Table ("", [], []) (Caption Nothing []) [(AlignDefault, (ColWidth 0.2692307692307692)), (AlignDefault, (ColWidth 0.23076923076923078)), (AlignDefault, (ColWidth 0.5))] (TableHead ("", [], []) [Row ("", [], []) [Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Str "Field"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Str "Type"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Str "Description"]]]]) [(TableBody ("", [], []) (RowHeadColumns 0) [] [Row ("", [], []) [Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "src"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "Str"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Str "Single C source file to compile"]]], Row ("", [], []) [Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "sources"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "List"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Str "Multiple source files: ", Code ("", [], []) "[\"a.c\", \"b.c\"]"]]], Row ("", [], []) [Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "flags"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "Str"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Str "Additional compiler flags (e.g. ", Code ("", [], []) "\"-O2 -Wall\"", Str ")"]]], Row ("", [], []) [Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "include"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "Str"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Str "Additional include directory"]]], Row ("", [], []) [Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "pkg"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Code ("", [], []) "Str"]], Cell ("", [], []) AlignDefault (RowSpan 0) (ColSpan 0) [Plain [Str "pkg-config package name — auto-discovers flags and includes"]]]])] (TableFoot ("", [], []) []), Para [Str "Example with multiple options:"], CodeBlock ("", ["milang"], []) "lib = import' \"mylib.h\" ({
+  sources = [\"mylib.c\", \"helpers.c\"]
+  flags = \"-O2\"
+  include = \"vendor/include\"
+})
+", Para [Str "Using pkg-config for a system library:"], CodeBlock ("", ["milang"], []) "json = import' \"json-c/json.h\" ({pkg = \"json-c\"})
+", Header 2 ("how-it-works", ["unnumbered", "unlisted"], []) [Str "How It Works"], OrderedList (1, DefaultStyle, DefaultDelim) [[Plain [Str "The import resolver reads the ", Code ("", [], []) ".h", Str " file and extracts function declarations."]], [Plain [Str "Each C function becomes an internal ", Code ("", [], []) "CFunction", Str " AST node with its milang type signature."]], [Plain [Str "During C code generation the header is ", Code ("", [], []) "#include", Str "d and calls are emitted as direct C function calls."]], [Plain [Str "Any associated source files are compiled and linked automatically."]]], Header 2 ("security-considerations", ["unnumbered", "unlisted"], []) [Str "Security Considerations"], Para [Str "C code bypasses milang's capability model — a C function can perform arbitrary IO, allocate memory, or call system APIs regardless of what capabilities were passed to the milang caller. Use the following flags to restrict FFI access:"], BulletList [[Plain [Strong [Code ("", [], []) "--no-ffi"], Str " — disallow all C header imports. Any ", Code ("", [], []) "import \"*.h\"", Str " will fail."]], [Plain [Strong [Code ("", [], []) "--no-remote-ffi"], Str " — allow local ", Code ("", [], []) ".mi", Str " files to use C FFI, but prevent URL-imported modules from importing C headers. This stops remote code from escaping the capability sandbox through native calls."]]], Para [Str "These flags are especially important when running untrusted or third-party milang code."]]
