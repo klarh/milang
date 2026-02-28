@@ -41,9 +41,12 @@ parseProgramWithMain name src =
   let opTable = scanParseDecls src
   in unsafePerformIO (writeIORef globalOpTable opTable) `seq`
      runParser (scn *> do
-                  bss <- many (pTopBindings <* scn)
+                  -- Allow either top-level bindings or bare expressions at top level.
+                  items <- many $ try $ do
+                    pos <- L.indentGuard sc EQ pos1
+                    pStatementAt pos
                   me  <- optional (try pExpr)
-                  let bs = mergeAnnotations (concat bss)
+                  let bs = mergeAnnotations (concat items)
                   case me of
                     Just e  -> pure (Namespace (bs ++ [mkBind "_main" e]))
                     Nothing -> pure (Namespace bs)

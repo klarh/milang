@@ -26,13 +26,18 @@ evalProgram src = case parseProgramWithMain "<input>" src of
   Right expr ->
     let withPrelude = injectPrelude expr
         (reduced, _ws) = reduce emptyEnv withPrelude
-        -- If reduce returned a Namespace, prefer printing the value bound to
-        -- the synthetic _main binding we may have created; otherwise print
-        -- the whole reduced expression.
+        -- Prefer printing an explicit _main binding if provided; otherwise
+        -- fall back to the last user-defined binding (useful for REPL-style
+        -- use where users define a binding and expect its value to be shown).
         resultExpr = case reduced of
-          Namespace bs -> case filter (\b -> bindName b == "_main") bs of
-            (b:_) -> bindBody b
-            _     -> reduced
+          Namespace bs ->
+            case filter (\b -> bindName b == "_main") bs of
+              (b:_) -> bindBody b
+              [] ->
+                let userBs = filter (\b -> bindPos b /= Nothing) bs
+                in case reverse userBs of
+                     (lastb:_) -> bindBody lastb
+                     _ -> reduced
           _ -> reduced
     in Right (prettyExpr 0 resultExpr)
 
