@@ -2,7 +2,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
-import System.Environment (getArgs)
 import System.Exit (exitFailure, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (readProcessWithExitCode)
@@ -11,6 +10,7 @@ import System.Info (os)
 import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>), normalise)
 import Control.Monad (unless, when)
 import qualified Data.ByteString.Char8 as BS8
+import qualified Data.ByteString.Lazy.Char8 as BSL
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Set as Set
@@ -18,6 +18,8 @@ import qualified Data.Map.Strict as Map
 import Data.IORef
 import Data.List (nub, isPrefixOf, sort)
 import Control.Exception (catch, IOException)
+import Data.Aeson.Encode.Pretty (encodePretty)
+import Options.Applicative
 
 import Core.Syntax
 import Core.Parser (parseProgram, parseExpr)
@@ -28,6 +30,7 @@ import Core.Prelude (preludeBindings)
 import Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..))
 import Core.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
 import Core.Version (version)
+import Core.IR (exprToJSON)
 
 -- | Link info accumulated during import resolution
 data LinkInfo = LinkInfo
@@ -55,47 +58,124 @@ data ResCtx = ResCtx
   , rcHashErrs   :: IORef [(String, String, String)] -- (path, expected, actual)
   }
 
+-- ── CLI types ─────────────────────────────────────────────────────
+
+data Command
+  = CmdRun RunOpts
+  | CmdCompile CompileOpts
+  | CmdReduce ReduceOpts
+  | CmdPin PinOpts
+  | CmdRepl
+
+data RunOpts = RunOpts
+  { runFile    :: FilePath
+  , runKeepC   :: Bool
+  , runArgs    :: [String]
+  }
+
+data CompileOpts = CompileOpts
+  { compFile :: FilePath
+  , compOut  :: Maybe FilePath
+  }
+
+data ReduceOpts = ReduceOpts
+  { reduceFile      :: FilePath
+  , reduceJSON      :: Bool
+  , reduceNoPrelude :: Bool
+  , reduceNoReduce  :: Bool
+  , reduceOut       :: Maybe FilePath
+  }
+
+data PinOpts = PinOpts
+  { pinFile :: FilePath }
+
+-- ── CLI parsers ──────────────────────────────────────────────────
+
+cliParser :: ParserInfo Command
+cliParser = info (commandParser <**> helper <**> versionOpt)
+  (  fullDesc
+  <> header "milang — the milang compiler"
+  <> progDesc "A minimalist functional programming language with zero keywords"
+  )
+
+versionOpt :: Parser (a -> a)
+versionOpt = infoOption ("milang " ++ version)
+  (  long "version"
+  <> short 'v'
+  <> help "Show version"
+  )
+
+commandParser :: Parser Command
+commandParser = hsubparser
+  (  command "run" (info runParser
+       (progDesc "Compile and run a .mi file"))
+  <> command "compile" (info compileParser
+       (progDesc "Compile a .mi file to C"))
+  <> command "reduce" (info reduceParser
+       (progDesc "Show AST (parsed, reduced, or as JSON IR)"))
+  <> command "dump" (info dumpParser
+       (progDesc "Show parsed AST (alias for reduce --no-reduce)"))
+  <> command "raw-reduce" (info rawReduceParser
+       (progDesc "Reduce without prelude (alias for reduce --no-prelude)"))
+  <> command "pin" (info pinParser
+       (progDesc "Add sha256 hashes to URL imports"))
+  <> command "repl" (info (pure CmdRepl <**> helper)
+       (progDesc "Interactive REPL"))
+  )
+
+runParser :: Parser Command
+runParser = fmap CmdRun $ RunOpts
+  <$> argument str (metavar "FILE" <> help "Milang source file")
+  <*> switch (long "keep-c" <> help "Keep generated C file after execution")
+  <*> many (argument str (metavar "ARGS..." <> help "Arguments passed to the compiled program"))
+
+compileParser :: Parser Command
+compileParser = fmap CmdCompile $ CompileOpts
+  <$> argument str (metavar "FILE" <> help "Milang source file")
+  <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
+        <> help "Output file (default: <input>.c, use - for stdout)"))
+
+reduceParser :: Parser Command
+reduceParser = fmap CmdReduce $ ReduceOpts
+  <$> argument str (metavar "FILE" <> help "Milang source file")
+  <*> switch (long "json" <> help "Output structured JSON IR")
+  <*> switch (long "no-prelude" <> help "Skip prelude injection")
+  <*> switch (long "no-reduce" <> help "Show parsed AST without reduction")
+  <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
+        <> help "Write output to file (default: stdout)"))
+
+-- Hidden aliases for backward compatibility
+dumpParser :: Parser Command
+dumpParser = fmap CmdReduce $ ReduceOpts
+  <$> argument str (metavar "FILE" <> help "Milang source file")
+  <*> switch (long "json" <> help "Output structured JSON IR")
+  <*> pure False
+  <*> pure True  -- --no-reduce is always on for dump
+  <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
+        <> help "Write output to file (default: stdout)"))
+
+rawReduceParser :: Parser Command
+rawReduceParser = fmap CmdReduce $ ReduceOpts
+  <$> argument str (metavar "FILE" <> help "Milang source file")
+  <*> switch (long "json" <> help "Output structured JSON IR")
+  <*> pure True  -- --no-prelude is always on for raw-reduce
+  <*> pure False
+  <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
+        <> help "Write output to file (default: stdout)"))
+
+pinParser :: Parser Command
+pinParser = fmap CmdPin $ PinOpts
+  <$> argument str (metavar "FILE" <> help "Milang source file")
+
 main :: IO ()
 main = do
-  args <- getArgs
-  case args of
-    ("run" : file : runArgs)     -> cmdRun file runArgs
-    ["compile", file]            -> cmdCompile file Nothing
-    ["compile", file, out]       -> cmdCompile file (Just out)
-    ["compile", file, "-o", out] -> cmdCompile file (Just out)
-    ["dump", file]               -> cmdDump file
-    ["reduce", file]             -> cmdReduce file
-    ["raw-reduce", file]         -> cmdRawReduce file
-    ["pin", file]                -> cmdPin file
-    ["repl"]                     -> cmdRepl
-    ["--version"]                -> putStrLn $ "milang " ++ version
-    ["-v"]                       -> putStrLn $ "milang " ++ version
-    ["--help"]                   -> printHelp
-    ["-h"]                       -> printHelp
-    []                           -> printHelp
-    _ -> do
-      hPutStrLn stderr $ "milang: unknown command '" ++ unwords args ++ "'"
-      hPutStrLn stderr "Run 'milang --help' for usage information."
-      exitFailure
-
-printHelp :: IO ()
-printHelp = do
-  putStrLn "milang — the milang compiler"
-  putStrLn ""
-  putStrLn "Usage: milang <command> [options]"
-  putStrLn ""
-  putStrLn "Commands:"
-  putStrLn "  run <file> [args]       Compile and run a .mi file"
-  putStrLn "  compile <file> [-o out] Compile to C (default: <file>.c)"
-  putStrLn "  reduce <file>           Show reduced AST (with prelude)"
-  putStrLn "  dump <file>             Show parsed AST (no reduction)"
-  putStrLn "  raw-reduce <file>       Show reduced AST (no prelude)"
-  putStrLn "  pin <file>              Add sha256 hashes to URL imports"
-  putStrLn "  repl                    Interactive REPL"
-  putStrLn ""
-  putStrLn "Options:"
-  putStrLn "  --help, -h              Show this help message"
-  putStrLn "  --version, -v           Show version"
+  cmd <- execParser cliParser
+  case cmd of
+    CmdRun opts     -> cmdRun opts
+    CmdCompile opts -> cmdCompile opts
+    CmdReduce opts  -> cmdReduce opts
+    CmdPin opts     -> cmdPin opts
+    CmdRepl         -> cmdRepl
 
 -- | Load and parse a file
 loadAndParse :: String -> IO Expr
@@ -528,7 +608,7 @@ preludeNames = Set.fromList names
       Namespace ctors -> map bindName ctors
       _ -> []
 
--- | raw-reduce: reduce without prelude
+-- | raw-reduce: reduce without prelude (kept for internal use)
 cmdRawReduce :: String -> IO ()
 cmdRawReduce file = do
   ast <- loadAndParse file
@@ -536,8 +616,9 @@ cmdRawReduce file = do
   putStrLn (prettyExpr 0 reduced)
 
 -- | pin: find unpinned URL imports, fetch them, compute Merkle hashes, rewrite source
-cmdPin :: String -> IO ()
-cmdPin file = do
+cmdPin :: PinOpts -> IO ()
+cmdPin opts = do
+  let file = pinFile opts
   ast <- loadAndParse file
   -- Find URL imports that are unpinned
   let urlImports = findURLImports ast
@@ -599,24 +680,42 @@ findURLImports = go
     go (Splice b)         = go b
     go _                  = []
 
--- | dump: show parsed AST
-cmdDump :: String -> IO ()
-cmdDump file = do
+-- | Unified reduce command: handles dump, reduce, raw-reduce, and JSON IR
+cmdReduce :: ReduceOpts -> IO ()
+cmdReduce opts = do
+  let file = reduceFile opts
   ast <- loadAndParse file
-  putStrLn (prettyExpr 0 ast)
-
--- | reduce: show AST after partial evaluation
-cmdReduce :: String -> IO ()
-cmdReduce file = do
-  (reduced, _) <- loadAndReduce file
-  putStrLn (prettyExpr 0 reduced)
+  result <- if reduceNoReduce opts
+    then do
+      -- Parse only (dump mode) — still resolve imports unless --no-prelude
+      if reduceNoPrelude opts
+        then pure ast
+        else do
+          (resolved, _) <- resolveImports file ast
+          pure resolved
+    else if reduceNoPrelude opts
+      then do
+        -- Reduce without prelude (raw-reduce mode)
+        let (reduced, _) = reduce emptyEnv ast
+        pure reduced
+      else do
+        -- Full reduce with prelude and imports
+        (reduced, _) <- loadAndReduce file
+        pure reduced
+  let output = if reduceJSON opts
+        then BSL.unpack (encodePretty (exprToJSON result))
+        else prettyExpr 0 result
+  case reduceOut opts of
+    Nothing -> putStrLn output
+    Just f  -> writeFile f (output ++ "\n")
 
 -- | compile: emit C
-cmdCompile :: String -> Maybe String -> IO ()
-cmdCompile file mOut = do
+cmdCompile :: CompileOpts -> IO ()
+cmdCompile opts = do
+  let file = compFile opts
   (reduced, _) <- loadAndReduce file
   let stripped = stripDeepModules 3 reduced
-      outFile = case mOut of
+      outFile = case compOut opts of
         Just "-" -> Nothing  -- stdout
         Just f   -> Just f
         Nothing  -> Just (dropExtension file ++ ".c")
@@ -625,8 +724,9 @@ cmdCompile file mOut = do
     Just f  -> withFile f WriteMode $ \h -> codegen h preludeNames stripped
 
 -- | run: compile to C, invoke gcc, execute
-cmdRun :: String -> [String] -> IO ()
-cmdRun file runArgs = do
+cmdRun :: RunOpts -> IO ()
+cmdRun opts = do
+  let file = runFile opts
   cwd <- getCurrentDirectory
   (reduced, li) <- loadAndReduce file
   let stripped = stripDeepModules 3 reduced
@@ -639,7 +739,6 @@ cmdRun file runArgs = do
       isWin = any (`isPrefixOf` os) ["mingw", "cygwin", "windows"]
       exeExt = if isWin then ".exe" else ""
       candidates = if exeExt /= "" then [binBase ++ exeExt, binBase] else [binBase]
-      -- helper to find first existing path
       findExisting [] = return (head candidates)
       findExisting (p:ps) = do
         e <- doesFileExist p
@@ -655,10 +754,11 @@ cmdRun file runArgs = do
       when existsC $ removeFile cFile
       exitFailure
   exeToRun <- findExisting candidates
-  (runExit, runOut, runErr) <- readProcessWithExitCode exeToRun runArgs ""
+  (runExit, runOut, runErr) <- readProcessWithExitCode exeToRun (runArgs opts) ""
   -- cleanup
-  existsC2 <- doesFileExist cFile
-  when existsC2 $ removeFile cFile
+  unless (runKeepC opts) $ do
+    existsC2 <- doesFileExist cFile
+    when existsC2 $ removeFile cFile
   mapM_ (\p -> do ex <- doesFileExist p; when ex $ removeFile p) candidates
   putStr runOut
   if not (null runErr) then hPutStrLn stderr runErr else pure ()
@@ -714,9 +814,6 @@ replLoop env = do
               Left err -> do
                 hPutStrLn stderr $ errorBundlePretty err
                 replLoop env
-  where
-    when True a = a
-    when False _ = pure ()
 
 printWarnings :: String -> [Warning] -> IO ()
 printWarnings file ws = do
