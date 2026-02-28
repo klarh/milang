@@ -25,7 +25,8 @@
 
     if (haveWasm && typeof Worker === 'function') {
       try {
-        worker = new Worker('./assets/repl-wasm-worker.mjs', { type: 'module' });
+        // Prefer the JS-interpreter worker which uses the Haskell parser (parse_file_c)
+        worker = new Worker('./assets/repl-js-worker.mjs', { type: 'module' });
       } catch (err) {
         log('Failed to start module worker: ' + err);
         worker = null;
