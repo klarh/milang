@@ -47,32 +47,61 @@ self.addEventListener('message', async (e) => {
 
     try {
       let astJson;
+
+      function toNumPtr(x) {
+        if (typeof x === 'bigint') return Number(x);
+        if (typeof x === 'number') return x;
+        throw new Error('Unexpected pointer type: ' + typeof x);
+      }
+
       if (instance.exports.reduce_str_c && instance.exports.alloc_bytes) {
         // allocate buffer in wasm memory and write the source string
         const encoder = new TextEncoder();
         const bytesIn = encoder.encode(code);
-        const bufPtr = instance.exports.alloc_bytes(bytesIn.length + 1);
-        const mem = new Uint8Array(instance.exports.memory.buffer);
+        const allocRaw = instance.exports.alloc_bytes(bytesIn.length + 1);
+        const bufPtr = toNumPtr(allocRaw);
+        if (!Number.isFinite(bufPtr) || bufPtr < 0) throw new Error('Invalid alloc pointer from wasm: ' + String(allocRaw));
+        let mem = new Uint8Array(instance.exports.memory.buffer);
+        if (bufPtr + bytesIn.length + 1 > mem.length) {
+          // refresh buffer (memory may grow)
+          mem = new Uint8Array(instance.exports.memory.buffer);
+          if (bufPtr + bytesIn.length + 1 > mem.length) throw new Error('WASM memory too small for input');
+        }
         mem.set(bytesIn, bufPtr);
         mem[bufPtr + bytesIn.length] = 0;
-        const resPtr = instance.exports.reduce_str_c(bufPtr);
+
+        const resRaw = instance.exports.reduce_str_c(bufPtr);
+        const resPtr = toNumPtr(resRaw);
+        if (!Number.isFinite(resPtr) || resPtr < 0) throw new Error('Invalid result pointer from wasm: ' + String(resRaw));
+
         const out = [];
+        mem = new Uint8Array(instance.exports.memory.buffer);
+        if (resPtr >= mem.length) throw new Error('Result pointer out of bounds: ' + resPtr + ' mem.len=' + mem.length);
         let i = resPtr;
-        while (mem[i] !== 0) { out.push(mem[i]); i++; }
+        while (i < mem.length && mem[i] !== 0) { out.push(mem[i]); i++; }
+        if (i >= mem.length) throw new Error('Unterminated string or pointer out of range');
         astJson = new TextDecoder().decode(new Uint8Array(out));
+
       } else if (instance.exports.reduce_file_c) {
-        const resPtr = instance.exports.reduce_file_c();
+        const resRaw = instance.exports.reduce_file_c();
+        const resPtr = toNumPtr(resRaw);
         const mem = new Uint8Array(instance.exports.memory.buffer);
+        if (resPtr >= mem.length) throw new Error('Result pointer out of bounds: ' + resPtr);
         let i = resPtr;
         const bytes = [];
-        while (mem[i] !== 0) { bytes.push(mem[i]); i++; }
+        while (i < mem.length && mem[i] !== 0) { bytes.push(mem[i]); i++; }
+        if (i >= mem.length) throw new Error('Unterminated string or pointer out of range');
         astJson = new TextDecoder().decode(new Uint8Array(bytes));
+
       } else {
-        const resPtr = instance.exports.parse_file_c();
+        const resRaw = instance.exports.parse_file_c();
+        const resPtr = toNumPtr(resRaw);
         const mem = new Uint8Array(instance.exports.memory.buffer);
+        if (resPtr >= mem.length) throw new Error('Result pointer out of bounds: ' + resPtr);
         let i = resPtr;
         const bytes = [];
-        while (mem[i] !== 0) { bytes.push(mem[i]); i++; }
+        while (i < mem.length && mem[i] !== 0) { bytes.push(mem[i]); i++; }
+        if (i >= mem.length) throw new Error('Unterminated string or pointer out of range');
         astJson = new TextDecoder().decode(new Uint8Array(bytes));
       }
 
