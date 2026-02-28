@@ -5,12 +5,16 @@ This page collects practical tips for building Milang programs and the documenta
 ## Running examples and the CLI
 
 - Use the local `./milang` binary in the repository root for running and experimenting with `.mi` files; if you installed `milang` on your PATH you can omit `./`.
+- Run `milang --help` or `milang <command> --help` for full option listings.
 - Useful commands:
-  - `./milang run file.mi` — compile and run
-  - `./milang compile file.mi output.c` — emit standalone C
-  - `./milang dump file.mi` — show parsed AST (before reduction)
-  - `./milang reduce file.mi` — show partially-evaluated AST (what the codegen sees)
-  - `./milang repl` — interactive REPL
+  - `milang run file.mi` — compile and run
+  - `milang run --keep-c file.mi` — compile and run, keeping the generated C file
+  - `milang compile file.mi -o output.c` — emit standalone C
+  - `milang reduce file.mi` — show partially-evaluated AST (what the codegen sees)
+  - `milang reduce --no-reduce file.mi` — show parsed AST before reduction (formerly `dump`)
+  - `milang reduce --no-prelude file.mi` — reduce without prelude injection (formerly `raw-reduce`)
+  - `milang reduce --json file.mi` — output structured JSON IR for use in external backends
+  - `milang repl` — interactive REPL
 
 ## C toolchain
 
@@ -42,11 +46,12 @@ getField r "a"`.
 - `toInt` / `toFloat` return `Nothing` on parse failure — check results with pattern matching on `Just` / `Nothing`.
 - `charAt` and `getField` return `Nothing` when out-of-bounds or missing.
 - Division/modulo by zero is handled at the runtime/C level (implementation-defined); avoid relying on undefined behaviour in portable code.
-- Use `milang dump` to inspect how the parser grouped expressions if you hit unexpected parse errors.
+- Use `milang reduce --no-reduce` to inspect how the parser grouped expressions if you hit unexpected parse errors.
 
 
 ## Quick checklist
 
-- `./milang dump` to verify parser grouping
-- `./milang reduce` to verify partial evaluation
+- `milang reduce --no-reduce` to verify parser grouping
+- `milang reduce` to verify partial evaluation
+- `milang reduce --json` to inspect the IR for backend development
 - `mdbook build` (or `make docs`) to render the site
