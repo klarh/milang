@@ -15,12 +15,14 @@ self.addEventListener('message', async (e) => {
       compiledModule = await WebAssembly.compile(wasmArray);
     }
 
-    const stdinFile = new File(new Uint8Array(new TextEncoder().encode(code)));
+    // Create a preopened directory with a file 'input.mi' containing the code
+    const inputFile = new File(new Uint8Array(new TextEncoder().encode(code)));
+    const preopen = new PreopenDirectory('.', [[ 'input.mi', inputFile ]]);
     const fds = [
-      new OpenFile(stdinFile),
+      new OpenFile(new File(new Uint8Array([]))),
       ConsoleStdout.lineBuffered((msg) => self.postMessage({ type: 'log', msg })),
       ConsoleStdout.lineBuffered((msg) => self.postMessage({ type: 'log', msg })),
-      new PreopenDirectory('.', []),
+      preopen,
     ];
 
     const wasi = new WASI([], {}, fds);
@@ -39,15 +41,29 @@ self.addEventListener('message', async (e) => {
       try { instance.exports.hs_init(0, 0); } catch (e) { /* ignore */ }
     }
 
-    if (instance.exports && instance.exports._start) {
+    // Call the exported eval_file_c function if available
+    if (instance.exports && instance.exports.eval_file_c) {
       try {
-        instance.exports._start();
+        const resPtr = instance.exports.eval_file_c();
+        // read null-terminated C string from memory
+        const mem = new Uint8Array(instance.exports.memory.buffer);
+        let i = resPtr;
+        let bytes = [];
+        while (mem[i] !== 0) { bytes.push(mem[i]); i++; }
+        const resultStr = new TextDecoder().decode(new Uint8Array(bytes));
+        self.postMessage({ type: 'result', result: resultStr });
       } catch (err) {
-        // Some runtimes use exceptions for process exit - ignore
+        self.postMessage({ type: 'error', error: String(err) });
       }
+    } else {
+      // fallback: call _start if present
+      if (instance.exports && instance.exports._start) {
+        try {
+          instance.exports._start();
+        } catch (err) { /* ignore */ }
+      }
+      self.postMessage({ type: 'result', result: 'OK' });
     }
-
-    self.postMessage({ type: 'result', result: 'OK' });
   } catch (err) {
     self.postMessage({ type: 'error', error: String(err) });
   }
