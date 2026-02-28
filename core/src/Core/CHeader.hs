@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..)) where
 
@@ -7,8 +8,10 @@ import Data.Maybe (mapMaybe)
 import Data.List (isPrefixOf, foldl')
 import qualified Data.Map.Strict as Map
 import Data.Char (isAlphaNum)
+#ifndef WASM
 import System.Process (readProcess)
 import Control.Exception (try, SomeException)
+#endif
 import System.FilePath (takeFileName)
 import System.Info (os)
 
@@ -22,6 +25,10 @@ data CFunSig = CFunSig
   } deriving (Show)
 
 -- | Parse a C header file using clang -E
+#ifdef WASM
+runPreprocessor :: [String] -> String -> IO (Either String String)
+runPreprocessor _ _ = pure $ Left "preprocessor unavailable in WASM build"
+#else
 runPreprocessor :: [String] -> String -> IO (Either String String)
 runPreprocessor clangArgs input = do
   -- Try clang first, fall back to gcc if clang isn't available or fails
@@ -33,6 +40,7 @@ runPreprocessor clangArgs input = do
       case rgcc of
         Right out2 -> pure (Right out2)
         Left e2 -> pure (Left ("preprocessor failed: " ++ show e2))
+#endif
 
 parseCHeader :: FilePath -> IO (Either String [CFunSig])
 parseCHeader path = do

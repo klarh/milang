@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Core.Remote
   ( fetchRemote
@@ -11,11 +12,13 @@ module Core.Remote
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Base16 as B16
+#ifndef WASM
 import qualified Crypto.Hash.SHA256 as SHA256
 import System.Directory (createDirectoryIfMissing, doesFileExist, getXdgDirectory, XdgDirectory(..))
 import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 import System.Exit (ExitCode(..))
+#endif
 import Data.List (isPrefixOf, intercalate)
 
 -- | Check if a path looks like a URL
@@ -50,16 +53,30 @@ normalizeURL url =
     collapse acc (x:rest) = collapse (x:acc) rest
 
 -- | SHA-256 hash of a file as lowercase hex string
+#ifdef WASM
+hashFile :: FilePath -> IO String
+hashFile _ = pure ""
+#else
 hashFile :: FilePath -> IO String
 hashFile path = do
   contents <- BS.readFile path
   pure $ BS8.unpack $ B16.encode $ SHA256.hash contents
+#endif
 
 -- | SHA-256 hash of raw bytes as lowercase hex string
+#ifdef WASM
+hashBytes :: BS.ByteString -> String
+hashBytes _ = ""
+#else
 hashBytes :: BS.ByteString -> String
 hashBytes = BS8.unpack . B16.encode . SHA256.hash
+#endif
 
 -- | Fetch a URL, cache locally under ~/.cache/milang/<sha256-of-url>/<basename>
+#ifdef WASM
+fetchRemote :: String -> IO (Either String FilePath)
+fetchRemote _ = pure $ Left "fetchRemote: unsupported in WASM build (imports disabled)"
+#else
 fetchRemote :: String -> IO (Either String FilePath)
 fetchRemote url = do
   cacheDir <- getXdgDirectory XdgCache "milang"
@@ -78,6 +95,7 @@ fetchRemote url = do
         ExitSuccess   -> pure $ Right cachedFile
         ExitFailure c -> pure $ Left $
           "Failed to fetch " ++ url ++ " (curl exit " ++ show c ++ ")\n" ++ cerr
+#endif
 
 urlBaseName :: String -> String
 urlBaseName url =
