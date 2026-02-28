@@ -11,7 +11,7 @@ import Text.Megaparsec (errorBundlePretty)
 import Core.Parser (parseProgram, parseExpr)
 import Core.Reduce (reduce, emptyEnv)
 import Core.Prelude (preludeBindings)
-import Core.Syntax (Expr(..), Binding(..), mkBind, Namespace(..), prettyExpr)
+import Core.Syntax (Expr(..), Binding(..), mkBind, prettyExpr)
 
 -- | Inject the prelude before user bindings. Mirrors Main.injectPrelude True
 injectPrelude :: Expr -> Expr

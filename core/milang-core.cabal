@@ -51,4 +51,5 @@ executable milang-wasm
                    , bytestring >= 0.11
                    , base16-bytestring >= 1.0
                    , containers >= 0.6
+                   , filepath >= 1.4
 
