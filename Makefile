@@ -2,8 +2,18 @@
 
 MILANG:=milang
 PYTHON:=python
+GHC:=ghc
 
-DYNAMIC:=0
+GHC_PATH:=$(shell which "$(GHC)")
+GHC_PKG_PATH:=$(shell dirname "$(GHC_PATH)")/ghc-pkg
+
+DYNAMIC_HI_COUNT:=$(shell ls $$($(GHC_PKG_PATH) field base library-dirs --simple-output)/*.dyn_hi 2>/dev/null | wc -l)
+ifneq ($(DYNAMIC_HI_COUNT),0)
+    DYNAMIC:=1
+else
+    DYNAMIC:=0
+endif
+
 DYNAMIC_0:=
 DYNAMIC_1:=-dynamic
 GHC_OPTIONS:=-Wall -O2 ${DYNAMIC_${DYNAMIC}}
