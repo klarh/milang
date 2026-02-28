@@ -35,4 +35,12 @@ evalExpr src = case parseExpr "<input>" src of
   Right expr ->
     let withPrelude = injectPrelude expr
         (reduced, _ws) = reduce emptyEnv withPrelude
-    in Right (prettyExpr 0 reduced)
+        -- If reduce returned a Namespace, prefer printing the value bound to
+        -- the synthetic _main binding we created; otherwise print the whole
+        -- reduced expression.
+        resultExpr = case reduced of
+          Namespace bs -> case filter (\b -> bindName b == "_main") bs of
+            (b:_) -> bindBody b
+            _     -> reduced
+          _ -> reduced
+    in Right (prettyExpr 0 resultExpr)
