@@ -33,6 +33,13 @@ Documentation source is available in the `docs/` subdirectory of the project.
 
 ## Quick Start
 
+### Pre-built Binaries
+
+Automated builds for Windows, macOS, and Linux (static) are available at:
+**<https://github.com/klarh/milang/actions/workflows/build.yml>**
+
+Download the artifact for your platform from any successful workflow run.
+
 ### Prerequisites
 
 | Tool | Version | Purpose |

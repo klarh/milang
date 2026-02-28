@@ -108,7 +108,6 @@ jobs:
       shell: bash
       run: |
         echo "Executing tests..."
-        # NOTE: Replace '--help' with the actual arguments you use to run tests via your CLI
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           make test MILANG=out/milang.exe
         else

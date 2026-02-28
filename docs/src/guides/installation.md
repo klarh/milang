@@ -2,6 +2,13 @@
 
 Milang is built from source using the Haskell toolchain and compiles programs to C via `gcc`.
 
+## Pre-built Binaries
+
+Automated builds for Windows, macOS, and Linux (static) are available at:
+**<https://github.com/klarh/milang/actions/workflows/build.yml>**
+
+Download the artifact for your platform from any successful workflow run — no Haskell toolchain needed.
+
 ## Prerequisites
 
 You need three things installed:
