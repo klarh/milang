@@ -40,18 +40,28 @@ self.addEventListener('message', async (e) => {
       try { instance.exports.hs_init(0, 0); } catch (e) { /* ignore */ }
     }
 
-    // Call parse_file_c to get JSON AST
-    if (!(instance.exports && instance.exports.parse_file_c)) {
-      throw new Error('WASM module does not export parse_file_c');
+    // Prefer reduce_file_c (reduced AST) and fall back to parse_file_c
+    if (!(instance.exports && (instance.exports.reduce_file_c || instance.exports.parse_file_c))) {
+      throw new Error('WASM module does not export parse_file_c or reduce_file_c');
     }
 
     try {
-      const resPtr = instance.exports.parse_file_c();
-      const mem = new Uint8Array(instance.exports.memory.buffer);
-      let i = resPtr;
-      const bytes = [];
-      while (mem[i] !== 0) { bytes.push(mem[i]); i++; }
-      const astJson = new TextDecoder().decode(new Uint8Array(bytes));
+      let astJson;
+      if (instance.exports.reduce_file_c) {
+        const resPtr = instance.exports.reduce_file_c();
+        const mem = new Uint8Array(instance.exports.memory.buffer);
+        let i = resPtr;
+        const bytes = [];
+        while (mem[i] !== 0) { bytes.push(mem[i]); i++; }
+        astJson = new TextDecoder().decode(new Uint8Array(bytes));
+      } else {
+        const resPtr = instance.exports.parse_file_c();
+        const mem = new Uint8Array(instance.exports.memory.buffer);
+        let i = resPtr;
+        const bytes = [];
+        while (mem[i] !== 0) { bytes.push(mem[i]); i++; }
+        astJson = new TextDecoder().decode(new Uint8Array(bytes));
+      }
 
       if (astJson.startsWith('ERR:')) {
         self.postMessage({ type: 'error', error: astJson });

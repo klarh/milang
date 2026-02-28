@@ -10,6 +10,7 @@ import Text.Megaparsec (errorBundlePretty)
 
 import Core.WebREPL (evalProgram, evalExpr)
 import Core.Parser (parseProgramWithMain)
+import Core.Reduce (reduce, emptyEnv)
 import Core.Syntax
 
 -- | Read code from a preopened file named "input.mi" and evaluate it.
@@ -38,6 +39,18 @@ parse_file_c = do
     Right expr -> newCString (exprToJson expr)
 
 foreign export ccall parse_file_c :: IO CString
+
+-- | Run the reducer on input.mi and return the reduced AST as JSON.
+reduce_file_c :: IO CString
+reduce_file_c = do
+  src <- TIO.readFile "input.mi"
+  case parseProgramWithMain "<input>" src of
+    Left err -> newCString ("ERR:" ++ errorBundlePretty err)
+    Right expr ->
+      let (reduced, _ws) = reduce emptyEnv expr
+      in newCString (exprToJson reduced)
+
+foreign export ccall reduce_file_c :: IO CString
 
 -- === JSON serialization of the Core.Syntax AST (minimal) ===
 
@@ -80,7 +93,7 @@ listToJson xs = "[" ++ intercalate "," xs ++ "]"
 
 bindingToJson :: Binding -> String
 bindingToJson (Binding dom name params body _pos) =
-  let paramsJson = listToJson (map (	 -> escapeJSON t) params)
+  let paramsJson = listToJson (map (\t -> escapeJSON t) params)
   in "{" ++ intercalate "," [
        "\"domain\":" ++ escapeJSON (T.pack $ domainToStr dom),
        "\"name\":" ++ escapeJSON name,
