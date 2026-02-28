@@ -25,7 +25,7 @@ self.addEventListener('message', async (e) => {
       preopen,
     ];
 
-    const wasi = new WASI([], {}, fds);
+    const wasi = new WASI([], [], fds);
     const instance = await WebAssembly.instantiate(compiledModule, {
       wasi_snapshot_preview1: wasi.wasiImport,
     });
