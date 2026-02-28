@@ -14,7 +14,7 @@
 
   async function createWorker() {
     if (worker) worker.terminate();
-    const wasmURL = './assets/wasm/milang-wasm.wasm';
+    const wasmURL = '/assets/wasm/milang-wasm.wasm';
     let haveWasm = false;
     try {
       if (location.protocol !== 'file:') {
@@ -49,7 +49,7 @@
     await createWorker();
     if (!worker) { log('Worker unavailable'); return; }
     const code = editor.value;
-    worker.postMessage({ type: 'run', code, wasmURL: './assets/wasm/milang-wasm.wasm' });
+    worker.postMessage({ type: 'run', code, wasmURL: '/assets/wasm/milang-wasm.wasm' });
     timeoutId = setTimeout(() => { if (worker) { worker.terminate(); worker = null; } log('Terminated: timeout'); }, 5000);
   });
 
