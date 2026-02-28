@@ -24,17 +24,23 @@ evalProgram :: Text -> Either String String
 evalProgram src = case parseProgramWithMain "<input>" src of
   Left err -> Left (errorBundlePretty err)
   Right expr ->
-    let withPrelude = injectPrelude expr
+    -- Record user binding names before injecting the prelude, so we can find
+    -- them in the reduced namespace without being confused by prelude bindings
+    -- that the reducer appends after value bindings (annotation bindings like
+    -- `unlines :: List : Str` end up last in the reduced namespace).
+    let userNames = case expr of
+          Namespace bs -> map bindName bs
+          _            -> []
+        withPrelude = injectPrelude expr
         (reduced, _ws) = reduce emptyEnv withPrelude
         -- Prefer printing an explicit _main binding if provided; otherwise
-        -- fall back to the last user-defined binding (useful for REPL-style
-        -- use where users define a binding and expect its value to be shown).
+        -- fall back to the last user-defined binding by name.
         resultExpr = case reduced of
           Namespace bs ->
             case filter (\b -> bindName b == "_main") bs of
               (b:_) -> bindBody b
               [] ->
-                let userBs = filter (\b -> bindPos b /= Nothing) bs
+                let userBs = filter (\b -> bindName b `elem` userNames) bs
                 in case reverse userBs of
                      (lastb:_) -> bindBody lastb
                      _ -> reduced

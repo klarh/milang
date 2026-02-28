@@ -103,3 +103,19 @@ New bindings extend the accumulated environment for all subsequent inputs. This 
 - **Raw list output** — lists are printed as `Cons`/`Nil` record expressions, not `[1, 2, 3]`.
 
 For IO and imports, write a `.mi` file and use `milang run` instead.
+
+## Browser Sandbox
+
+A browser-based sandbox is available at [/repl.html](/repl.html). It uses a
+WebAssembly build of the milang compiler to reduce programs in the browser,
+with no server round-trips. Multi-line programs with helper function definitions
+and a trailing expression are supported.
+
+```text
+-- Define a helper and apply it
+double x = 2 * x
+
+map double [1, 2, 3, 4, 5]
+```
+
+The sandbox shows the reduced (partially-evaluated) form of the last expression.

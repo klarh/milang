@@ -43,9 +43,10 @@ parseProgramWithMain name src =
      runParser (scn *> do
                   -- Allow either top-level bindings or bare expressions at top level.
                   items <- many $ try $ do
+                    scn
                     pos <- L.indentGuard sc EQ pos1
                     pStatementAt pos
-                  me  <- optional (try pExpr)
+                  me  <- optional (try (scn *> pExpr))
                   let bs = mergeAnnotations (concat items)
                   case me of
                     Just e  -> pure (Namespace (bs ++ [mkBind "_main" e]))

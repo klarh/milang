@@ -31,6 +31,9 @@ test-hs:
 
 docs:
 	cd docs && mdbook build
+	@mkdir -p docs-out/html/assets/wasm
+	@cp -r docs/assets/. docs-out/html/assets/
+	@cp docs/repl.html docs-out/html/repl.html
 
 docs-serve:
 	cd docs && mdbook serve --open
