@@ -1,0 +1,6 @@
+-- Module with recursive functions for import testing
+mytail xs = xs ->
+  [_, ...rest] = rest
+  _ = []
+
+mylen xs = if (len xs == 0) 0 (1 + mylen (mytail xs))

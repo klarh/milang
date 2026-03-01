@@ -1,0 +1,5 @@
+-- Test importing recursive functions from a module
+recmod = import "lib/recursive_module.mi"
+
+main1 :~ [console]
+main1 = world.io.println (recmod.mylen [1, 2, 3, 4, 5])

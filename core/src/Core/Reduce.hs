@@ -258,7 +258,10 @@ reduceD d env (Record tag bindings) =
 
 reduceD d env (FieldAccess e field) =
   let e' = forceThunk d env (reduceD d env e)
-  in reduceFieldAccess e' field
+      result = reduceFieldAccess e' field
+  in case result of
+       With _ _ -> reduceD d env result  -- reduce namespace deps
+       _        -> result
 
 reduceD d env (Namespace bindings) =
   let expanded = concatMap expandUnion bindings
@@ -701,9 +704,36 @@ reduceFieldAccess (Record _ bs) field =
       _ -> Nothing
 reduceFieldAccess (Namespace bs) field =
   case [bindBody b | b <- bs, bindName b == field] of
-    (v:_) -> v
+    (v:_) ->
+      let fvs = exprFreeVars v
+          nsNames = Set.fromList [bindName b | b <- bs,
+                                  bindDomain b == Value || bindDomain b == Lazy]
+          directDeps = Set.intersection fvs nsNames
+          -- Compute transitive closure of namespace dependencies
+          allDeps = closureNsDeps bs directDeps nsNames
+      in if Set.null allDeps
+         then v
+         else With v [b | b <- bs, bindName b `Set.member` allDeps]
     []    -> FieldAccess (Namespace bs) field
 reduceFieldAccess e field = FieldAccess e field
+
+-- | Compute transitive closure of namespace binding dependencies.
+-- Given a set of directly needed names and the full set of namespace names,
+-- expand to include all transitively referenced namespace bindings.
+closureNsDeps :: [Binding] -> Set.Set Text -> Set.Set Text -> Set.Set Text
+closureNsDeps bs pending nsNames = go pending Set.empty
+  where
+    bMap = Map.fromList [(bindName b, b) | b <- bs]
+    go todo visited
+      | Set.null todo = visited
+      | otherwise =
+          let new = Set.difference todo visited
+              visited' = Set.union visited new
+              newFvs = Set.unions [ exprFreeVars (wrapLambda (bindParams b) (bindBody b))
+                                  | n <- Set.toList new
+                                  , Just b <- [Map.lookup n bMap] ]
+              todo' = Set.intersection newFvs nsNames
+          in go todo' visited'
 
 -- | Record update: base <- {overrides}
 reduceRecordUpdate :: Expr -> Expr -> Expr
