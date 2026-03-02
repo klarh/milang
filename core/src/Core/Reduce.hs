@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE LambdaCase #-}
 module Core.Reduce
   ( reduce, reduceWithEnv, Env, emptyEnv
   , Warning(..), warnings
@@ -11,10 +10,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import Data.Char (isUpper)
 import Data.Graph (stronglyConnComp, SCC(..))
 import Data.List (isPrefixOf)
 import Text.Read (readMaybe)
+import Data.Char (isUpper)
 
 import Core.Syntax
 
@@ -233,23 +232,10 @@ reduceD d env (Lam p b)
             in Lam p (reduceD d env' b)
 
 reduceD d env (With body bindings) =
-  -- First, evaluate bindings normally (handles SCC ordering, concrete values)
   let env' = evalBindings d env bindings
-  -- Then force-insert any bindings that evalBindings skipped (non-concrete).
-  -- We check whether evalBindings actually inserted the name by comparing
-  -- the new env against the old env.
-      env'' = foldl (\e b ->
-        let name = bindName b
-        in case (envLookup name env, envLookup name e) of
-             (old, new) | old == new ->
-               -- evalBindings didn't change this binding — force insert
-               let val = wrapLambda (bindParams b) (bindBody b)
-               in envInsert name (reduceD d e val) e
-             _ -> e  -- evalBindings already updated it
-        ) env' bindings
-      body' = reduceD d env'' body
-      bs' = map (reduceBind d env'') bindings
-      keepBinding b = isResidual (bindBody b) || envIsImpure (bindName b) env''
+      body' = reduceD d env' body
+      bs' = map (reduceBind d env') bindings
+      keepBinding b = isResidual (bindBody b) || envIsImpure (bindName b) env'
       residualBs = filter keepBinding bs'
   in if null residualBs then body' else With body' residualBs
 
@@ -260,7 +246,7 @@ reduceD d env (FieldAccess e field) =
   let e' = forceThunk d env (reduceD d env e)
       result = reduceFieldAccess e' field
   in case result of
-       With _ _ -> reduceD d env result  -- reduce namespace deps
+       With _ _ -> reduceD d env result
        _        -> result
 
 reduceD d env (Namespace bindings) =
