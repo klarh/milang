@@ -56,6 +56,7 @@ data ResCtx = ResCtx
   , rcLinkRef    :: IORef LinkInfo                   -- accumulated link info
   , rcMerkle     :: IORef (Map.Map String String)    -- URL -> Merkle hash
   , rcHashErrs   :: IORef [(String, String, String)] -- (path, expected, actual)
+  , rcNoCache    :: Bool                             -- disable disk cache for remote imports
   }
 
 -- ── CLI types ─────────────────────────────────────────────────────
@@ -66,6 +67,11 @@ data Command
   | CmdReduce ReduceOpts
   | CmdPin PinOpts
   | CmdRepl
+
+data GlobalOpts = GlobalOpts
+  { optNoCache :: Bool
+  , optCommand :: Command
+  }
 
 data RunOpts = RunOpts
   { runFile    :: FilePath
@@ -91,8 +97,8 @@ data PinOpts = PinOpts
 
 -- ── CLI parsers ──────────────────────────────────────────────────
 
-cliParser :: ParserInfo Command
-cliParser = info (commandParser <**> helper <**> versionOpt)
+cliParser :: ParserInfo GlobalOpts
+cliParser = info (globalParser <**> helper <**> versionOpt)
   (  fullDesc
   <> header "milang — the milang compiler"
   <> progDesc "A minimalist functional programming language with zero keywords"
@@ -104,6 +110,11 @@ versionOpt = infoOption ("milang " ++ version)
   <> short 'v'
   <> help "Show version"
   )
+
+globalParser :: Parser GlobalOpts
+globalParser = GlobalOpts
+  <$> switch (long "no-cache" <> help "Disable disk cache for remote URL imports")
+  <*> commandParser
 
 commandParser :: Parser Command
 commandParser = hsubparser
@@ -169,12 +180,13 @@ pinParser = fmap CmdPin $ PinOpts
 
 main :: IO ()
 main = do
-  cmd <- execParser cliParser
-  case cmd of
-    CmdRun opts     -> cmdRun opts
-    CmdCompile opts -> cmdCompile opts
-    CmdReduce opts  -> cmdReduce opts
-    CmdPin opts     -> cmdPin opts
+  gopts <- execParser cliParser
+  let nc = optNoCache gopts
+  case optCommand gopts of
+    CmdRun opts     -> cmdRun nc opts
+    CmdCompile opts -> cmdCompile nc opts
+    CmdReduce opts  -> cmdReduce nc opts
+    CmdPin opts     -> cmdPin nc opts
     CmdRepl         -> cmdRepl
 
 -- | Load and parse a file
@@ -198,10 +210,10 @@ injectPrelude True e = Namespace (preludeBindings ++ [mkBind "_main" e])
 injectPrelude False e = e
 
 -- | Load, parse, inject prelude, and reduce
-loadAndReduce :: String -> IO (Expr, LinkInfo)
-loadAndReduce file = do
+loadAndReduce :: Bool -> String -> IO (Expr, LinkInfo)
+loadAndReduce noCache file = do
   ast <- loadAndParse file
-  (resolved, li) <- resolveImports file ast
+  (resolved, li) <- resolveImports noCache file ast
   let withPrelude = injectPrelude True resolved
       (reduced, ws) = reduce emptyEnv withPrelude
       -- Filter out prelude-origin errors
@@ -308,9 +320,9 @@ hasCircularRef _              = False
 
 -- | Resolve all imports in an AST, replacing Import nodes with parsed content.
 -- Circular imports are replaced with Name references to top-level module bindings.
-resolveImports :: String -> Expr -> IO (Expr, LinkInfo)
-resolveImports file expr = do
-  result <- resolveAndPin file expr
+resolveImports :: Bool -> String -> Expr -> IO (Expr, LinkInfo)
+resolveImports noCache file expr = do
+  result <- resolveAndPin noCache file expr
   case result of
     Left err -> do
       hPutStrLn stderr err
@@ -318,15 +330,15 @@ resolveImports file expr = do
     Right (ast, li, _) -> pure (ast, li)
 
 -- | Like resolveImports but also returns the Merkle hash map (URL → hash).
-resolveAndPin :: String -> Expr -> IO (Either String (Expr, LinkInfo, Map.Map String String))
-resolveAndPin file expr = do
+resolveAndPin :: Bool -> String -> Expr -> IO (Either String (Expr, LinkInfo, Map.Map String String))
+resolveAndPin noCache file expr = do
   cache      <- newIORef Map.empty
   inProgress <- newIORef Set.empty
   circRefs   <- newIORef Set.empty
   linkRef    <- newIORef emptyLinkInfo
   merkle     <- newIORef Map.empty
   hashErrs   <- newIORef []
-  let ctx = ResCtx cache inProgress circRefs linkRef merkle hashErrs
+  let ctx = ResCtx cache inProgress circRefs linkRef merkle hashErrs noCache
   resolved <- resolveExpr ctx (takeDirectory file) expr
   -- Check for hash verification errors
   errs <- readIORef hashErrs
@@ -454,16 +466,16 @@ resolveLocalImport ctx dir pathStr _expectedHash standardImport = do
 -- | Resolve a URL import with Merkle hash computation
 resolveURLImport :: ResCtx -> String -> Maybe String -> Bool -> IO Expr
 resolveURLImport ctx url expectedHash _standardImport = do
-  -- Check Merkle cache first
+  -- Check Merkle cache first (skip when --no-cache)
   merkleMap <- readIORef (rcMerkle ctx)
-  case Map.lookup url merkleMap of
+  case if rcNoCache ctx then Nothing else Map.lookup url merkleMap of
     Just _ -> do
       cached <- Map.lookup url <$> readIORef (rcCache ctx)
       case cached of
         Just expr -> pure expr
         Nothing   -> pure $ Error (T.pack $ "internal error: Merkle cached but not import cached: " ++ url)
     Nothing -> do
-      result <- fetchRemote url
+      result <- fetchRemote (rcNoCache ctx) url
       case result of
         Left err -> pure $ Error (T.pack err)
         Right localPath -> do
@@ -616,8 +628,8 @@ cmdRawReduce file = do
   putStrLn (prettyExpr 0 reduced)
 
 -- | pin: find unpinned URL imports, fetch them, compute Merkle hashes, rewrite source
-cmdPin :: PinOpts -> IO ()
-cmdPin opts = do
+cmdPin :: Bool -> PinOpts -> IO ()
+cmdPin noCache opts = do
   let file = pinFile opts
   ast <- loadAndParse file
   -- Find URL imports that are unpinned
@@ -626,7 +638,7 @@ cmdPin opts = do
     then putStrLn "No URL imports found."
     else do
       -- Resolve all imports to compute Merkle hashes
-      result <- resolveAndPin file (injectPrelude True ast)
+      result <- resolveAndPin noCache file (injectPrelude True ast)
       case result of
         Left err -> do
           hPutStrLn stderr err
@@ -681,8 +693,8 @@ findURLImports = go
     go _                  = []
 
 -- | Unified reduce command: handles dump, reduce, raw-reduce, and JSON IR
-cmdReduce :: ReduceOpts -> IO ()
-cmdReduce opts = do
+cmdReduce :: Bool -> ReduceOpts -> IO ()
+cmdReduce noCache opts = do
   let file = reduceFile opts
   ast <- loadAndParse file
   result <- if reduceNoReduce opts
@@ -691,7 +703,7 @@ cmdReduce opts = do
       if reduceNoPrelude opts
         then pure ast
         else do
-          (resolved, _) <- resolveImports file ast
+          (resolved, _) <- resolveImports noCache file ast
           pure resolved
     else if reduceNoPrelude opts
       then do
@@ -700,7 +712,7 @@ cmdReduce opts = do
         pure reduced
       else do
         -- Full reduce with prelude and imports
-        (reduced, _) <- loadAndReduce file
+        (reduced, _) <- loadAndReduce noCache file
         pure reduced
   let output = if reduceJSON opts
         then BSL.unpack (encodePretty (exprToJSON result))
@@ -710,10 +722,10 @@ cmdReduce opts = do
     Just f  -> writeFile f (output ++ "\n")
 
 -- | compile: emit C
-cmdCompile :: CompileOpts -> IO ()
-cmdCompile opts = do
+cmdCompile :: Bool -> CompileOpts -> IO ()
+cmdCompile noCache opts = do
   let file = compFile opts
-  (reduced, _) <- loadAndReduce file
+  (reduced, _) <- loadAndReduce noCache file
   let stripped = stripDeepModules 3 reduced
       outFile = case compOut opts of
         Just "-" -> Nothing  -- stdout
@@ -724,11 +736,11 @@ cmdCompile opts = do
     Just f  -> withFile f WriteMode $ \h -> codegen h preludeNames stripped
 
 -- | run: compile to C, invoke gcc, execute
-cmdRun :: RunOpts -> IO ()
-cmdRun opts = do
+cmdRun :: Bool -> RunOpts -> IO ()
+cmdRun noCache opts = do
   let file = runFile opts
   cwd <- getCurrentDirectory
-  (reduced, li) <- loadAndReduce file
+  (reduced, li) <- loadAndReduce noCache file
   let stripped = stripDeepModules 3 reduced
       cFile = dropExtension file ++ "_core.c"
       binBase = dropExtension file ++ "_core"

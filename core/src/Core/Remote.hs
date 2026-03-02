@@ -60,15 +60,16 @@ hashBytes :: BS.ByteString -> String
 hashBytes = BS8.unpack . B16.encode . SHA256.hash
 
 -- | Fetch a URL, cache locally under ~/.cache/milang/<sha256-of-url>/<basename>
-fetchRemote :: String -> IO (Either String FilePath)
-fetchRemote url = do
+-- When noCache is True, always re-download even if cached.
+fetchRemote :: Bool -> String -> IO (Either String FilePath)
+fetchRemote noCache url = do
   cacheDir <- getXdgDirectory XdgCache "milang"
   let urlHash = BS8.unpack $ B16.encode $ SHA256.hash $ BS8.pack url
       cacheEntry = cacheDir </> urlHash
       baseName = urlBaseName url
       cachedFile = cacheEntry </> baseName
   createDirectoryIfMissing True cacheEntry
-  exists <- doesFileExist cachedFile
+  exists <- if noCache then pure False else doesFileExist cachedFile
   if exists
     then pure $ Right cachedFile
     else do
