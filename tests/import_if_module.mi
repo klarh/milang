@@ -1,0 +1,9 @@
+-- Test that importing a module with if-using functions works
+-- regardless of what name the import is bound to.
+-- "t" and "e" collide with if's quoted param names (#t, #e).
+t = import "lib/if_module.mi"
+e = import "lib/if_module.mi"
+main world =
+  world.io.println (toString (t.my_abs (0 - 7)))
+  world.io.println (toString (e.my_sign (0 - 3)))
+  0

@@ -1,0 +1,3 @@
+-- Module with functions that use if (tests quoted param free-var bug)
+my_abs x = if (x < 0) (0 - x) (x)
+my_sign x = if (x > 0) (1) (if (x < 0) (0 - 1) (0))

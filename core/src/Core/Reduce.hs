@@ -893,7 +893,7 @@ exprFreeVars (StringLit _)   = Set.empty
 exprFreeVars (Name n)        = Set.singleton n
 exprFreeVars (BinOp _ l r)   = Set.union (exprFreeVars l) (exprFreeVars r)
 exprFreeVars (App f x)       = Set.union (exprFreeVars f) (exprFreeVars x)
-exprFreeVars (Lam p b)       = Set.delete p (exprFreeVars b)
+exprFreeVars (Lam p b)       = Set.delete (lamParamName p) (Set.delete p (exprFreeVars b))
 exprFreeVars (Record _ bs)   = Set.unions (map bindingFreeVars bs)
 exprFreeVars (FieldAccess e _) = exprFreeVars e
 exprFreeVars (Namespace bs)  = bindingsFreeVars bs
@@ -910,7 +910,9 @@ exprFreeVars (Error _)       = Set.empty
 bindingFreeVars :: Binding -> Set.Set Text
 bindingFreeVars b =
   let bodyFVs = exprFreeVars (bindBody b)
-      paramSet = Set.fromList (bindParams b)
+      -- Include both raw and stripped param names so quoted params (#t) also
+      -- remove their bare splice name (t) from the free variable set.
+      paramSet = Set.fromList (bindParams b ++ map lamParamName (bindParams b))
   in Set.difference bodyFVs paramSet
 
 bindingsFreeVars :: [Binding] -> Set.Set Text
@@ -948,7 +950,7 @@ substExpr var replacement = go
     go (BinOp op l r) = BinOp op (go l) (go r)
     go (App f x)     = App (go f) (go x)
     go (Lam p b)
-      | p == var  = Lam p b  -- shadowed
+      | p == var || lamParamName p == var = Lam p b  -- shadowed
       | otherwise = Lam p (go b)
     go (Record t bs)   = Record t (map goBind bs)
     go (FieldAccess e f) = FieldAccess (go e) f
