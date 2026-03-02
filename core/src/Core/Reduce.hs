@@ -1475,7 +1475,14 @@ checkTypeBinding tenv localAnnots b =
               let expectedType = exprToType tenv tyExpr
                   (peeledEnv, bodyType) = peelParams tenv (bindParams b) expectedType
               in (checkExprAgainst peeledEnv (bindPos b) (bindName b) bodyType (bindBody b), peeledEnv)
-      operandErrs = checkOperands tenv' (bindPos b) (bindName b) (bindBody b)
+      -- When there's no local type annotation, shadow parameter names to
+      -- prevent false positives from prelude types (e.g., using `lines` as a
+      -- parameter name shouldn't trigger type errors from the prelude's
+      -- `lines :: Str : List` annotation).
+      paramEnv = case Map.lookup (bindName b) localAnnots of
+        Just _  -> tenv'  -- annotation provides proper param types via peelParams
+        Nothing -> foldl (\e p -> Map.delete p e) tenv' (bindParams b)
+      operandErrs = checkOperands paramEnv (bindPos b) (bindName b) (bindBody b)
   in annotErrs ++ operandErrs
 
 -- | Peel function type layers for parameters
@@ -1496,9 +1503,9 @@ checkExprAgainst tenv pos name expected expr =
 
 -- | Walk an expression and report operand type mismatches
 checkOperands :: TypeEnv -> Maybe SrcPos -> Text -> Expr -> [Warning]
-checkOperands tenv pos name expr0 = snd (go 0 expr0)
+checkOperands tenv0 pos name expr0 = snd (go tenv0 0 expr0)
   where
-    go c (BinOp op l r) =
+    go tenv c (BinOp op l r) =
       let lt = inferExprE tenv l
           rt = inferExprE tenv r
           (opErrs, c1) = case Map.lookup op tenv of
@@ -1511,32 +1518,32 @@ checkOperands tenv pos name expr0 = snd (go 0 expr0)
                   in (errs1 ++ errs2, c')
                 _ -> ([], c')
             _ -> ([], c)
-          (c2, errs1) = go c1 l
-          (c3, errs2) = go c2 r
+          (c2, errs1) = go tenv c1 l
+          (c3, errs2) = go tenv c2 r
       in (c3, opErrs ++ errs1 ++ errs2)
-    go c (App f x) =
+    go tenv c (App f x) =
       let fty0 = inferExprE tenv f
           xty = inferExprE tenv x
           (fty, c1) = freshenType c fty0
           argErrs = case fty of
             TFun argTy _ -> snd (checkCompatWith Map.empty pos name argTy xty)
             _ -> []
-          (c2, errs1) = go c1 f
-          (c3, errs2) = go c2 x
+          (c2, errs1) = go tenv c1 f
+          (c3, errs2) = go tenv c2 x
       in (c3, argErrs ++ errs1 ++ errs2)
-    go c (Lam _ body)   = go c body
-    go c (With body bs)  =
-      let (c1, e1) = go c body
-          (c2, e2) = foldl (\(ci, ei) b -> let (ci', ei') = go ci (bindBody b) in (ci', ei ++ ei')) (c1, []) bs
+    go tenv c (Lam p body) = go (Map.delete p tenv) c body
+    go tenv c (With body bs)  =
+      let (c1, e1) = go tenv c body
+          (c2, e2) = foldl (\(ci, ei) b -> let (ci', ei') = go tenv ci (bindBody b) in (ci', ei ++ ei')) (c1, []) bs
       in (c2, e1 ++ e2)
-    go c (Case scrut alts) =
-      let (c1, bodyErrs) = foldl (\(ci, ei) (Alt _ _ body) -> let (ci', ei') = go ci body in (ci', ei ++ ei')) (c, []) alts
+    go tenv c (Case scrut alts) =
+      let (c1, bodyErrs) = foldl (\(ci, ei) (Alt _ _ body) -> let (ci', ei') = go tenv ci body in (ci', ei ++ ei')) (c, []) alts
           exhaustErrs = checkExhaustiveness tenv pos name scrut alts
       in (c1, bodyErrs ++ exhaustErrs)
-    go c (Record _ bs) =
-      foldl (\(ci, ei) b -> let (ci', ei') = go ci (bindBody b) in (ci', ei ++ ei')) (c, []) bs
-    go c (Thunk e)       = go c e
-    go c _               = (c, [])
+    go tenv c (Record _ bs) =
+      foldl (\(ci, ei) b -> let (ci', ei') = go tenv ci (bindBody b) in (ci', ei ++ ei')) (c, []) bs
+    go tenv c (Thunk e)       = go tenv c e
+    go _ c _               = (c, [])
 
 -- | Freshen type variables with a counter to give each call site unique type vars
 freshenType :: Int -> MiType -> (MiType, Int)
