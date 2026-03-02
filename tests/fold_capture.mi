@@ -1,0 +1,21 @@
+-- Test: fold callbacks with higher-order functions don't capture wrong variables.
+-- Specifically, when fold's Case pattern var 'h' collides with filter's
+-- Case pattern var 'h', the callback should still see the correct value.
+main world =
+  my_fold g z xs = xs -> Nil = z; Cons h t = my_fold g (g z h) t
+
+  -- fold + filter: remove element 3 from [1,2,3]
+  g = \a x -> filter (\y -> y /= x) a
+  r = my_fold g [1, 2, 3] [3]
+  world.io.println (toString r)
+
+  -- fold + filter: remove elements 3 then 1 from [1,2,3]
+  r2 = my_fold g [1, 2, 3] [3, 1]
+  world.io.println (toString r2)
+
+  -- fold + map: double each element used as accumulator seed
+  g2 = \acc x -> map (\y -> y + x) acc
+  r3 = my_fold g2 [10, 20, 30] [1]
+  world.io.println (toString r3)
+
+  0

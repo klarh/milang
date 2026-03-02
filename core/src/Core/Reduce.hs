@@ -288,8 +288,25 @@ reduceD d env (Case scrut alts) =
            in Case scrut' alts'
        _ ->
          Case scrut' (map (\(Alt p g b) ->
-            let env' = Set.foldl' (\e v -> envDelete v e) env (patVars p)
-            in Alt p (fmap (reduceD d env') g) (reduceD d env' b)) alts)
+            -- Alpha-rename pattern vars that collide with free vars in env
+            -- values to prevent variable capture (e.g. fold callback capture).
+            let pvs = patVars p
+                envValFVs = Set.unions (map exprFreeVars (Map.elems (envMap env)))
+                captured = Set.intersection pvs envValFVs
+            in if Set.null captured
+               then let env' = Set.foldl' (\e v -> envDelete v e) env pvs
+                    in Alt p (fmap (reduceD d env') g) (reduceD d env' b)
+               else let allNames = Set.unions [ pvs, envValFVs, Map.keysSet (envMap env)
+                                              , exprFreeVars b
+                                              , maybe Set.empty exprFreeVars g ]
+                        (p', sub) = Set.foldl' (\(pat, s) v ->
+                          let fresh = freshName v (Set.unions [allNames, Set.fromList (map fst s)])
+                          in (substPat v fresh pat, (v, Name fresh) : s)
+                          ) (p, []) captured
+                        applyS e = foldl (\e' (old, new) -> substExpr old new e') e sub
+                        env' = Set.foldl' (\e v -> envDelete v e) env (patVars p')
+                    in Alt p' (fmap (reduceD d env' . applyS) g) (reduceD d env' (applyS b))
+            ) alts)
      else reduceCase d env scrut' alts
 
 reduceD d env (Thunk body) =
@@ -920,6 +937,15 @@ patVars (PVar v)     = Set.singleton v
 patVars (PLit _)     = Set.empty
 patVars (PRec _ fs)  = Set.unions [patVars p | (_, p) <- fs]
 patVars (PList ps mr) = Set.unions (map patVars ps) `Set.union` maybe Set.empty Set.singleton mr
+
+-- | Substitute a variable name in a pattern (alpha-rename a bound variable).
+substPat :: Text -> Text -> Pat -> Pat
+substPat old new = go
+  where
+    go (PVar v)     = PVar (if v == old then new else v)
+    go (PRec t fs)  = PRec t [(f, go p) | (f, p) <- fs]
+    go (PList ps mr) = PList (map go ps) (fmap (\v -> if v == old then new else v) mr)
+    go p            = p  -- PWild, PLit unchanged
 
 -- ── Substitution ──────────────────────────────────────────────────
 
