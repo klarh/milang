@@ -6,7 +6,7 @@ import System.Exit (exitFailure, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (readProcessWithExitCode)
 import System.Directory (removeFile, doesFileExist, getCurrentDirectory)
-import System.Info (os)
+import System.Info (os, arch)
 import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>), normalise)
 import Control.Monad (unless, when)
 import qualified Data.ByteString.Char8 as BS8
@@ -205,9 +205,17 @@ loadAndParse file = do
 
 -- | Inject prelude bindings before user bindings
 injectPrelude :: Bool -> Expr -> Expr
-injectPrelude True (Namespace bs) = Namespace (preludeBindings ++ bs)
-injectPrelude True e = Namespace (preludeBindings ++ [mkBind "_main" e])
+injectPrelude True (Namespace bs) = Namespace (preludeBindings ++ [buildBinding] ++ bs)
+injectPrelude True e = Namespace (preludeBindings ++ [buildBinding] ++ [mkBind "_main" e])
 injectPrelude False e = e
+
+-- | Compile-time build info record (target, os, arch)
+buildBinding :: Binding
+buildBinding = mkBind "build" $ Record ""
+  [ mkBind "target" (StringLit "c")
+  , mkBind "os"     (StringLit (T.pack os))
+  , mkBind "arch"   (StringLit (T.pack arch))
+  ]
 
 -- | Load, parse, inject prelude, and reduce
 loadAndReduce :: Bool -> String -> IO (Expr, LinkInfo)

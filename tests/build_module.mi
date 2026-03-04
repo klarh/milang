@@ -1,0 +1,17 @@
+-- Test the build module (compile-time platform info)
+-- build.target, build.os, and build.arch should be compile-time constants
+
+-- Verify all fields are strings
+target_check = build.target == "c"
+os_check = len build.os > 0
+arch_check = len build.arch > 0
+
+-- Verify compile-time reduction works (if branch eliminated)
+platform_msg = if (build.target == "c") "native" "other"
+
+main world =
+  world.io.println ("target: " + build.target)
+  world.io.println ("os: " + build.os)
+  world.io.println ("arch: " + build.arch)
+  world.io.println ("platform: " + platform_msg)
+  0
