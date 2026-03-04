@@ -24,13 +24,13 @@ data CFunSig = CFunSig
 -- | Parse a C header file using clang -E
 runPreprocessor :: [String] -> String -> IO (Either String String)
 runPreprocessor clangArgs input = do
-  -- Try clang first, fall back to gcc if clang isn't available or fails
-  rclang <- try (readProcess "clang" clangArgs input) :: IO (Either SomeException String)
-  case rclang of
+  -- Try gcc first (matches the compiler used for C compilation), fall back to clang
+  rgcc <- try (readProcess "gcc" clangArgs input) :: IO (Either SomeException String)
+  case rgcc of
     Right out -> pure (Right out)
     Left _ -> do
-      rgcc <- try (readProcess "gcc" clangArgs input) :: IO (Either SomeException String)
-      case rgcc of
+      rclang <- try (readProcess "clang" clangArgs input) :: IO (Either SomeException String)
+      case rclang of
         Right out2 -> pure (Right out2)
         Left e2 -> pure (Left ("preprocessor failed: " ++ show e2))
 
