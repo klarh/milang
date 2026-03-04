@@ -1,0 +1,19 @@
+-- Test: user can override prelude functions without breaking prelude internals
+-- User overrides concat (used by push internally)
+concat a b = len a + len b
+
+main world =
+  -- User's concat works for user code
+  assert "user concat" (concat "hi" "world" == 7)
+
+  -- Prelude's push still works (uses prelude's concat internally)
+  items = push [1, 2, 3] 4
+  assert "push works" (len items == 4)
+
+  -- Prelude's sortBy still works (uses prelude's concat internally)
+  sorted = sortBy (\a b -> a - b) [3, 1, 2]
+  assert "sortBy works" (len sorted == 3)
+
+  0
+
+assert msg cond = if cond 0 (error msg)

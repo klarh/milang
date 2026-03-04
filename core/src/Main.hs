@@ -24,7 +24,7 @@ import Options.Applicative
 import Core.Syntax
 import Core.Parser (parseProgram, parseExpr)
 import Text.Megaparsec (errorBundlePretty)
-import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap)
+import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap, protectPrelude)
 import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
 import Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..))
@@ -210,8 +210,13 @@ loadAndParse file = do
 
 -- | Inject prelude bindings before user bindings
 injectPrelude :: Bool -> Expr -> Expr
-injectPrelude True (Namespace bs) = Namespace (preludeBindings ++ [buildBinding] ++ bs)
-injectPrelude True e = Namespace (preludeBindings ++ [buildBinding] ++ [mkBind "_main" e])
+injectPrelude True (Namespace bs) =
+  let protected = protectPrelude preludeBindings bs
+  in Namespace (protected ++ [buildBinding] ++ bs)
+injectPrelude True e =
+  let bs = [mkBind "_main" e]
+      protected = protectPrelude preludeBindings bs
+  in Namespace (protected ++ [buildBinding] ++ bs)
 injectPrelude False e = e
 
 -- | Compile-time build info record (target, os, arch)

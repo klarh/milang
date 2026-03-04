@@ -4,6 +4,7 @@ module Core.Reduce
   , Warning(..), warnings
   , exprFreeVars
   , envInsert, envMap, envLookup
+  , protectPrelude
   ) where
 
 import Data.Text (Text)
@@ -14,6 +15,7 @@ import Data.Graph (stronglyConnComp, SCC(..))
 import Data.List (isPrefixOf)
 import Text.Read (readMaybe)
 import Data.Char (isUpper)
+import Data.Maybe (isNothing)
 
 import Core.Syntax
 
@@ -903,6 +905,78 @@ chainBodies new old = case (new, old) of
       PWild  -> True
       PVar _ -> True
       _      -> False
+
+-- ── Prelude protection ────────────────────────────────────────────
+-- When a user fully overrides a prelude function (chainBodies fails),
+-- other prelude functions that reference it would break.  We preserve
+-- the prelude version under __p_<name> and rewrite prelude-internal
+-- cross-references so they use the protected name.  Open-function
+-- extensions (chainBodies succeeds) are left alone.
+
+protectPrelude :: [Binding] -> [Binding] -> [Binding]
+protectPrelude preludeBs userBs =
+  let preludeValueNames = Set.fromList
+        [bindName b | b <- preludeBs, bindDomain b `elem` [Value, Lazy]]
+      userValueNames = Set.fromList
+        [bindName b | b <- userBs, bindDomain b `elem` [Value, Lazy]]
+      conflicts = Set.intersection preludeValueNames userValueNames
+  in if Set.null conflicts
+     then preludeBs
+     else
+       let preludeMap = Map.fromList
+             [(bindName b, b) | b <- preludeBs, bindDomain b `elem` [Value, Lazy]]
+           userMap = Map.fromList
+             [(bindName b, b) | b <- userBs, bindDomain b `elem` [Value, Lazy]]
+           isOverride name = case (Map.lookup name preludeMap, Map.lookup name userMap) of
+             (Just pb, Just ub) ->
+               isNothing (chainBodies
+                 (wrapLambda (bindParams ub) (bindBody ub))
+                 (wrapLambda (bindParams pb) (bindBody pb)))
+             _ -> False
+           overrides = Set.filter isOverride conflicts
+       in if Set.null overrides
+          then preludeBs
+          else
+            let renameMap = Map.fromList
+                  [(n, "__p_" <> n) | n <- Set.toList overrides]
+                modifyB b
+                  | bindDomain b `elem` [Value, Lazy] =
+                    b { bindBody = renameOverrides renameMap
+                          (Set.fromList (bindParams b)) (bindBody b) }
+                  | otherwise = b
+                modified = map modifyB preludeBs
+                internals = [ (modifyB (preludeMap Map.! n))
+                                { bindName = "__p_" <> n }
+                            | n <- Set.toList overrides ]
+            in modified ++ internals
+
+-- | Rename references to overridden prelude names, respecting scoping.
+renameOverrides :: Map.Map Text Text -> Set.Set Text -> Expr -> Expr
+renameOverrides renames = go
+  where
+    rename bound n
+      | Set.member n bound = n
+      | otherwise = Map.findWithDefault n n renames
+    go bound (Name n)          = Name (rename bound n)
+    go bound (App f x)         = App (go bound f) (go bound x)
+    go bound (BinOp op l r)    = BinOp op (go bound l) (go bound r)
+    go bound (Lam p body)      = Lam p (go (Set.insert (lamParamName p) bound) body)
+    go bound (Case scrut alts) = Case (go bound scrut) (map (goAlt bound) alts)
+    go bound (Record tag bs)   = Record tag (map (goBind bound) bs)
+    go bound (FieldAccess e f) = FieldAccess (go bound e) f
+    go bound (Namespace bs)    = Namespace (map (goBind bound) bs)
+    go bound (With ns bs)      = With (go bound ns) (map (goBind bound) bs)
+    go bound (ListLit es)      = ListLit (map (go bound) es)
+    go bound (Quote e)         = Quote (go bound e)
+    go bound (Splice e)        = Splice (go bound e)
+    go bound (Thunk e)         = Thunk (go bound e)
+    go _     e                 = e
+    goAlt bound (Alt pat guard body) =
+      let bound' = Set.union bound (patVars pat)
+      in Alt pat (fmap (go bound') guard) (go bound' body)
+    goBind bound b =
+      let bound' = Set.union bound (Set.fromList (bindParams b))
+      in b { bindBody = go bound' (bindBody b) }
 
 -- ── Free variables ────────────────────────────────────────────────
 
