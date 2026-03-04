@@ -763,14 +763,33 @@ reduceCase d env scrut (Alt pat mGuard body : rest) =
   case matchPat pat scrut of
     Nothing -> reduceCase d env scrut rest
     Just binds ->
-      let env' = foldl (\e (n,v) -> envInsert n v e) env binds
-      in case mGuard of
-        Nothing -> reduceD d env' body
+      -- Alpha-rename bound names that collide with free vars in env values
+      -- to prevent variable capture (e.g. filter's Cons 't' capturing outer 't').
+      let boundNames = Set.fromList (map fst binds)
+          envValFVs = Set.unions (map exprFreeVars (Map.elems (envMap env)))
+          captured = Set.intersection boundNames envValFVs
+          (binds', body', mGuard') =
+            if Set.null captured then (binds, body, mGuard)
+            else let allNames = Set.unions [ boundNames, envValFVs
+                                           , Map.keysSet (envMap env)
+                                           , exprFreeVars body
+                                           , maybe Set.empty exprFreeVars mGuard ]
+                     renames = Set.foldl' (\s v ->
+                       let fresh = freshName v (Set.unions [allNames, Set.fromList (map snd s)])
+                       in (v, fresh) : s) [] captured
+                     applyR e = foldl (\e' (old, new) -> substExpr old (Name new) e') e renames
+                     renameBind (n, v) = case lookup n renames of
+                       Just n' -> (n', v)
+                       Nothing -> (n, v)
+                 in (map renameBind binds, applyR body, fmap applyR mGuard)
+          env' = foldl (\e (n,v) -> envInsert n v e) env binds'
+      in case mGuard' of
+        Nothing -> reduceD d env' body'
         Just g  ->
           let g' = forceThunk d env' (reduceD d env' g)
           in case g' of
             IntLit 0 -> reduceCase d env scrut rest
-            IntLit _ -> reduceD d env' body
+            IntLit _ -> reduceD d env' body'
             _        -> reduceCase d env scrut rest
 
 matchPat :: Pat -> Expr -> Maybe [(Text, Expr)]

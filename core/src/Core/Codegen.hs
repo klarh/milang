@@ -108,6 +108,9 @@ captureIO st hidden expr = do
         code <- bindingEvalCode st b
         emit code
         ) runtimeBs
+      -- Re-emit native len after prelude so it handles both strings and lists
+      emit "  mi_env_set(_env, \"len\", mi_native(mi_builtin_len));\n"
+      emit "  mi_env_set(_env, \"strlen\", mi_native(mi_builtin_len));\n"
       emit "\n"
       if hasMainWithArg
         then do
