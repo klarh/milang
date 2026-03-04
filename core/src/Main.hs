@@ -57,6 +57,7 @@ data ResCtx = ResCtx
   , rcMerkle     :: IORef (Map.Map String String)    -- URL -> Merkle hash
   , rcHashErrs   :: IORef [(String, String, String)] -- (path, expected, actual)
   , rcNoCache    :: Bool                             -- disable disk cache for remote imports
+  , rcCC         :: String                           -- C compiler for header parsing and compilation
   }
 
 -- ── CLI types ─────────────────────────────────────────────────────
@@ -70,6 +71,7 @@ data Command
 
 data GlobalOpts = GlobalOpts
   { optNoCache :: Bool
+  , optCC      :: String
   , optCommand :: Command
   }
 
@@ -114,6 +116,8 @@ versionOpt = infoOption ("milang " ++ version)
 globalParser :: Parser GlobalOpts
 globalParser = GlobalOpts
   <$> switch (long "no-cache" <> help "Disable disk cache for remote URL imports")
+  <*> strOption (long "cc" <> value "gcc" <> showDefault <> metavar "COMPILER"
+        <> help "C compiler for header parsing and compilation")
   <*> commandParser
 
 commandParser :: Parser Command
@@ -182,11 +186,12 @@ main :: IO ()
 main = do
   gopts <- execParser cliParser
   let nc = optNoCache gopts
+      cc = optCC gopts
   case optCommand gopts of
-    CmdRun opts     -> cmdRun nc opts
-    CmdCompile opts -> cmdCompile nc opts
-    CmdReduce opts  -> cmdReduce nc opts
-    CmdPin opts     -> cmdPin nc opts
+    CmdRun opts     -> cmdRun cc nc opts
+    CmdCompile opts -> cmdCompile cc nc opts
+    CmdReduce opts  -> cmdReduce cc nc opts
+    CmdPin opts     -> cmdPin cc nc opts
     CmdRepl         -> cmdRepl
 
 -- | Load and parse a file
@@ -218,10 +223,10 @@ buildBinding = mkBind "build" $ Record ""
   ]
 
 -- | Load, parse, inject prelude, and reduce
-loadAndReduce :: Bool -> String -> IO (Expr, LinkInfo)
-loadAndReduce noCache file = do
+loadAndReduce :: String -> Bool -> String -> IO (Expr, LinkInfo)
+loadAndReduce cc noCache file = do
   ast <- loadAndParse file
-  (resolved, li) <- resolveImports noCache file ast
+  (resolved, li) <- resolveImports cc noCache file ast
   let withPrelude = injectPrelude True resolved
       (reduced, ws) = reduce emptyEnv withPrelude
       -- Filter out prelude-origin errors
@@ -328,9 +333,9 @@ hasCircularRef _              = False
 
 -- | Resolve all imports in an AST, replacing Import nodes with parsed content.
 -- Circular imports are replaced with Name references to top-level module bindings.
-resolveImports :: Bool -> String -> Expr -> IO (Expr, LinkInfo)
-resolveImports noCache file expr = do
-  result <- resolveAndPin noCache file expr
+resolveImports :: String -> Bool -> String -> Expr -> IO (Expr, LinkInfo)
+resolveImports cc noCache file expr = do
+  result <- resolveAndPin cc noCache file expr
   case result of
     Left err -> do
       hPutStrLn stderr err
@@ -338,15 +343,15 @@ resolveImports noCache file expr = do
     Right (ast, li, _) -> pure (ast, li)
 
 -- | Like resolveImports but also returns the Merkle hash map (URL → hash).
-resolveAndPin :: Bool -> String -> Expr -> IO (Either String (Expr, LinkInfo, Map.Map String String))
-resolveAndPin noCache file expr = do
+resolveAndPin :: String -> Bool -> String -> Expr -> IO (Either String (Expr, LinkInfo, Map.Map String String))
+resolveAndPin cc noCache file expr = do
   cache      <- newIORef Map.empty
   inProgress <- newIORef Set.empty
   circRefs   <- newIORef Set.empty
   linkRef    <- newIORef emptyLinkInfo
   merkle     <- newIORef Map.empty
   hashErrs   <- newIORef []
-  let ctx = ResCtx cache inProgress circRefs linkRef merkle hashErrs noCache
+  let ctx = ResCtx cache inProgress circRefs linkRef merkle hashErrs noCache cc
   resolved <- resolveExpr ctx (takeDirectory file) expr
   -- Check for hash verification errors
   errs <- readIORef hashErrs
@@ -444,7 +449,7 @@ resolveLocalImport ctx dir pathStr _expectedHash standardImport = do
             let fullPath = if not (null pathStr) && head pathStr == '/' then pathStr else relPath
             autoInfo <- autoLinkInfo fullPath
             modifyIORef (rcLinkRef ctx) (mergeLinkInfo autoInfo)
-            result <- loadCHeader fullPath pathStr standardImport
+            result <- loadCHeader (rcCC ctx) fullPath pathStr standardImport
             case result of
               Left err -> pure $ Error (T.pack err)
               Right ns -> do
@@ -566,11 +571,11 @@ resolveAlt ctx dir (Alt p g body) = do
   pure $ Alt p g' body'
 
 -- | Parse a C header file, returning a Namespace of CFunction bindings
-loadCHeader :: FilePath -> String -> Bool -> IO (Either String Expr)
-loadCHeader path hdrName standardImport = do
+loadCHeader :: String -> FilePath -> String -> Bool -> IO (Either String Expr)
+loadCHeader cc path hdrName standardImport = do
   result <- if standardImport
-              then parseCHeaderInclude hdrName
-              else parseCHeader path
+              then parseCHeaderInclude cc hdrName
+              else parseCHeader cc path
   case result of
     Left err -> pure $ Left err
     Right sigs -> do
@@ -636,8 +641,8 @@ cmdRawReduce file = do
   putStrLn (prettyExpr 0 reduced)
 
 -- | pin: find unpinned URL imports, fetch them, compute Merkle hashes, rewrite source
-cmdPin :: Bool -> PinOpts -> IO ()
-cmdPin noCache opts = do
+cmdPin :: String -> Bool -> PinOpts -> IO ()
+cmdPin cc noCache opts = do
   let file = pinFile opts
   ast <- loadAndParse file
   -- Find URL imports that are unpinned
@@ -646,7 +651,7 @@ cmdPin noCache opts = do
     then putStrLn "No URL imports found."
     else do
       -- Resolve all imports to compute Merkle hashes
-      result <- resolveAndPin noCache file (injectPrelude True ast)
+      result <- resolveAndPin cc noCache file (injectPrelude True ast)
       case result of
         Left err -> do
           hPutStrLn stderr err
@@ -701,8 +706,8 @@ findURLImports = go
     go _                  = []
 
 -- | Unified reduce command: handles dump, reduce, raw-reduce, and JSON IR
-cmdReduce :: Bool -> ReduceOpts -> IO ()
-cmdReduce noCache opts = do
+cmdReduce :: String -> Bool -> ReduceOpts -> IO ()
+cmdReduce cc noCache opts = do
   let file = reduceFile opts
   ast <- loadAndParse file
   result <- if reduceNoReduce opts
@@ -711,7 +716,7 @@ cmdReduce noCache opts = do
       if reduceNoPrelude opts
         then pure ast
         else do
-          (resolved, _) <- resolveImports noCache file ast
+          (resolved, _) <- resolveImports cc noCache file ast
           pure resolved
     else if reduceNoPrelude opts
       then do
@@ -720,7 +725,7 @@ cmdReduce noCache opts = do
         pure reduced
       else do
         -- Full reduce with prelude and imports
-        (reduced, _) <- loadAndReduce noCache file
+        (reduced, _) <- loadAndReduce cc noCache file
         pure reduced
   let output = if reduceJSON opts
         then BSL.unpack (encodePretty (exprToJSON result))
@@ -730,10 +735,10 @@ cmdReduce noCache opts = do
     Just f  -> writeFile f (output ++ "\n")
 
 -- | compile: emit C
-cmdCompile :: Bool -> CompileOpts -> IO ()
-cmdCompile noCache opts = do
+cmdCompile :: String -> Bool -> CompileOpts -> IO ()
+cmdCompile cc noCache opts = do
   let file = compFile opts
-  (reduced, _) <- loadAndReduce noCache file
+  (reduced, _) <- loadAndReduce cc noCache file
   let stripped = stripDeepModules 3 reduced
       outFile = case compOut opts of
         Just "-" -> Nothing  -- stdout
@@ -744,11 +749,11 @@ cmdCompile noCache opts = do
     Just f  -> withFile f WriteMode $ \h -> codegen h preludeNames stripped
 
 -- | run: compile to C, invoke gcc, execute
-cmdRun :: Bool -> RunOpts -> IO ()
-cmdRun noCache opts = do
+cmdRun :: String -> Bool -> RunOpts -> IO ()
+cmdRun cc noCache opts = do
   let file = runFile opts
   cwd <- getCurrentDirectory
-  (reduced, li) <- loadAndReduce noCache file
+  (reduced, li) <- loadAndReduce cc noCache file
   let stripped = stripDeepModules 3 reduced
       cFile = dropExtension file ++ "_core.c"
       binBase = dropExtension file ++ "_core"
@@ -764,11 +769,11 @@ cmdRun noCache opts = do
         e <- doesFileExist p
         if e then return p else findExisting ps
   withFile cFile WriteMode $ \h -> codegen h preludeNames stripped
-  (gccExit, _, gccErr) <- readProcessWithExitCode "gcc" gccArgs ""
+  (gccExit, _, gccErr) <- readProcessWithExitCode cc gccArgs ""
   case gccExit of
     ExitSuccess -> pure ()
     ExitFailure code -> do
-      hPutStrLn stderr $ "error: C compilation failed (gcc exit " ++ show code ++ ")"
+      hPutStrLn stderr $ "error: C compilation failed (" ++ cc ++ " exit " ++ show code ++ ")"
       unless (null gccErr) $ hPutStrLn stderr gccErr
       existsC <- doesFileExist cFile
       when existsC $ removeFile cFile

@@ -21,22 +21,17 @@ data CFunSig = CFunSig
   , cfParams :: ![CType]
   } deriving (Show)
 
--- | Parse a C header file using clang -E
-runPreprocessor :: [String] -> String -> IO (Either String String)
-runPreprocessor clangArgs input = do
-  -- Try gcc first (matches the compiler used for C compilation), fall back to clang
-  rgcc <- try (readProcess "gcc" clangArgs input) :: IO (Either SomeException String)
-  case rgcc of
+-- | Parse a C header file using the specified compiler's preprocessor
+runPreprocessor :: String -> [String] -> String -> IO (Either String String)
+runPreprocessor cc args input = do
+  result <- try (readProcess cc args input) :: IO (Either SomeException String)
+  case result of
     Right out -> pure (Right out)
-    Left _ -> do
-      rclang <- try (readProcess "clang" clangArgs input) :: IO (Either SomeException String)
-      case rclang of
-        Right out2 -> pure (Right out2)
-        Left e2 -> pure (Left ("preprocessor failed: " ++ show e2))
+    Left e -> pure (Left ("preprocessor failed: " ++ show e))
 
-parseCHeader :: FilePath -> IO (Either String [CFunSig])
-parseCHeader path = do
-  r <- runPreprocessor ["-E", path] ""
+parseCHeader :: String -> FilePath -> IO (Either String [CFunSig])
+parseCHeader cc path = do
+  r <- runPreprocessor cc ["-E", path] ""
   case r of
     Left err -> pure $ Left err
     Right output -> do
@@ -55,10 +50,10 @@ parseCHeader path = do
 
 -- | Parse a C header by asking clang to preprocess an #include of the header
 -- name. This lets clang find system headers via angle-bracket includes.
-parseCHeaderInclude :: String -> IO (Either String [CFunSig])
-parseCHeaderInclude hdr = do
+parseCHeaderInclude :: String -> String -> IO (Either String [CFunSig])
+parseCHeaderInclude cc hdr = do
   let input = "#include <" ++ hdr ++ ">\n"
-  r <- runPreprocessor ["-E", "-xc", "-"] input
+  r <- runPreprocessor cc ["-E", "-xc", "-"] input
   case r of
     Left err -> pure $ Left err
     Right output -> do
