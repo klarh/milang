@@ -1792,39 +1792,58 @@ dotName (Name n) f        = n <> "." <> f
 dotName (FieldAccess e f1) f2 = dotName e f1 <> "." <> f2
 dotName _ f               = f
 
--- | Check trait annotations on bindings
+-- | Check trait annotations on bindings.
+-- Unannotated bindings have their effects inferred (not checked);
+-- only explicitly annotated bindings are validated.
 traitCheckBindings :: Env -> [Binding] -> [Warning]
 traitCheckBindings env bindings =
-  let traitEnv = collectTraitEnv env bindings
+  let explicitTraitEnv = collectTraitEnv env bindings
       bindingMap = Map.fromList [(bindName b, b) | b <- bindings]
       -- Only check value/lazy bindings
       valueBinds = filter (\b -> bindDomain b == Value || bindDomain b == Lazy) bindings
-  in concatMap (checkTrait traitEnv bindingMap valueBinds) valueBinds
+      -- Augment trait env with inferred effects for unannotated bindings
+      augTraitEnv = inferUnannotatedTraits explicitTraitEnv bindingMap valueBinds
+  in concatMap (checkTrait explicitTraitEnv augTraitEnv bindingMap valueBinds) valueBinds
+
+-- | Infer effects for unannotated bindings and add to trait env.
+-- Iterates to fixpoint so transitive inferred effects propagate.
+inferUnannotatedTraits :: TraitEnv -> Map.Map Text Binding -> [Binding] -> TraitEnv
+inferUnannotatedTraits explicit bindingMap valueBinds = go explicit
+  where
+    go tenv =
+      let next = foldl (\te b ->
+            let name = bindName b
+            in if Map.member name explicit
+               then te  -- has explicit annotation, don't override
+               else let inferred = inferBindingEffects te bindingMap valueBinds b
+                    in if Set.null inferred
+                       then te
+                       else Map.insert name inferred te
+            ) tenv valueBinds
+      in if next == tenv then tenv else go next
 
 -- | Check a single binding against its trait annotation.
--- Unannotated bindings default to pure (:~ []), except "main" and "_main"
--- which are implicitly granted all capabilities.
-checkTrait :: TraitEnv -> Map.Map Text Binding -> [Binding] -> Binding -> [Warning]
-checkTrait traitEnv bindingMap allBindings b =
+-- Only explicitly annotated bindings are checked; unannotated ones are skipped
+-- (their effects are inferred and visible to callers via the augmented trait env).
+checkTrait :: TraitEnv -> TraitEnv -> Map.Map Text Binding -> [Binding] -> Binding -> [Warning]
+checkTrait explicitTraitEnv augTraitEnv bindingMap allBindings b =
   let name = bindName b
-      -- main and _main (auto-wrapper for main-less files) are implicitly unconstrained
       isMain = name == "main" || name == "_main"
-      declared = case Map.lookup name traitEnv of
-                   Just d  -> d
-                   Nothing | isMain    -> Set.empty  -- placeholder; skip check below
-                           | otherwise -> Set.empty  -- pure by default
-      skip = isMain && not (Map.member name traitEnv)
+      hasExplicit = Map.member name explicitTraitEnv
+      -- Only check explicitly annotated bindings (skip unannotated and main)
+      skip = not hasExplicit || (isMain && not hasExplicit)
   in if skip
      then []
-     else let inferred = inferBindingEffects traitEnv bindingMap allBindings b
+     else let declared = case Map.lookup name explicitTraitEnv of
+                           Just d  -> d
+                           Nothing -> Set.empty
+              inferred = inferBindingEffects augTraitEnv bindingMap allBindings b
               excess = Set.difference inferred declared
           in if Set.null excess
              then []
              else [TraitWarning (bindPos b) (bindName b)
                     ("effect violation: " <> name
-                     <> (if Map.member name traitEnv
-                         then " declared :~ " <> formatEffects declared
-                         else " has no :~ annotation (assumed pure)")
+                     <> " declared :~ " <> formatEffects declared
                      <> " but uses " <> formatEffects excess)]
 
 -- | Infer effects of a binding body

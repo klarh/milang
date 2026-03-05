@@ -12,8 +12,12 @@ rebind_test :~ []
 rebind_test world =
   println "hello"
 
-/* === Pure by default: unannotated functions are assumed pure === */
-impure_no_annotation world = world.io.println "oops"
+/* === Trait inference: unannotated functions have effects inferred === */
+impure_no_annotation world = world.io.println "inferred"
+
+/* Explicitly annotated pure calling unannotated impure should still fail */
+bad_caller :~ []
+bad_caller world = impure_no_annotation world
 
 main world =
   world.io.println "trait tests"
