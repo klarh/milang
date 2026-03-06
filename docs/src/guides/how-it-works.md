@@ -66,8 +66,9 @@ The partial evaluator **is** the optimizer. There is no separate optimization pa
 
 The code generator takes the reduced AST and emits a single, self-contained C file. This file includes:
 
-- **An embedded runtime** — an arena allocator, a tagged union value type (`MiVal`), environment chains, and built-in functions.
-- **Arena allocation** — all milang values are allocated from 1 MB arena blocks with 8-byte alignment. There is no garbage collector; arenas are freed in bulk.
+- **An embedded runtime** — an arena allocator, a tagged union value type (`MiVal`), environment chains, a mark-sweep garbage collector, and built-in functions.
+- **Arena allocation** — init-time values (prelude, AST) are allocated from 1 MB arena blocks. Eval-time environments use a malloc-based pool with automatic garbage collection.
+- **Garbage collection** — a mark-sweep GC runs periodically during evaluation, reclaiming unreachable environment entries and calling finalizers on managed FFI pointers. This keeps memory bounded for long-running programs.
 - **Tagged unions** — every runtime value is a `MiVal` with a `tag` (`MI_INT`, `MI_FLOAT`, `MI_STRING`, `MI_CLOSURE`, `MI_RECORD`, etc.) and a payload.
 - **Tail-call optimization** — `tail` calls are compiled to `goto` jumps, so recursive functions run in constant stack space.
 - **Closures** — functions that capture variables are represented as a code pointer plus an environment chain of bindings.

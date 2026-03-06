@@ -128,6 +128,12 @@ Functions for inspecting and modifying record structure at runtime:
 | `getField` | `Record : Str : Maybe` | Dynamic field access by name; returns `Just value` if present, `Nothing` otherwise. |
 | `setField` | `Record : Str : a : Record` | Return copy with field updated; on non-record values returns the original value unchanged. |
 
+## Memory Management
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `gc_manage` | `Pointer : Native : Managed` | Wrap an FFI pointer with a finalizer for automatic GC cleanup. See [C FFI — Memory Management](./ffi.md#memory-management-for-ffi-pointers). |
+
 ## Operators
 
 | Operator | Signature | Description |

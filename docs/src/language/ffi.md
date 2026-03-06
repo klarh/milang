@@ -102,3 +102,64 @@ C code bypasses milang's capability model — a C function can perform arbitrary
 - **`--no-remote-ffi`** — allow local `.mi` files to use C FFI, but prevent URL-imported modules from importing C headers. This stops remote code from escaping the capability sandbox through native calls.
 
 These flags are especially important when running untrusted or third-party milang code.
+
+## Memory Management for FFI Pointers
+
+By default, pointers returned from C functions are **unmanaged** — they become `MI_POINTER` values that are never freed. For short-lived programs this is fine, but long-running programs will leak memory.
+
+### Automatic cleanup with `gc_manage`
+
+Use the `gc_manage` builtin to associate a pointer with a finalizer function. The garbage collector will automatically call the finalizer when the value becomes unreachable:
+
+```milang
+ffi = import' "mylib.h" ({src = "mylib.c"})
+
+-- Wrap the pointer with its free function
+obj = gc_manage (ffi.myobj_create 42) ffi.myobj_free
+
+-- Use normally — FFI functions accept managed pointers transparently
+val = ffi.myobj_read obj
+
+-- No manual free needed! The GC handles cleanup.
+```
+
+`gc_manage` takes two arguments:
+1. A pointer value (from an FFI allocation function)
+2. A native function (the FFI free/destructor function)
+
+It returns an `MI_MANAGED` value that behaves identically to a regular pointer in FFI calls — all existing FFI functions work without modification.
+
+### When to use `gc_manage`
+
+- **Use it** for objects that your code allocates and should own: arrays, buffers, file handles, database connections.
+- **Don't use it** for pointers returned by C functions that manage their own lifetime (e.g., `stdin`, shared library handles).
+
+### C-level registration
+
+FFI implementors who prefer to register finalizers in C can use `mi_managed()` directly:
+
+```c
+// In your FFI .c file — declare the runtime function
+extern MiVal mi_managed(void *ptr, void (*finalizer)(void*));
+
+MyObj* myobj_create(long val) {
+    MyObj *obj = malloc(sizeof(MyObj));
+    obj->value = val;
+    // Register with GC — milang code gets an MI_MANAGED value automatically
+    return obj;  // still returns raw pointer; use gc_manage from milang instead
+}
+```
+
+> **Note:** When using C-level `mi_managed()`, the FFI wrapper function should return `MiVal` directly rather than a raw pointer. In most cases, using `gc_manage` from milang code is simpler.
+
+### How the GC works
+
+Milang uses a mark-sweep garbage collector for runtime-allocated environments (`MiEnv`) and managed pointers:
+
+- **Init-time allocations** (prelude setup, AST construction) use a bump-allocated arena and are never freed.
+- **Eval-time allocations** (created during program execution) use a malloc-based pool with a free list.
+- The GC runs automatically every 100K environment allocations.
+- During the **mark** phase, the GC traces all reachable values from the current environment root, including closures and managed pointers.
+- During the **sweep** phase, unreachable environments are returned to the pool, and unreachable managed pointers have their finalizers called.
+
+For tail-recursive programs, memory stays bounded — the GC reclaims environments from completed iterations.
