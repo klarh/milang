@@ -384,6 +384,7 @@ cRetTypeName (CPtr _) = "void *"
 cRetTypeName CVoid   = "void"
 cRetTypeName COutInt = "int"
 cRetTypeName COutFloat = "double"
+cRetTypeName (CStruct name _) = T.unpack name
 
 cffiCurried :: CGState -> String -> CType -> [CType]
             -> [(Int, CType)] -> [(Int, CType)] -> IO String
@@ -435,6 +436,11 @@ cRetToMi CVoid expr    = "(" ++ expr ++ ", mi_int(0))"
 cRetToMi (CPtr _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
 cRetToMi COutInt _     = "mi_int(0)"
 cRetToMi COutFloat _   = "mi_float(0)"
+cRetToMi (CStruct name fields) expr =
+  "({ " ++ T.unpack name ++ " _s = " ++ expr ++ "; " ++
+  "mi_struct_to_record(" ++ show (length fields) ++ ", " ++
+  "(const char*[]){" ++ intercalate ", " [show (T.unpack fn) | (fn, _) <- fields] ++ "}, " ++
+  "(MiVal[]){" ++ intercalate ", " [cRetToMi ft ("_s." ++ T.unpack fn) | (fn, ft) <- fields] ++ "}); })"
 
 miToCArg :: CType -> String -> String
 miToCArg CInt name     = "(int)(" ++ name ++ ".as.i)"
@@ -445,6 +451,10 @@ miToCArg CVoid _       = "/* void */"
 miToCArg (CPtr base) name = let b = T.unpack base in if "FILE" `isInfixOf` b then "(FILE*)mi_raw_ptr(" ++ name ++ ")" else "mi_raw_ptr(" ++ name ++ ")"
 miToCArg COutInt name  = "&_out_" ++ name
 miToCArg COutFloat name = "&_out_" ++ name
+miToCArg (CStruct sname fields) name =
+  "((" ++ T.unpack sname ++ "){ " ++
+  intercalate ", " ["." ++ T.unpack fn ++ " = " ++ miToCArg ft ("mi_struct_field(" ++ name ++ ", \"" ++ T.unpack fn ++ "\")") | (fn, ft) <- fields] ++
+  " })"
 
 isOutputParam :: CType -> Bool
 isOutputParam COutInt   = True
@@ -648,6 +658,20 @@ emitPreamble h = hPutStr h $ unlines
   , "static void *mi_raw_ptr(MiVal v) {"
   , "  if (v.type == MI_MANAGED) return ((MiGcManaged*)v.as.ptr)->ptr;"
   , "  return v.as.ptr;"
+  , "}"
+  , "// Struct-by-value helpers"
+  , "static MiVal mi_struct_to_record(int n, const char *names[], MiVal fields[]) {"
+  , "  MiVal r; r.type = MI_RECORD; r.as.rec.tag = \"\";"
+  , "  r.as.rec.nfields = n;"
+  , "  r.as.rec.names = mi_alloc(n * sizeof(const char*));"
+  , "  r.as.rec.fields = mi_alloc(n * sizeof(MiVal));"
+  , "  for (int i = 0; i < n; i++) { r.as.rec.names[i] = names[i]; r.as.rec.fields[i] = fields[i]; }"
+  , "  return r;"
+  , "}"
+  , "static MiVal mi_struct_field(MiVal rec, const char *name) {"
+  , "  for (int i = 0; i < rec.as.rec.nfields; i++)"
+  , "    if (strcmp(rec.as.rec.names[i], name) == 0) return rec.as.rec.fields[i];"
+  , "  fprintf(stderr, \"struct field not found: %s\\n\", name); exit(1);"
   , "}"
   , "static MiVal mi_nil(void) {"
   , "  MiVal r; r.type = MI_RECORD; r.as.rec.tag = \"Nil\"; r.as.rec.nfields = 0; r.as.rec.names = NULL; r.as.rec.fields = NULL; return r;"

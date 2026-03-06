@@ -132,3 +132,4 @@ ctypeToJSON CVoid      = String "void"
 ctypeToJSON (CPtr t)   = object [ "tag" .= ("ptr" :: T.Text), "to" .= t ]
 ctypeToJSON COutInt    = String "out_int"
 ctypeToJSON COutFloat  = String "out_float"
+ctypeToJSON (CStruct name fields) = object [ "tag" .= ("struct" :: T.Text), "name" .= name, "fields" .= [object ["name" .= fn, "type" .= ctypeToJSON ft] | (fn, ft) <- fields] ]

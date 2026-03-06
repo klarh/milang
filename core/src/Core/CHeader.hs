@@ -6,7 +6,8 @@ import Data.Text (Text)
 import Data.Maybe (mapMaybe)
 import Data.List (isPrefixOf, foldl')
 import qualified Data.Map.Strict as Map
-import Data.Char (isAlphaNum)
+import Data.Map.Strict (Map)
+import Data.Char (isAlphaNum, isSpace)
 import System.Process (readProcess)
 import Control.Exception (try, SomeException)
 import System.FilePath (takeFileName)
@@ -35,7 +36,8 @@ parseCHeader cc path = do
   case r of
     Left err -> pure $ Left err
     Right output -> do
-      let rawSigs = mapMaybe parseLine (lines output)
+      let structMap = parseStructDefs output
+          rawSigs = mapMaybe (parseLine structMap) (lines output)
           deduped = dedupeSigs rawSigs
           visible = filter (not . isInternal . cfName) deduped
           base = takeFileName path
@@ -57,7 +59,8 @@ parseCHeaderInclude cc hdr = do
   case r of
     Left err -> pure $ Left err
     Right output -> do
-      let rawSigs = mapMaybe parseLine (lines output)
+      let structMap = parseStructDefs output
+          rawSigs = mapMaybe (parseLine structMap) (lines output)
           deduped = dedupeSigs rawSigs
           visible = filter (not . isInternal . cfName) deduped
           built = builtinSigsFor hdr
@@ -69,12 +72,12 @@ parseCHeaderInclude cc hdr = do
           final = Map.elems merged
       pure $ Right final
 
-parseLine :: String -> Maybe CFunSig
-parseLine line =
+parseLine :: Map String [(String, CType)] -> String -> Maybe CFunSig
+parseLine sm line =
   let decl = takeDecl line
   in case break (== '(') decl of
     (_, []) -> Nothing
-    (before, _:after) -> parseDecl (before, takeWhile (/= ')') after)
+    (before, _:after) -> parseDecl sm (before, takeWhile (/= ')') after)
 
 -- takeDecl: get text until semicolon
 takeDecl :: String -> String
@@ -84,15 +87,14 @@ takeDecl = takeWhile (/= ';')
 stripAttrs :: String -> String
 stripAttrs s = s  -- handled later by token filtering
 
-parseDecl :: (String, String) -> Maybe CFunSig
-parseDecl (beforeParen, paramStr) = do
+parseDecl :: Map String [(String, CType)] -> (String, String) -> Maybe CFunSig
+parseDecl sm (beforeParen, paramStr) = do
   let beforeWords = words beforeParen
   case beforeWords of
     [] -> Nothing
     [_] -> Nothing
     _ -> do
       let rawName = last beforeWords
-          -- sanitize name (remove pointer asterisks and other chars)
           name = filter (\c -> isAlphaNum c || c == '_') rawName
           retWords = init beforeWords
           noise = ["extern","static","inline","__inline__","__cdecl","__stdcall","__attribute__","__declspec","__CRT_INLINE","WINAPI","CDECL","DLLIMPORT"]
@@ -100,8 +102,8 @@ parseDecl (beforeParen, paramStr) = do
           retFiltered = filter (not . isNoise) retWords
           retStr = unwords retFiltered
       if null name then Nothing else do
-        ret <- parseCType retStr
-        params <- parseParamList paramStr
+        ret <- parseCType sm retStr
+        params <- parseParamList sm paramStr
         if "..." `elem` words paramStr then Nothing else Just CFunSig
           { cfName = T.pack name
           , cfRet = ret
@@ -113,17 +115,17 @@ splitAtParen s = case break (== '(') s of
   (_, [])         -> Nothing
   (before, _:after) -> Just (before, after)
 
-parseParamList :: String -> Maybe [CType]
-parseParamList s =
+parseParamList :: Map String [(String, CType)] -> String -> Maybe [CType]
+parseParamList sm s =
   let s' = takeWhile (/= ')') s
       params = map (T.strip . T.pack) (splitOn ',' s')
   in case params of
        ["void"] -> Just []
        [""]     -> Nothing            -- old-style unspecified parameter list: treat as unknown
-       _         -> mapM parseParamType params
+       _         -> mapM (parseParamType sm) params
 
-parseParamType :: T.Text -> Maybe CType
-parseParamType param
+parseParamType :: Map String [(String, CType)] -> T.Text -> Maybe CType
+parseParamType sm param
   | T.any (== '[') param =
       let base = T.strip $ fst $ T.breakOn "[" param
           baseWords = filter (\w -> not (T.isPrefixOf "__" w)) (T.words base)
@@ -153,10 +155,10 @@ parseParamType param
             []  -> ""
             [w] -> w
             _   -> T.unwords (init ws)
-      in parseCType (T.unpack typeStr)
+      in parseCType sm (T.unpack typeStr)
 
-parseCType :: String -> Maybe CType
-parseCType s
+parseCType :: Map String [(String, CType)] -> String -> Maybe CType
+parseCType sm s
   | '*' `elem` s =
       let cleaned = words (map (\c -> if c == '*' then ' ' else c) s)
           base = filter (\w -> not ("__" `isPrefixOf` w)) cleaned
@@ -180,7 +182,102 @@ parseCType s
       ["void"]            -> Just CVoid
       ["char"]            -> Just CInt
       ["const", "char"]   -> Just CInt
-      _                   -> Nothing
+      _ -> case words s of
+        [name] -> case Map.lookup name sm of
+          Just fields -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
+          Nothing -> Nothing
+        ["struct", name] -> case Map.lookup name sm of
+          Just fields -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
+          Nothing -> Nothing
+        _ -> Nothing
+
+-- | Parse struct/typedef definitions from preprocessed output.
+-- Handles: typedef struct { fields } Name; and struct Name { fields };
+parseStructDefs :: String -> Map String [(String, CType)]
+parseStructDefs output =
+  let -- Remove # directives and join into one string
+      contentLines = filter (not . isPrefixOf "#") (lines output)
+      joined = unwords (map (filter (/= '\r')) contentLines)
+      -- Split on semicolons respecting brace nesting
+      decls = splitTopLevel joined
+  in foldl' collectStruct Map.empty decls
+  where
+    -- Split on ';' at brace depth 0 only
+    splitTopLevel s = stl 0 [] [] s
+    stl _ acc cur [] = reverse (reverse cur : acc)
+    stl n acc cur ('{':cs) = stl (n+1) acc ('{':cur) cs
+    stl n acc cur ('}':cs) = stl (max 0 (n-1)) acc ('}':cur) cs
+    stl 0 acc cur (';':cs) = stl 0 (reverse cur : acc) [] cs
+    stl n acc cur (c:cs)   = stl n acc (c:cur) cs
+
+    collectStruct acc decl =
+      let trimmed = dropWhile isSpace decl
+      in case parseTypedefStruct trimmed `orElse` parseNamedStruct trimmed of
+           Just (name, fields) -> Map.insert name fields acc
+           Nothing -> acc
+
+    orElse Nothing b = b
+    orElse a      _ = a
+
+    -- typedef struct { ... } Name
+    -- typedef struct Tag { ... } Name
+    parseTypedefStruct s
+      | "typedef" `isPrefixOf` s =
+          let rest = dropWhile isSpace (drop 7 s)
+          in if "struct" `isPrefixOf` rest
+             then let afterStruct = dropWhile isSpace (drop 6 rest)
+                  in case findBraces afterStruct of
+                       Just (body, afterClose) ->
+                         let name = filter (\c -> isAlphaNum c || c == '_')
+                                           (dropWhile isSpace afterClose)
+                         in if null name then Nothing
+                            else case parseStructFields body of
+                                   Just fields -> Just (name, fields)
+                                   Nothing -> Nothing
+                       Nothing -> Nothing
+             else Nothing
+      | otherwise = Nothing
+
+    -- struct Name { ... }
+    parseNamedStruct s
+      | "struct" `isPrefixOf` s =
+          let rest = dropWhile isSpace (drop 6 s)
+              (name, afterName) = span (\c -> isAlphaNum c || c == '_') rest
+          in if null name then Nothing
+             else case findBraces (dropWhile isSpace afterName) of
+                    Just (body, _) ->
+                      case parseStructFields body of
+                        Just fields -> Just (name, fields)
+                        Nothing -> Nothing
+                    Nothing -> Nothing
+      | otherwise = Nothing
+
+    -- Find matching braces, return (body, rest)
+    findBraces ('{':rest) = go 1 [] rest
+      where
+        go 0 acc s = Just (reverse acc, s)
+        go _ _   [] = Nothing
+        go n acc ('{':cs) = go (n+1) ('{':acc) cs
+        go n acc ('}':cs) = if n == 1 then go 0 acc cs else go (n-1) ('}':acc) cs
+        go n acc (c:cs) = go n (c:acc) cs
+    findBraces _ = Nothing
+
+    -- Parse struct fields: "int x ; float y" → [("x", CInt), ("y", CFloat)]
+    parseStructFields body =
+      let fieldDecls = filter (not . null . dropWhile isSpace) (splitOn ';' body)
+          emptyMap = Map.empty :: Map String [(String, CType)]
+      in mapM (parseOneField emptyMap) fieldDecls
+
+    parseOneField sm' fieldStr =
+      let ws = words fieldStr
+      in case ws of
+           [] -> Nothing
+           [_] -> Nothing
+           _ -> let name = last ws
+                    typeStr = unwords (init ws)
+                in case parseCType sm' typeStr of
+                     Just ty -> Just (name, ty)
+                     Nothing -> Nothing
 
 isInternal :: Text -> Bool
 isInternal name = T.isPrefixOf "__" name || T.isPrefixOf "_" name

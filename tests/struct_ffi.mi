@@ -1,0 +1,17 @@
+-- Test struct-by-value FFI: milang records map to C structs
+ffi = import' "lib/struct_ffi.h" ({src = "lib/struct_ffi.c"})
+
+main world =
+  -- Create a Vec2 struct from milang
+  v1 = ffi.vec2_new 3.0 4.0
+  -- Access struct fields (returned as record)
+  world.io.println (toString v1.x)
+  world.io.println (toString v1.y)
+  -- Pass struct by value to another function
+  v2 = ffi.vec2_new 1.0 2.0
+  v3 = ffi.vec2_add v1 v2
+  world.io.println (toString v3.x)
+  world.io.println (toString v3.y)
+  -- Struct to scalar
+  dot = ffi.vec2_dot v1 v2
+  world.io.println (toString dot)
