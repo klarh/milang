@@ -1,0 +1,10 @@
+-- Test that a long-running tail-recursive program doesn't exhaust memory.
+-- Without GC, 10M iterations would allocate ~640MB of MiEnv entries.
+-- With GC, memory stays bounded.
+-- Uses pattern matching (not if) to get proper TCO via goto eval_top.
+main world =
+  loop n ->
+    0 = 0
+    _ = loop (n - 1)
+  result = loop 10000000
+  world.io.println (toString result)
