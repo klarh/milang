@@ -27,6 +27,14 @@ data CEnumConst = CEnumConst
   , ceValue :: !Int
   } deriving (Show)
 
+-- | Info about a typedef'd type (struct, enum, or callback)
+data CTypeDefInfo = TDStruct [(String, CType)]
+                  | TDEnum
+                  | TDCallback CType [CType]
+                  deriving (Show)
+
+type TypeDefMap = Map String CTypeDefInfo
+
 -- | Parse a C header file using the specified compiler's preprocessor
 runPreprocessor :: String -> [String] -> String -> IO (Either String String)
 runPreprocessor cc args input = do
@@ -41,9 +49,11 @@ parseCHeader cc path = do
   case r of
     Left err -> pure $ Left err
     Right output -> do
-      let structMap = parseStructDefs output
+      let structMap = Map.map TDStruct (parseStructDefs output)
           (enumConsts, enumTypeNames) = parseEnumDefs output
-          typeMap = Map.union structMap (Map.fromList [(n, []) | n <- enumTypeNames])
+          enumMap = Map.fromList [(n, TDEnum) | n <- enumTypeNames]
+          cbMap = Map.map (\(r',ps) -> TDCallback r' ps) (parseCallbackDefs output)
+          typeMap = structMap `Map.union` enumMap `Map.union` cbMap
           rawSigs = mapMaybe (parseLine typeMap) (lines output)
           deduped = dedupeSigs rawSigs
           visible = filter (not . isInternal . cfName) deduped
@@ -66,9 +76,11 @@ parseCHeaderInclude cc hdr = do
   case r of
     Left err -> pure $ Left err
     Right output -> do
-      let structMap = parseStructDefs output
+      let structMap = Map.map TDStruct (parseStructDefs output)
           (enumConsts, enumTypeNames) = parseEnumDefs output
-          typeMap = Map.union structMap (Map.fromList [(n, []) | n <- enumTypeNames])
+          enumMap = Map.fromList [(n, TDEnum) | n <- enumTypeNames]
+          cbMap = Map.map (\(r',ps) -> TDCallback r' ps) (parseCallbackDefs output)
+          typeMap = structMap `Map.union` enumMap `Map.union` cbMap
           rawSigs = mapMaybe (parseLine typeMap) (lines output)
           deduped = dedupeSigs rawSigs
           visible = filter (not . isInternal . cfName) deduped
@@ -81,7 +93,7 @@ parseCHeaderInclude cc hdr = do
           final = Map.elems merged
       pure $ Right (final, enumConsts)
 
-parseLine :: Map String [(String, CType)] -> String -> Maybe CFunSig
+parseLine :: TypeDefMap -> String -> Maybe CFunSig
 parseLine sm line =
   let decl = takeDecl line
   in case break (== '(') decl of
@@ -96,7 +108,7 @@ takeDecl = takeWhile (/= ';')
 stripAttrs :: String -> String
 stripAttrs s = s  -- handled later by token filtering
 
-parseDecl :: Map String [(String, CType)] -> (String, String) -> Maybe CFunSig
+parseDecl :: TypeDefMap -> (String, String) -> Maybe CFunSig
 parseDecl sm (beforeParen, paramStr) = do
   let beforeWords = words beforeParen
   case beforeWords of
@@ -124,7 +136,7 @@ splitAtParen s = case break (== '(') s of
   (_, [])         -> Nothing
   (before, _:after) -> Just (before, after)
 
-parseParamList :: Map String [(String, CType)] -> String -> Maybe [CType]
+parseParamList :: TypeDefMap -> String -> Maybe [CType]
 parseParamList sm s =
   let s' = takeWhile (/= ')') s
       params = map (T.strip . T.pack) (splitOn ',' s')
@@ -133,7 +145,7 @@ parseParamList sm s =
        [""]     -> Nothing            -- old-style unspecified parameter list: treat as unknown
        _         -> mapM (parseParamType sm) params
 
-parseParamType :: Map String [(String, CType)] -> T.Text -> Maybe CType
+parseParamType :: TypeDefMap -> T.Text -> Maybe CType
 parseParamType sm param
   | T.any (== '[') param =
       let base = T.strip $ fst $ T.breakOn "[" param
@@ -166,7 +178,7 @@ parseParamType sm param
             _   -> T.unwords (init ws)
       in parseCType sm (T.unpack typeStr)
 
-parseCType :: Map String [(String, CType)] -> String -> Maybe CType
+parseCType :: TypeDefMap -> String -> Maybe CType
 parseCType sm s
   | '*' `elem` s =
       let cleaned = words (map (\c -> if c == '*' then ' ' else c) s)
@@ -192,15 +204,16 @@ parseCType sm s
       ["char"]            -> Just CInt
       ["const", "char"]   -> Just CInt
       _ -> case words s of
-        [name] -> case Map.lookup name sm of
-          Just [] -> Just CInt  -- enum typedef
-          Just fields -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
-          Nothing -> Nothing
-        ["struct", name] -> case Map.lookup name sm of
-          Just [] -> Just CInt
-          Just fields -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
-          Nothing -> Nothing
+        [name] -> lookupTypeDef sm name
+        ["struct", name] -> lookupTypeDef sm name
         _ -> Nothing
+
+lookupTypeDef :: TypeDefMap -> String -> Maybe CType
+lookupTypeDef sm name = case Map.lookup name sm of
+  Just TDEnum -> Just CInt
+  Just (TDStruct fields) -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
+  Just (TDCallback ret params) -> Just (CCallback ret params)
+  Nothing -> Nothing
 
 -- | Parse struct/typedef definitions from preprocessed output.
 -- Handles: typedef struct { fields } Name; and struct Name { fields };
@@ -276,7 +289,7 @@ parseStructDefs output =
     -- Parse struct fields: "int x ; float y" → [("x", CInt), ("y", CFloat)]
     parseStructFields body =
       let fieldDecls = filter (not . null . dropWhile isSpace) (splitOn ';' body)
-          emptyMap = Map.empty :: Map String [(String, CType)]
+          emptyMap = Map.empty :: TypeDefMap
       in mapM (parseOneField emptyMap) fieldDecls
 
     parseOneField sm' fieldStr =
@@ -289,6 +302,68 @@ parseStructDefs output =
                 in case parseCType sm' typeStr of
                      Just ty -> Just (name, ty)
                      Nothing -> Nothing
+
+-- | Parse function pointer typedefs from preprocessed output.
+-- Handles: typedef RetType (*Name)(ParamTypes);
+parseCallbackDefs :: String -> Map String (CType, [CType])
+parseCallbackDefs output =
+  let contentLines = filter (not . isPrefixOf "#") (lines output)
+      joined = unwords (map (filter (/= '\r')) contentLines)
+      decls = stlCb 0 [] [] joined
+  in foldl' collectCb Map.empty decls
+  where
+    stlCb _ acc cur [] = reverse (reverse cur : acc)
+    stlCb n acc cur ('{':cs) = stlCb (n+1) acc ('{':cur) cs
+    stlCb n acc cur ('}':cs) = stlCb (max 0 (n-1)) acc ('}':cur) cs
+    stlCb 0 acc cur (';':cs) = stlCb 0 (reverse cur : acc) [] cs
+    stlCb n acc cur (c:cs)   = stlCb n acc (c:cur) cs
+
+    collectCb acc decl =
+      let trimmed = dropWhile isSpace decl
+      in case parseFnPtrTypedef trimmed of
+           Just (name, ret, params) -> Map.insert name (ret, params) acc
+           Nothing -> acc
+
+    -- Parse: typedef RetType (*Name)(ParamTypes)
+    parseFnPtrTypedef s
+      | "typedef" `isPrefixOf` s =
+          let rest = dropWhile isSpace (drop 7 s)
+          in case parseRetAndPtr rest of
+               Just (retType, name, paramStr) ->
+                 let emptyMap = Map.empty :: TypeDefMap
+                 in case parseParamList emptyMap paramStr of
+                      Just params -> Just (name, retType, params)
+                      Nothing -> Nothing
+               Nothing -> Nothing
+      | otherwise = Nothing
+
+    -- Parse "RetType (*Name)(params)" → (retType, name, paramStr)
+    parseRetAndPtr s =
+      case break (== '(') s of
+        (retPart, '(':rest) ->
+          let retStr = dropWhileEnd isSpace retPart
+              emptyMap = Map.empty :: TypeDefMap
+          in case parseCType emptyMap retStr of
+               Just retType ->
+                 case break (== ')') rest of
+                   (ptrPart, ')':afterParen) ->
+                     let nameStr = filter (\c -> isAlphaNum c || c == '_')
+                                          (dropWhile (== '*') (dropWhile isSpace ptrPart))
+                         afterTrim = dropWhile isSpace afterParen
+                     in if null nameStr then Nothing
+                        else case afterTrim of
+                               '(':')':_ -> Just (retType, nameStr, "void")
+                               '(':paramsTail ->
+                                 let paramStr = takeWhile (/= ')') paramsTail
+                                 in if null paramStr
+                                    then Just (retType, nameStr, "void")
+                                    else Just (retType, nameStr, paramStr)
+                               _ -> Nothing
+                   _ -> Nothing
+               Nothing -> Nothing
+        _ -> Nothing
+
+    dropWhileEnd p = reverse . dropWhile p . reverse
 
 -- | Parse enum definitions and extract named constants.
 -- Handles: enum { A = 0, B = 1 }, typedef enum { ... } Name;

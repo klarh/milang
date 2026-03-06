@@ -57,6 +57,7 @@ data Expr
 -- | C type representation for FFI
 data CType = CInt | CFloat | CFloat32 | CString | CVoid | CPtr Text | COutInt | COutFloat
            | CStruct Text [(Text, CType)]
+           | CCallback CType [CType]  -- return type, parameter types
   deriving (Show, Eq)
 
 -- | A binding in any domain. The domain tag determines how the

@@ -1,0 +1,18 @@
+-- Test callback/function pointer FFI support
+ffi = import' "lib/callback_ffi.h" ({src = "lib/callback_ffi.c"})
+
+double x = x * 2
+square x = x * x
+add_fn acc i = acc + i
+
+main world =
+  -- Simple callback: apply a function
+  world.io.println (toString (ffi.apply_fn double 21))
+  -- Apply twice: double(double(5)) = 20
+  world.io.println (toString (ffi.apply_twice double 5))
+  -- Square: square(7) = 49
+  world.io.println (toString (ffi.apply_fn square 7))
+  -- Fold: sum of 0..4 = 10
+  world.io.println (toString (ffi.fold_range add_fn 0 5))
+  -- Lambda callback
+  world.io.println (toString (ffi.apply_fn (\x -> x + 100) 42))

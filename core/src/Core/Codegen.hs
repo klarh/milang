@@ -5,8 +5,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Set as Set
 import Data.IORef
-import Data.List (intercalate, isInfixOf)
+import Data.List (intercalate, isInfixOf, foldl')
 import Control.Monad (when)
+import qualified Data.Map.Strict as Map
 import Core.Syntax
 import System.IO (Handle, hPutStr, hPutStrLn)
 import System.FilePath (takeFileName)
@@ -296,6 +297,8 @@ cffiLeaf st cname retTy allParamTys inputParams outputParams = do
   let fnName = "mi_cffi_" ++ show cid
       nInputs = length inputParams
       hasOuts = not (null outputParams)
+      -- Find callback parameters and generate trampolines
+      cbParams = [(i, cbRet, cbPs) | (i, CCallback cbRet cbPs) <- inputParams]
       envFields
         | nInputs <= 1 = ""
         | otherwise = concatMap (\k ->
@@ -318,11 +321,30 @@ cffiLeaf st cname retTy allParamTys inputParams outputParams = do
       outDecls = concatMap (\(i, t) ->
         let cty = case t of COutInt -> "int"; COutFloat -> "double"; _ -> "int"
         in "  " ++ cty ++ " _out_" ++ show i ++ " = 0;\n") outputParams
+
+  -- Generate trampolines for callback parameters
+  cbTrampolines <- mapM (\(cbIdx, cbRet', cbPs') -> do
+    let inputIdx = length [() | (j, _) <- inputParams, j < cbIdx]
+        trampolineName = fnName ++ "_cb" ++ show inputIdx
+        closureGlobal = "static MiVal *" ++ trampolineName ++ "_closure = NULL;\n"
+        trampolineCode = genTrampoline trampolineName cbRet' cbPs'
+        -- Code to set the closure global before the call
+        setupCode = "  " ++ trampolineName ++ "_closure = mi_alloc(sizeof(MiVal));\n" ++
+                    "  *" ++ trampolineName ++ "_closure = " ++ inputArgExpr inputIdx ++ ";\n" ++
+                    "  mi_gc_pin(" ++ trampolineName ++ "_closure);\n"
+    pure (cbIdx, inputIdx, trampolineName, closureGlobal ++ trampolineCode, setupCode)
+    ) cbParams
+
+  let cbTrampolineMap = Map.fromList [(idx, tn) | (_, idx, tn, _, _) <- cbTrampolines]
+      cbTrampolineDefs = concatMap (\(_, _, _, code, _) -> code) cbTrampolines
+      cbSetupCode = concatMap (\(_, _, _, _, setup) -> setup) cbTrampolines
       cArgList = intercalate ", " $ map (\(origIdx, t) ->
         if isOutputParam t
           then "&_out_" ++ show origIdx
           else let inputIdx = length [() | (j, _) <- inputParams, j < origIdx]
-               in miToCArg t (inputArgExpr inputIdx)
+               in case Map.lookup inputIdx cbTrampolineMap of
+                    Just tn -> tn ++ "_trampoline"
+                    Nothing -> miToCArg t (inputArgExpr inputIdx)
         ) (zip [0..] allParamTys)
       callExpr = cname ++ "(" ++ cArgList ++ ")"
       returnExpr
@@ -332,14 +354,42 @@ cffiLeaf st cname retTy allParamTys inputParams outputParams = do
         | otherwise =
             "({ " ++ cRetTypeName retTy ++ " _ret = " ++ callExpr ++ ";\n" ++
             buildOutRecordWithRet retTy outputParams ++ " })"
-      fnDef = envStruct ++
+      fnDef = cbTrampolineDefs ++ envStruct ++
               "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
               (if nInputs == 0 then "  (void)_arg; " else "") ++
               (if nInputs <= 1 then "  (void)_env;\n" else "") ++
-              envCast ++ envUnpack ++ outDecls ++
+              envCast ++ envUnpack ++ outDecls ++ cbSetupCode ++
               "  return " ++ returnExpr ++ ";\n}\n\n"
   addTopDef st fnDef
   pure $ "mi_native(" ++ fnName ++ ")"
+
+-- | Generate a C trampoline function for a callback parameter
+genTrampoline :: String -> CType -> [CType] -> String
+genTrampoline name retTy paramTys =
+  let cRetStr = cRetTypeName retTy
+      paramDecls = intercalate ", " $
+        zipWith (\i t -> cRetTypeName t ++ " _a" ++ show i) [0::Int ..] paramTys
+      -- Build chained mi_apply calls: mi_apply(mi_apply(closure, a0), a1)
+      applyChain = foldl' (\acc (i, t) ->
+        let argConv = cRetToMi t ("_a" ++ show i)
+        in "mi_apply(" ++ acc ++ ", " ++ argConv ++ ")"
+        ) ("*" ++ name ++ "_closure") (zip [0::Int ..] paramTys)
+      bodyStr = if retTy == CVoid
+        then "  " ++ applyChain ++ ";\n"
+        else "  MiVal _result = " ++ applyChain ++ ";\n" ++
+             "  return " ++ miValToC retTy "_result" ++ ";\n"
+  in "static " ++ cRetStr ++ " " ++ name ++ "_trampoline(" ++ paramDecls ++ ") {\n" ++
+     bodyStr ++ "}\n\n"
+
+-- | Extract a C value from a MiVal (reverse of cRetToMi)
+miValToC :: CType -> String -> String
+miValToC CInt name     = "(int64_t)(" ++ name ++ ".as.i)"
+miValToC CFloat name   = "(double)(" ++ name ++ ".as.f)"
+miValToC CFloat32 name = "(float)(" ++ name ++ ".as.f32)"
+miValToC CString name  = name ++ ".as.str.data"
+miValToC (CPtr _) name = name ++ ".as.ptr"
+miValToC CVoid _       = ""
+miValToC _ name        = name ++ ".as.i"
 
 buildOutRecord :: [(Int, CType)] -> String
 buildOutRecord outs =
@@ -385,6 +435,7 @@ cRetTypeName CVoid   = "void"
 cRetTypeName COutInt = "int"
 cRetTypeName COutFloat = "double"
 cRetTypeName (CStruct name _) = T.unpack name
+cRetTypeName (CCallback _ _) = "void*"  -- function pointers as opaque
 
 cffiCurried :: CGState -> String -> CType -> [CType]
             -> [(Int, CType)] -> [(Int, CType)] -> IO String
@@ -436,6 +487,7 @@ cRetToMi CVoid expr    = "(" ++ expr ++ ", mi_int(0))"
 cRetToMi (CPtr _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
 cRetToMi COutInt _     = "mi_int(0)"
 cRetToMi COutFloat _   = "mi_float(0)"
+cRetToMi (CCallback _ _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
 cRetToMi (CStruct name fields) expr =
   "({ " ++ T.unpack name ++ " _s = " ++ expr ++ "; " ++
   "mi_struct_to_record(" ++ show (length fields) ++ ", " ++
@@ -455,6 +507,7 @@ miToCArg (CStruct sname fields) name =
   "((" ++ T.unpack sname ++ "){ " ++
   intercalate ", " ["." ++ T.unpack fn ++ " = " ++ miToCArg ft ("mi_struct_field(" ++ name ++ ", \"" ++ T.unpack fn ++ "\")") | (fn, ft) <- fields] ++
   " })"
+miToCArg (CCallback _ _) _ = "/* callback handled by trampoline */"
 
 isOutputParam :: CType -> Bool
 isOutputParam COutInt   = True
@@ -723,6 +776,18 @@ emitPreamble h = hPutStr h $ unlines
   , "static MiVal *mi_gc_roots[MI_MAX_ROOTS];"
   , "static int mi_gc_root_count = 0;"
   , ""
+  , "// Pin list: closures pinned for async callbacks"
+  , "static MiVal **mi_gc_pinned = NULL;"
+  , "static int mi_gc_pin_count = 0;"
+  , "static int mi_gc_pin_cap = 0;"
+  , "static void mi_gc_pin(MiVal *v) {"
+  , "  if (mi_gc_pin_count >= mi_gc_pin_cap) {"
+  , "    mi_gc_pin_cap = mi_gc_pin_cap ? mi_gc_pin_cap * 2 : 16;"
+  , "    mi_gc_pinned = realloc(mi_gc_pinned, mi_gc_pin_cap * sizeof(MiVal*));"
+  , "  }"
+  , "  mi_gc_pinned[mi_gc_pin_count++] = v;"
+  , "}"
+  , ""
   , "static MiEnv *mi_env_pool_get(void) {"
   , "  mi_gc_alloc_count++;"
   , "  MiEnv *e;"
@@ -795,6 +860,7 @@ emitPreamble h = hPutStr h $ unlines
   , "static void mi_gc_collect(MiEnv *root) {"
   , "  mi_gc_mark_env(root);"
   , "  for (int i = 0; i < mi_gc_root_count; i++) mi_gc_scan_val(*mi_gc_roots[i]);"
+  , "  for (int i = 0; i < mi_gc_pin_count; i++) mi_gc_scan_val(*mi_gc_pinned[i]);"
   , "  MiEnv *live = NULL;"
   , "  MiEnv *e = mi_gc_all;"
   , "  while (e) {"
