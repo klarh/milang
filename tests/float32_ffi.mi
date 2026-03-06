@@ -1,0 +1,24 @@
+-- Test native float32 support via FFI
+-- Verifies that float32 values stay as 32-bit floats through FFI calls
+
+ffi = import' "lib/float32_ffi.h" ({src = "lib/float32_ffi.c"})
+
+main world =
+  -- Create float32 values from C
+  a = ffi.f32_from_int 3
+  b = ffi.f32_from_int 4
+  -- Arithmetic in float32 (should stay 32-bit)
+  total = ffi.f32_add a b
+  prod = ffi.f32_mul a b
+  -- Convert back to int for comparison
+  total_i = ffi.f32_to_int total
+  prod_i = ffi.f32_to_int prod
+  -- Verify results
+  world.io.println (toString total_i)
+  world.io.println (toString prod_i)
+  -- Test float32 arithmetic operators (stay in float32)
+  c = a + b
+  world.io.println (toString (ffi.f32_to_int c))
+  -- Test float32 to double promotion
+  d = ffi.f32_to_double a
+  world.io.println (toString d)

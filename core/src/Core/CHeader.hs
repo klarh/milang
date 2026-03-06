@@ -175,7 +175,7 @@ parseCType s
       ["int64_t"]         -> Just CInt
       ["size_t"]          -> Just CInt
       ["double"]          -> Just CFloat
-      ["float"]           -> Just CFloat
+      ["float"]           -> Just CFloat32
       ["long", "double"]  -> Just CFloat
       ["void"]            -> Just CVoid
       ["char"]            -> Just CInt

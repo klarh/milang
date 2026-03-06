@@ -125,7 +125,8 @@ altToJSON (Alt pat guard body) = object $
 
 ctypeToJSON :: CType -> Value
 ctypeToJSON CInt       = String "int"
-ctypeToJSON CFloat     = String "float"
+ctypeToJSON CFloat     = String "float64"
+ctypeToJSON CFloat32   = String "float32"
 ctypeToJSON CString    = String "string"
 ctypeToJSON CVoid      = String "void"
 ctypeToJSON (CPtr t)   = object [ "tag" .= ("ptr" :: T.Text), "to" .= t ]
