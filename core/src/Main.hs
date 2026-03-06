@@ -125,7 +125,7 @@ commandParser = hsubparser
   (  command "run" (info runParser
        (progDesc "Compile and run a .mi file"))
   <> command "compile" (info compileParser
-       (progDesc "Compile a .mi file to C"))
+       (progDesc "Compile a .mi file to C or a binary"))
   <> command "reduce" (info reduceParser
        (progDesc "Show AST (parsed, reduced, or as JSON IR)"))
   <> command "dump" (info dumpParser
@@ -148,7 +148,7 @@ compileParser :: Parser Command
 compileParser = fmap CmdCompile $ CompileOpts
   <$> argument str (metavar "FILE" <> help "Milang source file")
   <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
-        <> help "Output file (default: <input>.c, use - for stdout)"))
+        <> help "Output file (.c for C source, other for binary; default: <input>.c)"))
 
 reduceParser :: Parser Command
 reduceParser = fmap CmdReduce $ ReduceOpts
@@ -628,7 +628,7 @@ systemHeaderFlags path = case takeBaseName path of
 extractImportOpts :: FilePath -> [Binding] -> IO LinkInfo
 extractImportOpts dir bs = do
   let srcs = [ normalise (dir </> T.unpack (textVal v)) | Binding { bindName = "src", bindBody = v } <- bs, isTextVal v ]
-      flags = [ T.unpack (textVal v) | Binding { bindName = "flags", bindBody = v } <- bs, isTextVal v ]
+      flags = concatMap (words . T.unpack . textVal) [ v | Binding { bindName = "flags", bindBody = v } <- bs, isTextVal v ]
       incls = [ normalise (dir </> T.unpack (textVal v)) | Binding { bindName = "include", bindBody = v } <- bs, isTextVal v ]
   pure $ LinkInfo flags srcs incls
   where
@@ -751,15 +751,44 @@ cmdReduce cc noCache opts = do
 cmdCompile :: String -> Bool -> CompileOpts -> IO ()
 cmdCompile cc noCache opts = do
   let file = compFile opts
-  (reduced, _) <- loadAndReduce cc noCache file
+  cwd <- getCurrentDirectory
+  (reduced, li) <- loadAndReduce cc noCache file
   let stripped = stripDeepModules 3 reduced
-      outFile = case compOut opts of
-        Just "-" -> Nothing  -- stdout
-        Just f   -> Just f
-        Nothing  -> Just (dropExtension file ++ ".c")
-  case outFile of
-    Nothing -> codegen stdout preludeNames stripped
-    Just f  -> withFile f WriteMode $ \h -> codegen h preludeNames stripped
+      extraFlags = nub (linkFlags li)
+      extraSrcs  = nub (linkSources li)
+      extraIncls = nub (map ("-I" ++) (linkIncludes li))
+  case compOut opts of
+    Just "-" -> codegen stdout preludeNames stripped
+    Just f | not (isCOutput f) -> do
+      -- Binary output: generate C to temp file next to source, compile with gcc
+      let cFile = dropExtension file ++ "_core.c"
+          gccArgs = ["-O2", "-o", f, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraFlags
+      withFile cFile WriteMode $ \h -> do
+        emitCompileComment h cc cFile f extraIncls extraSrcs extraFlags
+        codegen h preludeNames stripped
+      (gccExit, _, gccErr) <- readProcessWithExitCode cc gccArgs ""
+      case gccExit of
+        ExitSuccess -> removeFile cFile
+        ExitFailure code -> do
+          hPutStrLn stderr $ "error: C compilation failed (" ++ cc ++ " exit " ++ show code ++ ")"
+          unless (null gccErr) $ hPutStrLn stderr gccErr
+          exitFailure
+    outSpec -> do
+      -- C output (default)
+      let f = case outSpec of
+                Just name -> name
+                Nothing   -> dropExtension file ++ ".c"
+          compileCmd = unwords ([cc, "-O2", "-o", dropExtension f, f, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraFlags)
+      withFile f WriteMode $ \h -> do
+        hPutStrLn h $ "// Compile: " ++ compileCmd
+        hPutStrLn h ""
+        codegen h preludeNames stripped
+  where
+    isCOutput f = takeExtension f == ".c"
+    emitCompileComment h cc' cFile binFile incls srcs flags' = do
+      let cmd = unwords ([cc', "-O2", "-o", binFile, cFile] ++ incls ++ srcs ++ flags')
+      hPutStrLn h $ "// Compile: " ++ cmd
+      hPutStrLn h ""
 
 -- | run: compile to C, invoke gcc, execute
 cmdRun :: String -> Bool -> RunOpts -> IO ()
