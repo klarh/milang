@@ -1,29 +1,20 @@
 # C FFI
 
-Milang can call C functions directly by importing a `.h` header file. The compiler parses the header, extracts function signatures, and maps C types to milang types (`int`/`long` -> `Int`, `double` -> `Float`, `float` -> `Float' 32`, `char*` -> `Str`). At code generation time the header is `#include`d and calls are emitted inline — no wrapper overhead.
+Milang can call C functions directly by importing a `.h` header file. The compiler parses the header, extracts function signatures, and maps C types to milang types. At code generation time the header is `#include`d and calls are emitted inline — no wrapper overhead.
 
-<!-- FFI mapping for sized types
+## Type Mapping
 
-Sized milang types map to fixed-width C integer types in the FFI layer for
-predictable ABI compatibility:
-
-- `Int' 8`  -> `int8_t`
-- `Int' 16` -> `int16_t`
-- `Int' 32` -> `int32_t`
-- `Int' 64` -> `int64_t`
-
-- `UInt' 8`  -> `uint8_t`
-- `UInt' 16` -> `uint16_t`
-- `UInt' 32` -> `uint32_t`
-- `UInt' 64` -> `uint64_t`
-
-Floating milang types map to the natural C floating types for the precision
-requested (e.g. `Float' 32` corresponds to `float`, `Float' 64` to `double`).
-
-When importing C headers the compiler attempts to match C signatures to
-milang types. If a direct mapping is not available the import step will raise
-an error and prompt you to provide an explicit shim or a compatible signature.
--->
+| C type | Milang type | Notes |
+|--------|-------------|-------|
+| `int`, `long`, `int64_t`, `size_t` | `Int` | All integer types map to 64-bit int |
+| `double` | `Float` | 64-bit float |
+| `float` | `Float` | 32-bit float (promoted automatically in mixed arithmetic) |
+| `char*` | `Str` | C strings |
+| `void*`, opaque struct pointers | Opaque handle | Use with `gc_manage` for cleanup |
+| `void` return | `Int` (0) | Void functions return 0 |
+| `typedef struct { ... } Name` | Record | Fields become record fields |
+| `typedef enum { ... } Name` | `Int` constants | Enum members exposed on module record |
+| `typedef ret (*Name)(params)` | Callback | Pass milang functions as C callbacks |
 
 
 ## Importing C Headers
@@ -89,10 +80,90 @@ json = import' "json-c/json.h" ({pkg = "json-c"})
 
 ## How It Works
 
-1. The import resolver reads the `.h` file and extracts function declarations.
+1. The import resolver reads the `.h` file and extracts function declarations, struct definitions, enum constants, and function pointer typedefs.
 2. Each C function becomes an internal `CFunction` AST node with its milang type signature.
-3. During C code generation the header is `#include`d and calls are emitted as direct C function calls.
-4. Any associated source files are compiled and linked automatically.
+3. Struct and enum type names are resolved so they can be used as parameter and return types.
+4. Enum constants become `Int` bindings on the module record.
+5. During C code generation the header is `#include`d and calls are emitted as direct C function calls.
+6. Any associated source files are compiled and linked automatically.
+
+## Structs by Value
+
+C structs defined with `typedef struct` or `struct Name` are automatically mapped to milang records. Fields are accessible by name:
+
+```c
+// vec.h
+typedef struct { double x; double y; } Vec2;
+Vec2 vec2_add(Vec2 a, Vec2 b);
+double vec2_dot(Vec2 a, Vec2 b);
+```
+
+```milang
+v = import' "vec.h" ({src = "vec.c"})
+
+a = {x = 1.0; y = 2.0}
+b = {x = 3.0; y = 4.0}
+result = v.vec2_add a b    -- {x = 4.0, y = 6.0}
+dot = v.vec2_dot a b       -- 11.0
+```
+
+Records passed to struct-taking functions are converted to C structs using C99 compound literals. Struct return values are converted to milang records with the same field names.
+
+## Enum Constants
+
+C enum definitions in headers are exposed as `Int` constants on the module record:
+
+```c
+// color.h
+typedef enum { RED = 0, GREEN = 1, BLUE = 2 } Color;
+int color_value(Color c);
+```
+
+```milang
+c = import' "color.h" ({src = "color.c"})
+
+c.RED                    -- 0
+c.GREEN                  -- 1
+c.color_value c.BLUE     -- uses enum constant as argument
+```
+
+Both `typedef enum { ... } Name;` and `enum Name { ... };` are supported. Auto-incrementing values work as in C.
+
+## Callbacks (Function Pointers)
+
+Milang functions can be passed to C functions that expect function pointers. Define the callback type with `typedef`:
+
+```c
+// callback.h
+typedef long (*IntFn)(long);
+long apply_fn(IntFn f, long x);
+long apply_twice(IntFn f, long x);
+```
+
+```milang
+cb = import' "callback.h" ({src = "callback.c"})
+
+cb.apply_fn (\x -> x * 2) 21        -- 42
+cb.apply_twice (\x -> x + 1) 0      -- 2
+
+-- Named functions work too
+square x = x * x
+cb.apply_fn square 7                 -- 49
+```
+
+The compiler generates a trampoline that converts between C calling conventions and milang's closure-based evaluation. Multi-parameter callbacks are supported:
+
+```c
+typedef long (*BinFn)(long, long);
+long fold_range(BinFn f, long init, long n);
+```
+
+```milang
+add_fn acc i = acc + i
+cb.fold_range add_fn 0 10    -- sum of 0..9 = 45
+```
+
+Callbacks are pinned as GC roots, so they remain valid even if the C library stores and calls them later (e.g., event handlers in GUI frameworks).
 
 ## Security Considerations
 
@@ -159,7 +230,7 @@ Milang uses a mark-sweep garbage collector for runtime-allocated environments (`
 - **Init-time allocations** (prelude setup, AST construction) use a bump-allocated arena and are never freed.
 - **Eval-time allocations** (created during program execution) use a malloc-based pool with a free list.
 - The GC runs automatically every 100K environment allocations.
-- During the **mark** phase, the GC traces all reachable values from the current environment root, including closures and managed pointers.
+- During the **mark** phase, the GC traces all reachable values from the current environment root, including closures, managed pointers, and pinned callback closures.
 - During the **sweep** phase, unreachable environments are returned to the pool, and unreachable managed pointers have their finalizers called.
 
 For tail-recursive programs, memory stays bounded — the GC reclaims environments from completed iterations.
