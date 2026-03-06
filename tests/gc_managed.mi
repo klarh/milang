@@ -1,0 +1,11 @@
+-- Test gc_manage: wraps a pointer with a native finalizer for automatic GC cleanup.
+-- This tests that MI_MANAGED values work with the GC and can be passed to FFI functions.
+
+ffi = import' "lib/gc_test_ffi.h" ({src = "lib/gc_test_ffi.c"})
+
+main world =
+  -- Create a managed pointer (registers finalizer with GC)
+  p = gc_manage (ffi.gc_test_alloc 42) ffi.gc_test_free
+  -- Read from the managed pointer
+  val = ffi.gc_test_read p
+  world.io.println (toString val)
