@@ -188,21 +188,35 @@ parseCType sm s
            ["const", "char"] -> Just CString
            _                 -> Just (CPtr (T.pack (unwords base)))
   | otherwise = case words s of
-      ["int"]             -> Just CInt
-      ["long"]            -> Just CInt
-      ["long", "int"]     -> Just CInt
-      ["long", "long"]    -> Just CInt
-      ["unsigned"]        -> Just CInt
-      ["unsigned", "int"] -> Just CInt
-      ["short"]           -> Just CInt
-      ["int64_t"]         -> Just CInt
-      ["size_t"]          -> Just CInt
+      ["int"]             -> Just (CInt 32)
+      ["long"]            -> Just (CInt 64)
+      ["long", "int"]     -> Just (CInt 64)
+      ["long", "long"]    -> Just (CInt 64)
+      ["unsigned"]        -> Just (CInt 32)
+      ["unsigned", "int"] -> Just (CInt 32)
+      ["unsigned", "long"] -> Just (CInt 64)
+      ["unsigned", "long", "long"] -> Just (CInt 64)
+      ["short"]           -> Just (CInt 16)
+      ["unsigned", "short"] -> Just (CInt 16)
+      ["int8_t"]          -> Just (CInt 8)
+      ["int16_t"]         -> Just (CInt 16)
+      ["int32_t"]         -> Just (CInt 32)
+      ["int64_t"]         -> Just (CInt 64)
+      ["uint8_t"]         -> Just (CInt 8)
+      ["uint16_t"]        -> Just (CInt 16)
+      ["uint32_t"]        -> Just (CInt 32)
+      ["uint64_t"]        -> Just (CInt 64)
+      ["size_t"]          -> Just (CInt 64)
+      ["ssize_t"]         -> Just (CInt 64)
+      ["ptrdiff_t"]       -> Just (CInt 64)
       ["double"]          -> Just CFloat
       ["float"]           -> Just CFloat32
       ["long", "double"]  -> Just CFloat
       ["void"]            -> Just CVoid
-      ["char"]            -> Just CInt
-      ["const", "char"]   -> Just CInt
+      ["char"]            -> Just (CInt 8)
+      ["signed", "char"]  -> Just (CInt 8)
+      ["unsigned", "char"] -> Just (CInt 8)
+      ["const", "char"]   -> Just (CInt 8)
       _ -> case words s of
         [name] -> lookupTypeDef sm name
         ["struct", name] -> lookupTypeDef sm name
@@ -210,7 +224,7 @@ parseCType sm s
 
 lookupTypeDef :: TypeDefMap -> String -> Maybe CType
 lookupTypeDef sm name = case Map.lookup name sm of
-  Just TDEnum -> Just CInt
+  Just TDEnum -> Just (CInt 32)
   Just (TDStruct fields) -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
   Just (TDCallback ret params) -> Just (CCallback ret params)
   Nothing -> Nothing
@@ -286,7 +300,7 @@ parseStructDefs output =
         go n acc (c:cs) = go n (c:acc) cs
     findBraces _ = Nothing
 
-    -- Parse struct fields: "int x ; float y" → [("x", CInt), ("y", CFloat)]
+    -- Parse struct fields: "int x ; float y" → [("x", CInt 32), ("y", CFloat)]
     parseStructFields body =
       let fieldDecls = filter (not . null . dropWhile isSpace) (splitOn ';' body)
           emptyMap = Map.empty :: TypeDefMap
@@ -462,39 +476,39 @@ builtinSigsFor "math.h" =
 builtinSigsFor "stdio.h" =
   if os == "mingw32"
   then
-    [ CFunSig { cfName = T.pack "fgetws", cfRet = CPtr (T.pack "wchar_t"), cfParams = [CPtr (T.pack "wchar_t"), CInt, CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "fputws", cfRet = CInt, cfParams = [CPtr (T.pack "wchar_t"), CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "gets_s", cfRet = CString, cfParams = [CString, CInt] }
-    , CFunSig { cfName = T.pack "fgets", cfRet = CString, cfParams = [CString, CInt, CPtr (T.pack "FILE")] }
+    [ CFunSig { cfName = T.pack "fgetws", cfRet = CPtr (T.pack "wchar_t"), cfParams = [CPtr (T.pack "wchar_t"), CInt 32, CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "fputws", cfRet = CInt 32, cfParams = [CPtr (T.pack "wchar_t"), CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "gets_s", cfRet = CString, cfParams = [CString, CInt 32] }
+    , CFunSig { cfName = T.pack "fgets", cfRet = CString, cfParams = [CString, CInt 32, CPtr (T.pack "FILE")] }
     , CFunSig { cfName = T.pack "fopen", cfRet = CPtr (T.pack "FILE"), cfParams = [CString, CString] }
     , CFunSig { cfName = T.pack "freopen", cfRet = CPtr (T.pack "FILE"), cfParams = [CString, CString, CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "fclose", cfRet = CInt, cfParams = [CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "fread", cfRet = CInt, cfParams = [CString, CInt, CInt, CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "fwrite", cfRet = CInt, cfParams = [CString, CInt, CInt, CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "fseek", cfRet = CInt, cfParams = [CPtr (T.pack "FILE"), CInt, CInt] }
-    , CFunSig { cfName = T.pack "ftell", cfRet = CInt, cfParams = [CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "feof", cfRet = CInt, cfParams = [CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "ferror", cfRet = CInt, cfParams = [CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "fclose", cfRet = CInt 32, cfParams = [CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "fread", cfRet = CInt 32, cfParams = [CString, CInt 32, CInt 32, CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "fwrite", cfRet = CInt 32, cfParams = [CString, CInt 32, CInt 32, CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "fseek", cfRet = CInt 32, cfParams = [CPtr (T.pack "FILE"), CInt 32, CInt 32] }
+    , CFunSig { cfName = T.pack "ftell", cfRet = CInt 32, cfParams = [CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "feof", cfRet = CInt 32, cfParams = [CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "ferror", cfRet = CInt 32, cfParams = [CPtr (T.pack "FILE")] }
     , CFunSig { cfName = T.pack "perror", cfRet = CVoid, cfParams = [CString] }
-    , CFunSig { cfName = T.pack "putchar", cfRet = CInt, cfParams = [CInt] }
-    , CFunSig { cfName = T.pack "puts", cfRet = CInt, cfParams = [CString] }
-    , CFunSig { cfName = T.pack "putc", cfRet = CInt, cfParams = [CInt, CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "getc", cfRet = CInt, cfParams = [CPtr (T.pack "FILE")] }
-    , CFunSig { cfName = T.pack "ungetc", cfRet = CInt, cfParams = [CInt, CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "putchar", cfRet = CInt 32, cfParams = [CInt 32] }
+    , CFunSig { cfName = T.pack "puts", cfRet = CInt 32, cfParams = [CString] }
+    , CFunSig { cfName = T.pack "putc", cfRet = CInt 32, cfParams = [CInt 32, CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "getc", cfRet = CInt 32, cfParams = [CPtr (T.pack "FILE")] }
+    , CFunSig { cfName = T.pack "ungetc", cfRet = CInt 32, cfParams = [CInt 32, CPtr (T.pack "FILE")] }
     , CFunSig { cfName = T.pack "tempnam", cfRet = CString, cfParams = [CString, CString] }
-    , CFunSig { cfName = T.pack "remove", cfRet = CInt, cfParams = [CString] }
-    , CFunSig { cfName = T.pack "rename", cfRet = CInt, cfParams = [CString, CString] }
-    , CFunSig { cfName = T.pack "unlink", cfRet = CInt, cfParams = [CString] }
+    , CFunSig { cfName = T.pack "remove", cfRet = CInt 32, cfParams = [CString] }
+    , CFunSig { cfName = T.pack "rename", cfRet = CInt 32, cfParams = [CString, CString] }
+    , CFunSig { cfName = T.pack "unlink", cfRet = CInt 32, cfParams = [CString] }
     , CFunSig { cfName = T.pack "rewind", cfRet = CVoid, cfParams = [CPtr (T.pack "FILE")] }
     , CFunSig { cfName = T.pack "setbuf", cfRet = CVoid, cfParams = [CPtr (T.pack "FILE"), CString] }
-    , CFunSig { cfName = T.pack "setvbuf", cfRet = CInt, cfParams = [CPtr (T.pack "FILE"), CString, CInt, CInt] }
-    , CFunSig { cfName = T.pack "snprintf", cfRet = CInt, cfParams = [CString, CInt, CString] }
-    , CFunSig { cfName = T.pack "sprintf", cfRet = CInt, cfParams = [CString, CString] }
-    , CFunSig { cfName = T.pack "sscanf", cfRet = CInt, cfParams = [CString, CString] }
-    , CFunSig { cfName = T.pack "scanf", cfRet = CInt, cfParams = [CString] }
+    , CFunSig { cfName = T.pack "setvbuf", cfRet = CInt 32, cfParams = [CPtr (T.pack "FILE"), CString, CInt 32, CInt 32] }
+    , CFunSig { cfName = T.pack "snprintf", cfRet = CInt 32, cfParams = [CString, CInt 32, CString] }
+    , CFunSig { cfName = T.pack "sprintf", cfRet = CInt 32, cfParams = [CString, CString] }
+    , CFunSig { cfName = T.pack "sscanf", cfRet = CInt 32, cfParams = [CString, CString] }
+    , CFunSig { cfName = T.pack "scanf", cfRet = CInt 32, cfParams = [CString] }
     ]
   else
-    [ CFunSig { cfName = T.pack "fgets", cfRet = CString, cfParams = [CString, CInt, CPtr (T.pack "FILE")] }
+    [ CFunSig { cfName = T.pack "fgets", cfRet = CString, cfParams = [CString, CInt 32, CPtr (T.pack "FILE")] }
     , CFunSig { cfName = T.pack "fopen", cfRet = CPtr (T.pack "FILE"), cfParams = [CString, CString] }
     , CFunSig { cfName = T.pack "freopen", cfRet = CPtr (T.pack "FILE"), cfParams = [CString, CString, CPtr (T.pack "FILE")] }
     , CFunSig { cfName = T.pack "tempnam", cfRet = CString, cfParams = [CString, CString] }

@@ -381,9 +381,17 @@ genTrampoline name retTy paramTys =
   in "static " ++ cRetStr ++ " " ++ name ++ "_trampoline(" ++ paramDecls ++ ") {\n" ++
      bodyStr ++ "}\n\n"
 
+-- | Map CInt bit width to C type name
+cIntTypeName :: Int -> String
+cIntTypeName 8  = "int8_t"
+cIntTypeName 16 = "int16_t"
+cIntTypeName 32 = "int"
+cIntTypeName 64 = "int64_t"
+cIntTypeName _  = "int64_t"
+
 -- | Extract a C value from a MiVal (reverse of cRetToMi)
 miValToC :: CType -> String -> String
-miValToC CInt name     = "(int64_t)(" ++ name ++ ".as.i)"
+miValToC (CInt w) name = "(" ++ cIntTypeName w ++ ")(" ++ name ++ ".as.i)"
 miValToC CFloat name   = "(double)(" ++ name ++ ".as.f)"
 miValToC CFloat32 name = "(float)(" ++ name ++ ".as.f32)"
 miValToC CString name  = name ++ ".as.str.data"
@@ -426,7 +434,7 @@ outToMi COutFloat name = "mi_float((double)" ++ name ++ ")"
 outToMi t name         = cRetToMi t name
 
 cRetTypeName :: CType -> String
-cRetTypeName CInt    = "int64_t"
+cRetTypeName (CInt w) = cIntTypeName w
 cRetTypeName CFloat  = "double"
 cRetTypeName CFloat32 = "float"
 cRetTypeName CString = "char *"
@@ -479,7 +487,7 @@ cffiCurried st cname retTy allParamTys inputParams outputParams = do
       pure $ "mi_native(" ++ wrapperNames !! 0 ++ ")"
 
 cRetToMi :: CType -> String -> String
-cRetToMi CInt expr     = "mi_int((int64_t)(" ++ expr ++ "))"
+cRetToMi (CInt _) expr = "mi_int((int64_t)(" ++ expr ++ "))"
 cRetToMi CFloat expr   = "mi_float((double)(" ++ expr ++ "))"
 cRetToMi CFloat32 expr = "mi_float32((float)(" ++ expr ++ "))"
 cRetToMi CString expr  = "mi_string(" ++ expr ++ ")"
@@ -495,7 +503,7 @@ cRetToMi (CStruct name fields) expr =
   "(MiVal[]){" ++ intercalate ", " [cRetToMi ft ("_s." ++ T.unpack fn) | (fn, ft) <- fields] ++ "}); })"
 
 miToCArg :: CType -> String -> String
-miToCArg CInt name     = "(int)(" ++ name ++ ".as.i)"
+miToCArg (CInt w) name = "(" ++ cIntTypeName w ++ ")(" ++ name ++ ".as.i)"
 miToCArg CFloat name   = "mi_to_float(" ++ name ++ ")"
 miToCArg CFloat32 name = "mi_to_float32(" ++ name ++ ")"
 miToCArg CString name  = name ++ ".as.str.data"
