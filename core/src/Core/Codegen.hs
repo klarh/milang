@@ -5,7 +5,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Set as Set
 import Data.IORef
-import Data.List (intercalate, isInfixOf, foldl')
+import Data.List (intercalate, isInfixOf, foldl', nub)
 import Control.Monad (when)
 import qualified Data.Map.Strict as Map
 import Core.Syntax
@@ -57,7 +57,7 @@ codegen h hidden expr = do
   mainCode <- captureIO st hidden expr
   emitPreamble h
   incs <- readIORef (cgIncludes st)
-  mapM_ (\inc -> hPutStrLn h inc) (reverse incs)
+  mapM_ (\inc -> hPutStrLn h inc) (nub (reverse incs))
   defs <- readIORef (cgTopDefs st)
   mapM_ (hPutStr h) (reverse defs)
   hPutStrLn h ""

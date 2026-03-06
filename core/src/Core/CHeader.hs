@@ -7,7 +7,7 @@ import Data.Maybe (mapMaybe)
 import Data.List (isPrefixOf, foldl')
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
-import Data.Char (isAlphaNum, isSpace)
+import Data.Char (isAlphaNum, isSpace, isUpper, isDigit, isHexDigit, digitToInt)
 import System.Process (readProcess)
 import Control.Exception (try, SomeException)
 import System.FilePath (takeFileName)
@@ -49,6 +49,12 @@ parseCHeader cc path = do
   case r of
     Left err -> pure $ Left err
     Right output -> do
+      -- Extract #define constants via a separate -dM pass
+      defineConsts <- do
+        dr <- extractDefines cc ["-E", path] ""
+        pure $ case dr of
+          Right dout -> parseDefineConstants dout
+          Left _     -> []
       let structMap = Map.map TDStruct (parseStructDefs output)
           (enumConsts, enumTypeNames) = parseEnumDefs output
           enumMap = Map.fromList [(n, TDEnum) | n <- enumTypeNames]
@@ -65,7 +71,10 @@ parseCHeader cc path = do
                       Just e  -> if null (cfParams e) && not (null (cfParams b)) then Map.insert (cfName b) b m else m
                     ) visMap built
           final = Map.elems merged
-      pure $ Right (final, enumConsts)
+          -- Merge define constants with enum constants, preferring enum values
+          enumNames = Map.fromList [(ceName c, ()) | c <- enumConsts]
+          newDefines = filter (\c -> not (Map.member (ceName c) enumNames)) defineConsts
+      pure $ Right (final, enumConsts ++ newDefines)
 
 -- | Parse a C header by asking clang to preprocess an #include of the header
 -- name. This lets clang find system headers via angle-bracket includes.
@@ -76,6 +85,12 @@ parseCHeaderInclude cc hdr = do
   case r of
     Left err -> pure $ Left err
     Right output -> do
+      -- Extract #define constants via a separate -dM pass
+      defineConsts <- do
+        dr <- extractDefines cc ["-E", "-xc", "-"] input
+        pure $ case dr of
+          Right dout -> parseDefineConstants dout
+          Left _     -> []
       let structMap = Map.map TDStruct (parseStructDefs output)
           (enumConsts, enumTypeNames) = parseEnumDefs output
           enumMap = Map.fromList [(n, TDEnum) | n <- enumTypeNames]
@@ -91,7 +106,9 @@ parseCHeaderInclude cc hdr = do
                       Just e  -> if null (cfParams e) && not (null (cfParams b)) then Map.insert (cfName b) b m else m
                     ) visMap built
           final = Map.elems merged
-      pure $ Right (final, enumConsts)
+          enumNames = Map.fromList [(ceName c, ()) | c <- enumConsts]
+          newDefines = filter (\c -> not (Map.member (ceName c) enumNames)) defineConsts
+      pure $ Right (final, enumConsts ++ newDefines)
 
 parseLine :: TypeDefMap -> String -> Maybe CFunSig
 parseLine sm line =
@@ -462,6 +479,40 @@ parseEnumDefs output =
 
 isInternal :: Text -> Bool
 isInternal name = T.isPrefixOf "__" name || T.isPrefixOf "_" name
+
+-- | Extract #define integer constants from gcc -dM -E output.
+-- Filters to user-facing constants (uppercase names, no __ prefix).
+parseDefineConstants :: String -> [CEnumConst]
+parseDefineConstants output =
+  mapMaybe parseLine' (lines output)
+  where
+    parseLine' line = case words line of
+      ["#define", name, val]
+        | not ("__" `isPrefixOf` name)
+        , not (null name)
+        , isUpper (head name)
+        , Just n <- parseIntLiteral val
+        -> Just (CEnumConst (T.pack name) n)
+      _ -> Nothing
+    parseIntLiteral s
+      | "0x" `isPrefixOf` s || "0X" `isPrefixOf` s =
+          let hex = drop 2 (filter (/= 'U') (filter (/= 'L') s))
+          in if all isHexDigit hex && not (null hex)
+             then Just (foldl' (\acc c -> acc * 16 + digitToInt c) 0 hex)
+             else Nothing
+      | all isDigit s, not (null s) = Just (read s)
+      | all (\c -> isDigit c || c == 'U' || c == 'L') s, not (null s) =
+          let digits = filter isDigit s
+          in if null digits then Nothing else Just (read digits)
+      | otherwise = Nothing
+
+-- | Run gcc -dM -E to extract all macro definitions as text
+extractDefines :: String -> [String] -> String -> IO (Either String String)
+extractDefines cc args input = do
+  result <- try (readProcess cc ("-dM" : args) input) :: IO (Either SomeException String)
+  case result of
+    Right out -> pure (Right out)
+    Left e -> pure (Left ("define extraction failed: " ++ show e))
 
 -- | Provide fallback signatures for common system headers when preprocessing
 -- yields incomplete results on some platforms (MinGW/MSYS). These are minimal
