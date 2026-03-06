@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..)) where
+module Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..), CEnumConst(..)) where
 
 import qualified Data.Text as T
 import Data.Text (Text)
@@ -22,6 +22,11 @@ data CFunSig = CFunSig
   , cfParams :: ![CType]
   } deriving (Show)
 
+data CEnumConst = CEnumConst
+  { ceName  :: !Text
+  , ceValue :: !Int
+  } deriving (Show)
+
 -- | Parse a C header file using the specified compiler's preprocessor
 runPreprocessor :: String -> [String] -> String -> IO (Either String String)
 runPreprocessor cc args input = do
@@ -30,14 +35,16 @@ runPreprocessor cc args input = do
     Right out -> pure (Right out)
     Left e -> pure (Left ("preprocessor failed: " ++ show e))
 
-parseCHeader :: String -> FilePath -> IO (Either String [CFunSig])
+parseCHeader :: String -> FilePath -> IO (Either String ([CFunSig], [CEnumConst]))
 parseCHeader cc path = do
   r <- runPreprocessor cc ["-E", path] ""
   case r of
     Left err -> pure $ Left err
     Right output -> do
       let structMap = parseStructDefs output
-          rawSigs = mapMaybe (parseLine structMap) (lines output)
+          (enumConsts, enumTypeNames) = parseEnumDefs output
+          typeMap = Map.union structMap (Map.fromList [(n, []) | n <- enumTypeNames])
+          rawSigs = mapMaybe (parseLine typeMap) (lines output)
           deduped = dedupeSigs rawSigs
           visible = filter (not . isInternal . cfName) deduped
           base = takeFileName path
@@ -48,11 +55,11 @@ parseCHeader cc path = do
                       Just e  -> if null (cfParams e) && not (null (cfParams b)) then Map.insert (cfName b) b m else m
                     ) visMap built
           final = Map.elems merged
-      pure $ Right final
+      pure $ Right (final, enumConsts)
 
 -- | Parse a C header by asking clang to preprocess an #include of the header
 -- name. This lets clang find system headers via angle-bracket includes.
-parseCHeaderInclude :: String -> String -> IO (Either String [CFunSig])
+parseCHeaderInclude :: String -> String -> IO (Either String ([CFunSig], [CEnumConst]))
 parseCHeaderInclude cc hdr = do
   let input = "#include <" ++ hdr ++ ">\n"
   r <- runPreprocessor cc ["-E", "-xc", "-"] input
@@ -60,7 +67,9 @@ parseCHeaderInclude cc hdr = do
     Left err -> pure $ Left err
     Right output -> do
       let structMap = parseStructDefs output
-          rawSigs = mapMaybe (parseLine structMap) (lines output)
+          (enumConsts, enumTypeNames) = parseEnumDefs output
+          typeMap = Map.union structMap (Map.fromList [(n, []) | n <- enumTypeNames])
+          rawSigs = mapMaybe (parseLine typeMap) (lines output)
           deduped = dedupeSigs rawSigs
           visible = filter (not . isInternal . cfName) deduped
           built = builtinSigsFor hdr
@@ -70,7 +79,7 @@ parseCHeaderInclude cc hdr = do
                       Just e  -> if null (cfParams e) && not (null (cfParams b)) then Map.insert (cfName b) b m else m
                     ) visMap built
           final = Map.elems merged
-      pure $ Right final
+      pure $ Right (final, enumConsts)
 
 parseLine :: Map String [(String, CType)] -> String -> Maybe CFunSig
 parseLine sm line =
@@ -184,9 +193,11 @@ parseCType sm s
       ["const", "char"]   -> Just CInt
       _ -> case words s of
         [name] -> case Map.lookup name sm of
+          Just [] -> Just CInt  -- enum typedef
           Just fields -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
           Nothing -> Nothing
         ["struct", name] -> case Map.lookup name sm of
+          Just [] -> Just CInt
           Just fields -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
           Nothing -> Nothing
         _ -> Nothing
@@ -278,6 +289,87 @@ parseStructDefs output =
                 in case parseCType sm' typeStr of
                      Just ty -> Just (name, ty)
                      Nothing -> Nothing
+
+-- | Parse enum definitions and extract named constants.
+-- Handles: enum { A = 0, B = 1 }, typedef enum { ... } Name;
+parseEnumDefs :: String -> ([CEnumConst], [String])
+parseEnumDefs output =
+  let contentLines = filter (not . isPrefixOf "#") (lines output)
+      joined = unwords (map (filter (/= '\r')) contentLines)
+      -- Use brace-aware splitting
+      decls = stlEnum 0 [] [] joined
+  in foldl' collectEnum ([], []) decls
+  where
+    -- Split on ';' at brace depth 0 (reuse same logic)
+    stlEnum _ acc cur [] = reverse (reverse cur : acc)
+    stlEnum n acc cur ('{':cs) = stlEnum (n+1) acc ('{':cur) cs
+    stlEnum n acc cur ('}':cs) = stlEnum (max 0 (n-1)) acc ('}':cur) cs
+    stlEnum 0 acc cur (';':cs) = stlEnum 0 (reverse cur : acc) [] cs
+    stlEnum n acc cur (c:cs)   = stlEnum n acc (c:cur) cs
+
+    collectEnum (consts, typeNames) decl =
+      let trimmed = dropWhile isSpace decl
+      in case parseEnumDecl trimmed of
+           Just (cs, mName) -> (consts ++ cs, typeNames ++ maybe [] (:[]) mName)
+           Nothing -> (consts, typeNames)
+
+    parseEnumDecl s
+      | "typedef" `isPrefixOf` s =
+          let rest = dropWhile isSpace (drop 7 s)
+          in if "enum" `isPrefixOf` rest
+             then let afterEnum = dropWhile isSpace (drop 4 rest)
+                  in case findBraces afterEnum of
+                       Just (body, afterClose) ->
+                         let name = filter (\c -> isAlphaNum c || c == '_')
+                                           (dropWhile isSpace afterClose)
+                             consts = parseEnumBody body
+                         in Just (consts, if null name then Nothing else Just name)
+                       Nothing -> Nothing
+             else Nothing
+      | "enum" `isPrefixOf` s =
+          let rest = dropWhile isSpace (drop 4 s)
+              (possibleName, afterName) = span (\c -> isAlphaNum c || c == '_') rest
+          in case findBraces (dropWhile isSpace afterName) of
+               Just (body, _) ->
+                 let consts = parseEnumBody body
+                 in Just (consts, if null possibleName then Nothing else Just possibleName)
+               Nothing -> Nothing
+      | otherwise = Nothing
+
+    findBraces ('{':rest) = go 1 [] rest
+      where
+        go 0 acc r = Just (reverse acc, r)
+        go _ _   [] = Nothing
+        go n acc ('{':cs) = go (n+1) ('{':acc) cs
+        go n acc ('}':cs) = if n == 1 then go 0 acc cs else go (n-1) ('}':acc) cs
+        go n acc (c:cs) = go n (c:acc) cs
+    findBraces _ = Nothing
+
+    parseEnumBody body =
+      let entries = splitOn ',' body
+          autoVal = 0 :: Int
+      in snd $ foldl' parseEntry (autoVal, []) entries
+
+    parseEntry (nextVal, acc) entry =
+      let trimmed = dropWhile isSpace entry
+          ws = words trimmed
+      in case ws of
+           [] -> (nextVal, acc)
+           (name:"=":valStr:_)
+             | all (\c -> isAlphaNum c || c == '_') name
+             , Just v <- readInt valStr ->
+                 (v + 1, acc ++ [CEnumConst (T.pack name) v])
+           [name]
+             | all (\c -> isAlphaNum c || c == '_') name
+             , not (null name) ->
+                 (nextVal + 1, acc ++ [CEnumConst (T.pack name) nextVal])
+           _ -> (nextVal, acc)
+
+    readInt s' =
+      let s'' = dropWhile isSpace s'
+      in case reads s'' :: [(Int, String)] of
+           [(n, rest)] | all isSpace rest -> Just n
+           _ -> Nothing
 
 isInternal :: Text -> Bool
 isInternal name = T.isPrefixOf "__" name || T.isPrefixOf "_" name

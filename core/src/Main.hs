@@ -27,7 +27,7 @@ import Text.Megaparsec (errorBundlePretty)
 import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap, protectPrelude)
 import Core.Codegen (codegen)
 import Core.Prelude (preludeBindings)
-import Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..))
+import Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..), CEnumConst(..))
 import Core.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
 import Core.Version (version)
 import Core.IR (exprToJSON)
@@ -583,16 +583,24 @@ loadCHeader cc path hdrName standardImport = do
               else parseCHeader cc path
   case result of
     Left err -> pure $ Left err
-    Right sigs -> do
+    Right (sigs, enums) -> do
       let hdr = T.pack hdrName
-          bindings = map (sigToBinding hdr) sigs
-      pure $ Right (Namespace bindings)
+          funBindings = map (sigToBinding hdr) sigs
+          enumBindings = map enumToBinding enums
+      pure $ Right (Namespace (funBindings ++ enumBindings))
   where
     sigToBinding hdr (CFunSig n r p) =
       Binding { bindDomain = Value
               , bindName   = n
               , bindParams = []
               , bindBody   = CFunction hdr n r p standardImport
+              , bindPos    = Nothing
+              }
+    enumToBinding (CEnumConst n v) =
+      Binding { bindDomain = Value
+              , bindName   = n
+              , bindParams = []
+              , bindBody   = IntLit (fromIntegral v)
               , bindPos    = Nothing
               }
 

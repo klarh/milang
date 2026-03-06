@@ -1,0 +1,12 @@
+-- Test enum constant exposure via FFI
+ffi = import' "lib/enum_ffi.h" ({src = "lib/enum_ffi.c"})
+
+main world =
+  -- Enum constants exposed as integer values
+  world.io.println (toString ffi.RED)
+  world.io.println (toString ffi.GREEN)
+  world.io.println (toString ffi.BLUE)
+  -- Use enum constants with functions
+  world.io.println (toString (ffi.color_value ffi.RED))
+  world.io.println (toString (ffi.color_value ffi.BLUE))
+  world.io.println (ffi.color_name ffi.GREEN)
