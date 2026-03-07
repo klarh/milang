@@ -343,8 +343,14 @@ cffiLeaf st cname retTy allParamTys inputParams outputParams = do
         | k == nInputs - 1 = "_arg"
         | otherwise = "_a" ++ show k
       outDecls = concatMap (\(i, t) ->
-        let cty = case t of COut ct -> cOutDeclType ct; _ -> "int"
-        in "  " ++ cty ++ " _out_" ++ show i ++ " = 0;\n") outputParams
+        case t of
+          COut (CPtr tname) ->
+            let tn = T.unpack tname
+            in "  " ++ tn ++ " *_out_" ++ show i ++ " = mi_alloc(sizeof(" ++ tn ++ "));\n" ++
+               "  memset(_out_" ++ show i ++ ", 0, sizeof(" ++ tn ++ "));\n"
+          COut ct ->
+            "  " ++ cOutDeclType ct ++ " _out_" ++ show i ++ " = 0;\n"
+          _ -> "") outputParams
 
   -- Generate trampolines for callback parameters
   cbTrampolines <- mapM (\(cbIdx, cbRet', cbPs') -> do
@@ -364,7 +370,9 @@ cffiLeaf st cname retTy allParamTys inputParams outputParams = do
       cbSetupCode = concatMap (\(_, _, _, _, setup) -> setup) cbTrampolines
       cArgList = intercalate ", " $ map (\(origIdx, t) ->
         if isOutputParam t
-          then "&_out_" ++ show origIdx
+          then case t of
+            COut (CPtr _) -> "_out_" ++ show origIdx  -- already a T*, pass directly
+            _ -> "&_out_" ++ show origIdx
           else let inputIdx = length [() | (j, _) <- inputParams, j < origIdx]
                in case Map.lookup inputIdx cbTrampolineMap of
                     Just tn -> tn ++ "_trampoline"
@@ -427,6 +435,7 @@ cOutDeclType (CInt w)  = cIntTypeName w
 cOutDeclType (CUInt w) = cUIntTypeName w
 cOutDeclType CFloat    = "double"
 cOutDeclType CFloat32  = "float"
+cOutDeclType (CPtr t)  = T.unpack t ++ " *"
 cOutDeclType _         = "int"
 
 -- | Extract a C value from a MiVal (reverse of cRetToMi)
@@ -549,7 +558,7 @@ miToCArg CFloat name    = "mi_to_float(" ++ name ++ ")"
 miToCArg CFloat32 name  = "mi_to_float32(" ++ name ++ ")"
 miToCArg CString name  = name ++ ".as.str.data"
 miToCArg CVoid _       = "/* void */"
-miToCArg (CPtr base) name = let b = T.unpack base in if "FILE" `isInfixOf` b then "(FILE*)mi_raw_ptr(" ++ name ++ ")" else "mi_raw_ptr(" ++ name ++ ")"
+miToCArg (CPtr base) name = let b = T.unpack base in if "FILE" `isInfixOf` b then "(FILE*)mi_maybe_ptr(" ++ name ++ ")" else "mi_maybe_ptr(" ++ name ++ ")"
 miToCArg (COut _) name = "&_out_" ++ name
 miToCArg (CStruct sname fields) name =
   "((" ++ T.unpack sname ++ "){ " ++
@@ -1031,6 +1040,10 @@ emitPreamble h = hPutStr h $ unlines
   , "static void *mi_raw_ptr(MiVal v) {"
   , "  if (v.type == MI_MANAGED) return ((MiGcManaged*)v.as.ptr)->ptr;"
   , "  return v.as.ptr;"
+  , "}"
+  , "static void *mi_maybe_ptr(MiVal v) {"
+  , "  if (v.type == MI_RECORD && strcmp(v.as.rec.tag, \"Nothing\") == 0) return NULL;"
+  , "  return mi_raw_ptr(v);"
   , "}"
   , "// Struct-by-value helpers"
   , "static MiVal mi_struct_to_record(int n, const char *names[], MiVal fields[]) {"

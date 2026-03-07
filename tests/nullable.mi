@@ -1,0 +1,32 @@
+-- Test Nothing → NULL for CPtr parameters and opaque out-params
+annotate_ffi ffi ns = values =>
+  -- Declare TestRect as a struct for by-value passing
+  ffi.struct "TestRect" |> ffi.field "x" "int32" |> ffi.field "y" "int32" |> ffi.field "w" "int32" |> ffi.field "h" "int32"
+  -- Mark copy_rect's second param as an out-param (writes to TestRect)
+  ffi.out "copy_rect" |> ffi.param 1 "ptr:TestRect"
+  -- Mark make_rect's last param as an out-param
+  ffi.out "make_rect" |> ffi.param 4 "ptr:TestRect"
+
+lib = import' "lib/nullable_test.h" ({src = "lib/nullable_test.c"; annotate = annotate_ffi})
+
+main world =
+  pr = world.io.println
+
+  -- Test 1: Nothing passes NULL to a void* parameter
+  pr (toString (lib.is_null Nothing))   -- 1 (NULL)
+
+  -- Test 2: A real pointer passes non-NULL
+  rect = lib.make_rect 10 20 30 40
+  pr (toString (lib.is_null rect.out4))  -- 0 (non-NULL)
+
+  -- Test 3: copy_rect with a real rect (non-NULL)
+  copied = lib.copy_rect rect.out4
+  pr (toString copied.value)   -- 1 (non-NULL → copied)
+
+  -- Test 4: copy_rect with Nothing (NULL)
+  null_result = lib.copy_rect Nothing
+  pr (toString null_result.value)  -- 0 (NULL → zero rect)
+
+  -- Test 5: make_rect produces an opaque out-param
+  r2 = lib.make_rect 5 15 25 35
+  pr "ok"
