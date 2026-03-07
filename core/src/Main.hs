@@ -37,16 +37,18 @@ data LinkInfo = LinkInfo
   { linkFlags    :: [String]    -- extra gcc flags (-lm, -lpthread, etc.)
   , linkSources  :: [FilePath]  -- extra .c files to compile
   , linkIncludes :: [FilePath]  -- extra -I include directories
+  , linkCCFlags  :: [String]    -- extra flags for gcc only (not preprocessor)
   }
 
 emptyLinkInfo :: LinkInfo
-emptyLinkInfo = LinkInfo [] [] []
+emptyLinkInfo = LinkInfo [] [] [] []
 
 mergeLinkInfo :: LinkInfo -> LinkInfo -> LinkInfo
 mergeLinkInfo a b = LinkInfo
   (linkFlags a ++ linkFlags b)
   (nub $ map normalise (linkSources a ++ linkSources b))
   (nub $ map normalise (linkIncludes a ++ linkIncludes b))
+  (linkCCFlags a ++ linkCCFlags b)
 
 -- | Resolution context for import resolution
 data ResCtx = ResCtx
@@ -402,11 +404,12 @@ resolveExpr ctx dir (App (App (Name "import'") (StringLit path)) (Record _ opts)
   let pathStr = T.unpack path
       sha256  = extractSha256 opts
       standardImport = extractStandardImport opts
+      funFilter = extractFilter opts
   -- For local imports, extract link info
   unless (isURL pathStr) $ do
     importOpts <- extractImportOpts dir opts
     modifyIORef (rcLinkRef ctx) (mergeLinkInfo importOpts)
-  result <- resolveImport ctx dir pathStr sha256 standardImport
+  result <- resolveImport ctx dir pathStr sha256 standardImport funFilter
   -- If annotate option is present, wrap with __ffi_apply
   case extractAnnotate opts of
     Just f -> do
@@ -415,7 +418,7 @@ resolveExpr ctx dir (App (App (Name "import'") (StringLit path)) (Record _ opts)
     Nothing -> pure result
 -- Handle regular imports
 resolveExpr ctx dir (Import path) =
-  resolveImport ctx dir (T.unpack path) Nothing False
+  resolveImport ctx dir (T.unpack path) Nothing False Nothing
 resolveExpr ctx dir (Namespace bs) =
   Namespace <$> mapM (resolveBinding ctx dir) bs
 resolveExpr ctx dir (App f x) =
@@ -439,15 +442,15 @@ resolveExpr ctx dir (Splice e) = Splice <$> resolveExpr ctx dir e
 resolveExpr _ _ e = pure e  -- literals, names, errors
 
 -- | Unified import resolution: handles local files and URLs
-resolveImport :: ResCtx -> String -> String -> Maybe String -> Bool -> IO Expr
-resolveImport ctx dir pathStr expectedHash standardImport
+resolveImport :: ResCtx -> String -> String -> Maybe String -> Bool -> Maybe [T.Text] -> IO Expr
+resolveImport ctx dir pathStr expectedHash standardImport funFilter
   | isURL pathStr = resolveURLImport ctx pathStr expectedHash standardImport
   | isURL dir     = resolveURLImport ctx (resolveURL dir pathStr) expectedHash standardImport
-  | otherwise     = resolveLocalImport ctx dir pathStr expectedHash standardImport
+  | otherwise     = resolveLocalImport ctx dir pathStr expectedHash standardImport funFilter
 
 -- | Resolve a local file import
-resolveLocalImport :: ResCtx -> String -> String -> Maybe String -> Bool -> IO Expr
-resolveLocalImport ctx dir pathStr _expectedHash standardImport = do
+resolveLocalImport :: ResCtx -> String -> String -> Maybe String -> Bool -> Maybe [T.Text] -> IO Expr
+resolveLocalImport ctx dir pathStr _expectedHash standardImport funFilter = do
   let relPath = dir </> pathStr
   cached <- readIORef (rcCache ctx)
   case Map.lookup relPath cached of
@@ -460,7 +463,7 @@ resolveLocalImport ctx dir pathStr _expectedHash standardImport = do
             let fullPath = if not (null pathStr) && head pathStr == '/' then pathStr else relPath
             autoInfo <- autoLinkInfo fullPath
             modifyIORef (rcLinkRef ctx) (mergeLinkInfo autoInfo)
-            result <- loadCHeader (rcCC ctx) fullPath pathStr standardImport
+            result <- loadCHeader (rcCC ctx) fullPath pathStr standardImport funFilter
             case result of
               Left err -> pure $ Error (T.pack err)
               Right ns -> do
@@ -568,6 +571,20 @@ extractStandardImport bs = case [x | Binding { bindName = "standard_import", bin
   (n:_) -> n /= 0
   []    -> False
 
+-- | Extract filter list from import options
+extractFilter :: [Binding] -> Maybe [T.Text]
+extractFilter bs = case [es | Binding { bindName = "filter", bindBody = ListLit es } <- bs] of
+  (es:_) -> Just [v | StringLit v <- es]
+  []     -> Nothing
+
+-- | Extract cc_flags option from import options (flags passed only to gcc, not preprocessor)
+extractCCFlags :: [Binding] -> [String]
+extractCCFlags bs = concatMap (words . T.unpack . textVal) [ v | Binding { bindName = "cc_flags", bindBody = v } <- bs, isTextVal v ]
+  where
+    isTextVal (StringLit _) = True
+    isTextVal _ = False
+    textVal (StringLit t) = t
+    textVal _ = ""
 -- | Extract annotate function from import options
 extractAnnotate :: [Binding] -> Maybe Expr
 extractAnnotate bs = case [bindBody b | b <- bs, bindName b == "annotate"] of
@@ -588,8 +605,8 @@ resolveAlt ctx dir (Alt p g body) = do
   pure $ Alt p g' body'
 
 -- | Parse a C header file, returning a Namespace of CFunction bindings
-loadCHeader :: String -> FilePath -> String -> Bool -> IO (Either String Expr)
-loadCHeader cc path hdrName standardImport = do
+loadCHeader :: String -> FilePath -> String -> Bool -> Maybe [T.Text] -> IO (Either String Expr)
+loadCHeader cc path hdrName standardImport funFilter = do
   result <- if standardImport
               then parseCHeaderInclude cc hdrName
               else parseCHeader cc path
@@ -597,8 +614,16 @@ loadCHeader cc path hdrName standardImport = do
     Left err -> pure $ Left err
     Right (sigs, enums) -> do
       let hdr = T.pack hdrName
-          funBindings = concatMap (sigToBinding hdr) sigs
-          enumBindings = map enumToBinding enums
+          filteredSigs = case funFilter of
+            Nothing    -> sigs
+            Just names -> let nameSet = Set.fromList names
+                          in filter (\(CFunSig n _ _) -> Set.member n nameSet) sigs
+          filteredEnums = case funFilter of
+            Nothing    -> enums
+            Just names -> let nameSet = Set.fromList names
+                          in filter (\(CEnumConst n _) -> Set.member n nameSet) enums
+          funBindings = concatMap (sigToBinding hdr) filteredSigs
+          enumBindings = map enumToBinding filteredEnums
       pure $ Right (Namespace (funBindings ++ enumBindings))
   where
     sigToBinding hdr (CFunSig n r p) =
@@ -657,7 +682,7 @@ autoLinkInfo hdrPath = do
       baseName = takeBaseName hdrPath
       cFile = normalise (takeDirectory hdrPath </> baseName ++ ".c")
   hasCFile <- doesFileExist cFile
-  pure $ LinkInfo sysFlags (if hasCFile then [cFile] else []) includeDir
+  pure $ LinkInfo sysFlags (if hasCFile then [cFile] else []) includeDir []
 
 -- | Built-in map of system headers to link flags
 systemHeaderFlags :: FilePath -> [String]
@@ -674,7 +699,8 @@ extractImportOpts dir bs = do
   let srcs = [ normalise (dir </> T.unpack (textVal v)) | Binding { bindName = "src", bindBody = v } <- bs, isTextVal v ]
       flags = concatMap (words . T.unpack . textVal) [ v | Binding { bindName = "flags", bindBody = v } <- bs, isTextVal v ]
       incls = [ normalise (dir </> T.unpack (textVal v)) | Binding { bindName = "include", bindBody = v } <- bs, isTextVal v ]
-  pure $ LinkInfo flags srcs incls
+      ccFlags = extractCCFlags bs
+  pure $ LinkInfo flags srcs incls ccFlags
   where
     isTextVal (StringLit _) = True
     isTextVal _ = False
@@ -801,12 +827,13 @@ cmdCompile cc noCache opts = do
       extraFlags = nub (linkFlags li)
       extraSrcs  = nub (linkSources li)
       extraIncls = nub (map ("-I" ++) (linkIncludes li))
+      extraCCFlags = nub (linkCCFlags li)
   case compOut opts of
     Just "-" -> codegen stdout preludeNames stripped
     Just f | not (isCOutput f) -> do
       -- Binary output: generate C to temp file next to source, compile with gcc
       let cFile = dropExtension file ++ "_core.c"
-          gccArgs = ["-O2", "-o", f, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraFlags
+          gccArgs = ["-O2", "-o", f, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraCCFlags ++ extraFlags
       withFile cFile WriteMode $ \h -> do
         emitCompileComment h cc cFile f extraIncls extraSrcs extraFlags
         codegen h preludeNames stripped
@@ -822,7 +849,7 @@ cmdCompile cc noCache opts = do
       let f = case outSpec of
                 Just name -> name
                 Nothing   -> dropExtension file ++ ".c"
-          compileCmd = unwords ([cc, "-O2", "-o", dropExtension f, f, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraFlags)
+          compileCmd = unwords ([cc, "-O2", "-o", dropExtension f, f, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraCCFlags ++ extraFlags)
       withFile f WriteMode $ \h -> do
         hPutStrLn h $ "// Compile: " ++ compileCmd
         hPutStrLn h ""
@@ -846,7 +873,8 @@ cmdRun cc noCache opts = do
       extraFlags = nub (linkFlags li)
       extraSrcs  = nub (linkSources li)
       extraIncls = nub (map ("-I" ++) (linkIncludes li))
-      gccArgs = ["-O2", "-o", binBase, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraFlags
+      extraCCFlags = nub (linkCCFlags li)
+      gccArgs = ["-O2", "-o", binBase, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraCCFlags ++ extraFlags
       isWin = any (`isPrefixOf` os) ["mingw", "cygwin", "windows"]
       exeExt = if isWin then ".exe" else ""
       candidates = if exeExt /= "" then [binBase ++ exeExt, binBase] else [binBase]

@@ -1,0 +1,10 @@
+-- Test cc_flags: pass -DCC_FLAGS_IMPL only to gcc, not the preprocessor
+-- The header has get_value() declaration + implementation behind #ifdef CC_FLAGS_IMPL
+-- Without cc_flags, milang's preprocessor doesn't see the impl, so no .c file needed
+lib = import' "lib/cc_flags_test.h" ({
+  cc_flags = "-DCC_FLAGS_IMPL"
+})
+
+main world =
+  world.io.println (toString (lib.get_value 0))
+  0

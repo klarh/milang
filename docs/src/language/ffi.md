@@ -71,7 +71,9 @@ The options record passed to `import'` supports several `fields`:
 | `src` | `Str` | Single C source file to compile |
 | `sources` | `List` | Multiple source files: `["a.c", "b.c"]` |
 | `flags` | `Str` | Additional compiler flags (e.g. `"-O2 -Wall"`) |
+| `cc_flags` | `Str` | Flags passed only to gcc, not to the preprocessor (e.g. `"-DIMPL"`) |
 | `include` | `Str` | Additional include directory |
+| `filter` | `List` | Selective import: only import the named functions (e.g. `["SDL_Init", "SDL_Quit"]`) |
 | `pkg` | `Str` | pkg-config package name — auto-discovers flags and includes |
 | `annotate` | `Function` | Annotation function for struct/out/opaque declarations (see [FFI Annotations](#ffi-annotations)) |
 
@@ -90,6 +92,46 @@ Using pkg-config for a system library:
 ```milang
 json = import' "json-c/json.h" ({pkg = "json-c"})
 ```
+
+## Selective Function Imports
+
+When importing large system headers (e.g., `<SDL2/SDL.h>`), the compiler generates bindings for every visible function — often thousands from transitive includes. Use `filter` to import only the functions you need:
+
+```milang
+sdl = import' "<SDL2/SDL.h>" ({
+  filter = ["SDL_Init", "SDL_CreateWindow", "SDL_DestroyWindow", "SDL_Quit"]
+  flags = "-lSDL2"
+  standard_import = 1
+})
+
+sdl.SDL_Init sdl.SDL_INIT_VIDEO
+```
+
+Only the named functions, enums, and constants are imported; everything else is filtered out.
+
+## Compiler-Only Flags (`cc_flags`)
+
+The `cc_flags` option passes flags to gcc during compilation but **not** to the preprocessor used for header parsing. This enables STB-style single-header libraries:
+
+```c
+// mylib.h
+#ifndef MYLIB_H
+#define MYLIB_H
+int my_func(int x);     /* milang sees this */
+
+#ifdef MYLIB_IMPL
+int my_func(int x) { return x + 1; }  /* hidden from milang's parser */
+#endif
+#endif
+```
+
+```milang
+lib = import' "mylib.h" ({
+  cc_flags = "-DMYLIB_IMPL"
+})
+```
+
+Without `cc_flags`, the implementation section stays hidden from milang's parser (correct), but gcc also doesn't see it, requiring a separate `.c` trigger file. With `cc_flags`, gcc gets `-DMYLIB_IMPL` so it compiles the implementation, while milang only sees the declarations.
 
 ## How It Works
 
@@ -236,6 +278,17 @@ ann ffi ns = values =>
 ```
 
 This generates accessor functions on the module: `lib.Event_type event` and `lib.Event_detail_code event`. Dot-separated paths (like `detail.code`) access nested struct fields. The accessor functions are compiled to inline C that casts the opaque pointer and reads the field directly.
+
+When the opaque type is defined in a separate header from the API header being imported, use `ffi.include` to specify the type definition header:
+
+```milang
+ann ffi ns = values =>
+  ffi.opaque "SDL_Event"
+    |> ffi.include "<SDL2/SDL_events.h>"
+    |> ffi.accessor "type" "uint32"
+```
+
+System includes (angle brackets) and quoted includes are both supported. The include is added to the generated C code so the type is visible for the accessor cast.
 
 ### Combining Annotations
 

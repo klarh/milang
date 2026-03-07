@@ -1,0 +1,11 @@
+-- Test selective function imports with filter = [...]
+-- Only import add_one from the header (which also exports apply_callback)
+lib = import' "lib/callback_inline.h" ({
+  src = "lib/callback_inline.c";
+  filter = ["add_one"]
+})
+
+main world =
+  result = lib.add_one 10
+  world.io.println (toString result)
+  0
