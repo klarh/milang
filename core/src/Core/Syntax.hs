@@ -56,7 +56,7 @@ data Expr
 
 -- | C type representation for FFI
 -- CInt carries bit width (8, 16, 32, 64) for correct struct layout and casts
-data CType = CInt !Int | CFloat | CFloat32 | CString | CVoid | CPtr Text | COutInt | COutFloat
+data CType = CInt !Int | CFloat | CFloat32 | CString | CVoid | CPtr Text | COut CType
            | CStruct Text [(Text, CType)]
            | CCallback CType [CType]  -- return type, parameter types
   deriving (Show, Eq)

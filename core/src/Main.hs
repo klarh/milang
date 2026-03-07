@@ -406,7 +406,13 @@ resolveExpr ctx dir (App (App (Name "import'") (StringLit path)) (Record _ opts)
   unless (isURL pathStr) $ do
     importOpts <- extractImportOpts dir opts
     modifyIORef (rcLinkRef ctx) (mergeLinkInfo importOpts)
-  resolveImport ctx dir pathStr sha256 standardImport
+  result <- resolveImport ctx dir pathStr sha256 standardImport
+  -- If annotate option is present, wrap with __ffi_apply
+  case extractAnnotate opts of
+    Just f -> do
+      f' <- resolveExpr ctx dir f
+      pure $ App (App (Name "__ffi_apply") f') result
+    Nothing -> pure result
 -- Handle regular imports
 resolveExpr ctx dir (Import path) =
   resolveImport ctx dir (T.unpack path) Nothing False
@@ -561,6 +567,12 @@ extractStandardImport :: [Binding] -> Bool
 extractStandardImport bs = case [x | Binding { bindName = "standard_import", bindBody = IntLit x } <- bs] of
   (n:_) -> n /= 0
   []    -> False
+
+-- | Extract annotate function from import options
+extractAnnotate :: [Binding] -> Maybe Expr
+extractAnnotate bs = case [bindBody b | b <- bs, bindName b == "annotate"] of
+  (f:_) -> Just f
+  []    -> Nothing
 
 resolveBinding :: ResCtx -> String -> Binding -> IO Binding
 resolveBinding ctx dir b = do

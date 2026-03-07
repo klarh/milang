@@ -18,6 +18,7 @@ import Data.Char (isUpper)
 import Data.Maybe (isNothing)
 
 import Core.Syntax
+import Core.Prelude (ffiNamespace)
 
 -- ── Environment ───────────────────────────────────────────────────
 
@@ -533,6 +534,14 @@ reduceApp _ _ (App (Name "join") (StringLit delim)) lst
     consToStrings (Record "Cons" [hd, tl])
       | StringLit s <- bindBody hd = (s :) <$> consToStrings (bindBody tl)
     consToStrings _ = Nothing
+-- Builtin: __ffi_apply annotateExpr namespace
+-- Injects the backend-specific ffi object as first arg to the annotate function,
+-- applies it to the namespace, processes descriptors, and returns a modified namespace.
+reduceApp d env (App (Name "__ffi_apply") annotateExpr) ns@(Namespace _) =
+  let ffiObj = reduceD d env ffiNamespace
+      annotateWithFfi = reduceApp d env annotateExpr ffiObj
+      descriptors = reduceApp d env annotateWithFfi ns
+  in ffiApply descriptors ns
 reduceApp _ _ f x = App f x
 
 -- Builtins that should fire before env lookup (by original name)
@@ -755,6 +764,18 @@ reduceRecordUpdate (Record tag bs) updates =
       existingNames = Set.fromList [bindName b | b <- bs]
       newFields = filter (\o -> not (bindName o `Set.member` existingNames)) overrides
   in Record tag (updated ++ newFields)
+reduceRecordUpdate (Namespace bs) updates =
+  let overrides = case updates of
+        Record _ obs   -> obs
+        Namespace obs  -> obs
+        _              -> []
+      overrideMap = Map.fromList [(bindName o, o) | o <- overrides]
+      updated = map (\b -> case Map.lookup (bindName b) overrideMap of
+                       Just o  -> o
+                       Nothing -> b) bs
+      existingNames = Set.fromList [bindName b | b <- bs]
+      newFields = filter (\o -> not (bindName o `Set.member` existingNames)) overrides
+  in Namespace (updated ++ newFields)
 reduceRecordUpdate l r = BinOp "<-" l r
 
 -- ── Case/pattern matching ─────────────────────────────────────────
@@ -858,6 +879,170 @@ consToList (Record "Cons" bs) = do
   rest <- consToList t
   Just (h : rest)
 consToList _ = Nothing
+
+-- ── FFI annotation processing ──────────────────────────────────────
+
+-- | Process FFI descriptors and modify a namespace.
+-- Extracts struct descriptors from a Cons list, generates constructor
+-- bindings, patches CPtr→CStruct in existing CFunction signatures.
+ffiApply :: Expr -> Expr -> Expr
+ffiApply descriptors (Namespace bindings) =
+  case consToList descriptors of
+    Just items ->
+      let structDescs = concatMap extractStructDesc items
+          outDescs = concatMap extractOutDesc items
+          opaqueDescs = concatMap extractOpaqueDesc items
+          ctorBindings = concatMap ffiCtorBindings structDescs
+          -- Extract header from existing CFunction bindings for accessor generation
+          hdr = case [h | Binding { bindBody = CFunction h _ _ _ _ } <- bindings] of
+                  (h:_) -> h
+                  []    -> ""
+          opaqueBindings = concatMap (ffiOpaqueBindings hdr) opaqueDescs
+          patchedBindings = map (patchOutParams outDescs . patchCFunBinding structDescs) bindings
+      in Namespace (patchedBindings ++ ctorBindings ++ opaqueBindings)
+    Nothing -> Namespace bindings  -- couldn't parse descriptors, return as-is
+ffiApply _ ns = ns
+
+-- | Extract a struct descriptor from a Record.
+-- Expected: {_ffi = "struct"; name = "Name"; fields = [{name = "x"; ctype = "int32"}; ...]}
+extractStructDesc :: Expr -> [(Text, [(Text, CType)])]
+extractStructDesc (Record _ bs) = case fieldLookup "_ffi" bs of
+  Just (StringLit "struct") -> case fieldLookup "name" bs of
+    Just (StringLit name) -> case fieldLookup "fields" bs >>= consToList of
+      Just fieldExprs ->
+        let fields = concatMap extractCField fieldExprs
+        in [(name, fields)]
+      Nothing -> []
+    _ -> []
+  _ -> []
+extractStructDesc _ = []
+
+-- | Extract a (name, CType) pair from a field descriptor Record.
+extractCField :: Expr -> [(Text, CType)]
+extractCField (Record _ bs) =
+  case (fieldLookup "name" bs, fieldLookup "ctype" bs) of
+    (Just (StringLit n), Just (StringLit ct)) ->
+      case parseCTypeStr ct of
+        Just ctype -> [(n, ctype)]
+        Nothing    -> []
+    _ -> []
+extractCField _ = []
+
+-- | Parse a C type string to CType.
+parseCTypeStr :: Text -> Maybe CType
+parseCTypeStr "int8"    = Just (CInt 8)
+parseCTypeStr "int16"   = Just (CInt 16)
+parseCTypeStr "int32"   = Just (CInt 32)
+parseCTypeStr "int"     = Just (CInt 32)
+parseCTypeStr "int64"   = Just (CInt 64)
+parseCTypeStr "long"    = Just (CInt 64)
+parseCTypeStr "float"   = Just CFloat
+parseCTypeStr "float32" = Just CFloat32
+parseCTypeStr "float64" = Just CFloat
+parseCTypeStr "double"  = Just CFloat
+parseCTypeStr "string"  = Just CString
+parseCTypeStr "void"    = Just CVoid
+parseCTypeStr s
+  | "ptr:" `T.isPrefixOf` s = Just (CPtr (T.drop 4 s))
+  | otherwise = Nothing
+
+-- | Generate constructor binding(s) for a struct descriptor.
+-- make_Name x y = {x = x; y = y}
+ffiCtorBindings :: (Text, [(Text, CType)]) -> [Binding]
+ffiCtorBindings (name, fields) =
+  let ctorName = "make_" <> name
+      fieldNames = map fst fields
+      recordExpr = Record "" [ mkBind fn (Name fn) | fn <- fieldNames ]
+      body = foldr Lam recordExpr fieldNames
+  in [ mkBind ctorName body ]
+
+-- | Patch CFunction bindings: replace CPtr with CStruct where struct is known.
+patchCFunBinding :: [(Text, [(Text, CType)])] -> Binding -> Binding
+patchCFunBinding structs b = b { bindBody = patchCFunExpr structs (bindBody b) }
+
+patchCFunExpr :: [(Text, [(Text, CType)])] -> Expr -> Expr
+patchCFunExpr structs (CFunction hdr fn ret params isStd) =
+  CFunction hdr fn (patchCType structs ret) (map (patchCType structs) params) isStd
+patchCFunExpr _ e = e
+
+-- | Replace CPtr "Name" with CStruct "Name" fields if a matching struct descriptor exists.
+patchCType :: [(Text, [(Text, CType)])] -> CType -> CType
+patchCType structs (CPtr ptrName) =
+  case lookup ptrName structs of
+    Just fields -> CStruct ptrName fields
+    Nothing -> CPtr ptrName
+patchCType structs (CStruct sname oldFields) =
+  case lookup sname structs of
+    Just fields -> CStruct sname fields
+    Nothing -> CStruct sname oldFields
+patchCType _ t = t
+
+-- | Extract out-parameter descriptors.
+-- Expected: {_ffi = "out"; func = "name"; params = [{index = 1; ctype = "int32"}; ...]}
+extractOutDesc :: Expr -> [(Text, [(Int, CType)])]
+extractOutDesc (Record _ bs) = case fieldLookup "_ffi" bs of
+  Just (StringLit "out") -> case fieldLookup "func" bs of
+    Just (StringLit funcName) -> case fieldLookup "params" bs >>= consToList of
+      Just paramExprs ->
+        let params = concatMap extractOutParam paramExprs
+        in [(funcName, params)]
+      Nothing -> []
+    _ -> []
+  _ -> []
+extractOutDesc _ = []
+
+-- | Extract a (index, CType) pair from an out-param descriptor.
+extractOutParam :: Expr -> [(Int, CType)]
+extractOutParam (Record _ bs) =
+  case (fieldLookup "index" bs, fieldLookup "ctype" bs) of
+    (Just (IntLit idx), Just (StringLit ct)) ->
+      case parseCTypeStr ct of
+        Just ctype -> [(fromIntegral idx, ctype)]
+        Nothing    -> []
+    _ -> []
+extractOutParam _ = []
+
+-- | Patch CFunction bindings to mark specified params as out-params.
+patchOutParams :: [(Text, [(Int, CType)])] -> Binding -> Binding
+patchOutParams outDescs b =
+  let fn = bindName b
+  in case lookup fn outDescs of
+    Just paramPatches -> b { bindBody = patchOutExpr paramPatches (bindBody b) }
+    Nothing -> b
+
+patchOutExpr :: [(Int, CType)] -> Expr -> Expr
+patchOutExpr patches (CFunction hdr fn ret params isStd) =
+  let params' = zipWith (\i p -> case lookup i patches of
+                                   Just ct -> COut ct
+                                   Nothing -> p) [0..] params
+  in CFunction hdr fn ret params' isStd
+patchOutExpr _ e = e
+
+-- | Extract opaque type descriptors.
+-- Expected: {_ffi = "opaque"; name = "Name"; accessors = [{field = "x"; ctype = "int32"}; ...]}
+extractOpaqueDesc :: Expr -> [(Text, [(Text, CType)])]
+extractOpaqueDesc (Record _ bs) = case fieldLookup "_ffi" bs of
+  Just (StringLit "opaque") -> case fieldLookup "name" bs of
+    Just (StringLit name) -> case fieldLookup "accessors" bs >>= consToList of
+      Just accExprs ->
+        let accs = concatMap extractCField accExprs
+        in [(name, accs)]
+      Nothing -> [(name, [])]
+    _ -> []
+  _ -> []
+extractOpaqueDesc _ = []
+
+-- | Generate accessor bindings for an opaque type.
+-- Each accessor becomes a CFunction with C name "__acc:StructType:field.path".
+-- The codegen detects this prefix and generates an inline C accessor function.
+ffiOpaqueBindings :: Text -> (Text, [(Text, CType)]) -> [Binding]
+ffiOpaqueBindings hdr (typeName, accessors) =
+  map mkAccessor accessors
+  where
+    mkAccessor (fieldPath, ctype) =
+      let accName = typeName <> "_" <> T.replace "." "_" fieldPath
+          cName = "__acc:" <> typeName <> ":" <> fieldPath
+      in mkBind accName (CFunction hdr cName ctype [CPtr typeName] False)
 
 -- | Expand union declarations
 expandUnion :: Binding -> [Binding]

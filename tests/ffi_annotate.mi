@@ -1,0 +1,25 @@
+-- Test FFI annotation system: ffi object, ffi.struct, annotate option
+lib = import' "lib/ffi_annotate_test.h" ({
+  src = "lib/ffi_annotate_test.c"
+  annotate = ann
+})
+
+ann ffi ns = values =>
+  ffi.struct "Point" |> ffi.field "x" "int32" |> ffi.field "y" "int32"
+  ffi.out "point_components" |> ffi.param 1 "int32" |> ffi.param 2 "int32"
+
+main world =
+  -- Use the generated constructor
+  p = lib.make_Point 10 20
+  -- Pass struct to C function
+  result = lib.point_sum p
+  world.io.println (toString result)
+  -- Test struct return + constructor
+  scaled = lib.point_scale p 3
+  world.io.println (toString scaled.x)
+  world.io.println (toString scaled.y)
+  -- Test out-parameters
+  parts = lib.point_components p
+  world.io.println (toString parts.out1)
+  world.io.println (toString parts.out2)
+  0

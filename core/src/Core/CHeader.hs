@@ -180,10 +180,10 @@ parseParamType sm param
          else case baseWords of
            ["char"]           -> Just CString
            ["const", "char"]  -> Just CString
-           ["int"]            -> Just COutInt
-           ["long"]           -> Just COutInt
-           ["unsigned"]       -> Just COutInt
-           ["double"]         -> Just COutFloat
+           ["int"]            -> Just (COut (CInt 32))
+           ["long"]           -> Just (COut (CInt 64))
+           ["unsigned"]       -> Just (COut (CInt 32))
+           ["double"]         -> Just (COut CFloat)
            ["float"]          -> Nothing
            ["long", "double"] -> Nothing
            _                  -> Just (CPtr (T.unwords baseWords))
@@ -522,7 +522,7 @@ builtinSigsFor "math.h" =
   [ CFunSig { cfName = T.pack "sin", cfRet = CFloat, cfParams = [CFloat] }
   , CFunSig { cfName = T.pack "sqrt", cfRet = CFloat, cfParams = [CFloat] }
   , CFunSig { cfName = T.pack "pow", cfRet = CFloat, cfParams = [CFloat, CFloat] }
-  , CFunSig { cfName = T.pack "frexp", cfRet = CFloat, cfParams = [CFloat, COutInt] }
+  , CFunSig { cfName = T.pack "frexp", cfRet = CFloat, cfParams = [CFloat, COut (CInt 32)] }
   ]
 builtinSigsFor "stdio.h" =
   if os == "mingw32"

@@ -1,0 +1,15 @@
+-- Test ffi_opaque: opaque types with accessor functions
+lib = import' "lib/ffi_opaque_test.h" ({
+  src = "lib/ffi_opaque_test.c"
+  annotate = ann
+})
+
+ann ffi ns = values =>
+  ffi.opaque "Event" |> ffi.accessor "type" "int32" |> ffi.accessor "detail.code" "int32" |> ffi.accessor "detail.value" "int32"
+
+main world =
+  e = lib.create_event 42 7 100
+  world.io.println (toString (lib.Event_type e))
+  world.io.println (toString (lib.Event_detail_code e))
+  world.io.println (toString (lib.Event_detail_value e))
+  0

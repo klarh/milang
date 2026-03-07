@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Core.Prelude (preludeBindings) where
+module Core.Prelude (preludeBindings, ffiNamespace) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -201,7 +201,29 @@ preludeSrc = T.unlines
   -- Maybe monad: short-circuits on Nothing
   , "_maybe_bind val f = val -> Nothing = Nothing; Just {_0 = x} = f x"
   , "maybe = monad ({bind = _maybe_bind; return = \\v -> Just v})"
+  -- Block-to-list collector
+  , "values #block = _collect_go block.fields"
+  , "_collect_go fields = fields -> Nil = Nil; Cons field rest = Cons ($field.val) (_collect_go rest)"
   ]
+
+-- | FFI descriptor builder functions for the C backend.
+-- These are exposed as the 'ffi' object passed to import' annotate functions.
+ffiFunctions :: Text
+ffiFunctions = T.unlines
+  [ "struct name = {_ffi = \"struct\"; name = name; fields = []}"
+  , "field name ctype desc = desc <- {fields = Cons {head = {name = name; ctype = ctype}; tail = desc.fields}}"
+  , "out func = {_ffi = \"out\"; func = func; params = []}"
+  , "param index ctype desc = desc <- {params = Cons {head = {index = index; ctype = ctype}; tail = desc.params}}"
+  , "opaque name = {_ffi = \"opaque\"; name = name; accessors = []}"
+  , "accessor path ctype desc = desc <- {accessors = Cons {head = {name = path; ctype = ctype}; tail = desc.accessors}}"
+  ]
+
+-- | Build the ffi namespace for the C backend.
+ffiNamespace :: Expr
+ffiNamespace = case parseProgram "<ffi>" ffiFunctions of
+  Right (Namespace bs) -> Namespace bs
+  Right _  -> error "ffi functions did not parse as Namespace"
+  Left err -> error $ "ffi parse error: " ++ show err
 
 -- | Parse the prelude source into bindings.
 preludeBindings :: [Binding]

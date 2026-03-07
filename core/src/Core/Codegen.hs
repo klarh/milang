@@ -255,7 +255,8 @@ exprToC st (Splice e) = exprToC st e  -- should be reduced away already
 exprToC st (CFunction hdr cname retTy paramTys standardImport) = do
   let hdrStr = T.unpack hdr
       inc = if standardImport then "<" ++ hdrStr ++ ">" else show hdrStr
-  modifyIORef (cgIncludes st) (("#include " ++ inc) :)
+  when (not (T.null hdr)) $
+    modifyIORef (cgIncludes st) (("#include " ++ inc) :)
   -- Include <wchar.h> when any parameter/return type mentions wchar_t so
   -- wide-character functions (fgetws, etc.) are declared on platforms
   -- where they live in wchar.h.
@@ -265,7 +266,21 @@ exprToC st (CFunction hdr cname retTy paramTys standardImport) = do
       anyWchar = usesWchar retTy || any usesWchar paramTys
   when anyWchar $ modifyIORef (cgIncludes st) (("#include <wchar.h>") :)
 
-  nativeCode <- cfunctionToC st (T.unpack cname) retTy paramTys
+  -- Detect accessor pattern: __acc:StructType:field.path
+  actualCName <- case T.stripPrefix "__acc:" cname of
+    Just spec -> do
+      let (structType, rest) = T.breakOn ":" spec
+          fieldPath = T.drop 1 rest
+      cid <- freshId st
+      let fnName = "mi_acc_" ++ show cid
+          accExpr = "((" ++ T.unpack structType ++ "*)_p)->" ++ T.unpack fieldPath
+          fnDef = "static inline " ++ cRetTypeName retTy ++ " " ++ fnName ++
+                  "(void *_p) {\n  return (" ++ cRetTypeName retTy ++ ")(" ++ accExpr ++ ");\n}\n\n"
+      addTopDef st fnDef
+      pure fnName
+    Nothing -> pure (T.unpack cname)
+
+  nativeCode <- cfunctionToC st actualCName retTy paramTys
   pure $ "mi_expr_val(" ++ nativeCode ++ ")"
 
 -- | Escape a string for C
@@ -319,7 +334,7 @@ cffiLeaf st cname retTy allParamTys inputParams outputParams = do
         | k == nInputs - 1 = "_arg"
         | otherwise = "_a" ++ show k
       outDecls = concatMap (\(i, t) ->
-        let cty = case t of COutInt -> "int"; COutFloat -> "double"; _ -> "int"
+        let cty = case t of COut ct -> cOutDeclType ct; _ -> "int"
         in "  " ++ cty ++ " _out_" ++ show i ++ " = 0;\n") outputParams
 
   -- Generate trampolines for callback parameters
@@ -389,6 +404,13 @@ cIntTypeName 32 = "int"
 cIntTypeName 64 = "int64_t"
 cIntTypeName _  = "int64_t"
 
+-- | C type name for out-parameter declarations
+cOutDeclType :: CType -> String
+cOutDeclType (CInt w) = cIntTypeName w
+cOutDeclType CFloat   = "double"
+cOutDeclType CFloat32 = "float"
+cOutDeclType _        = "int"
+
 -- | Extract a C value from a MiVal (reverse of cRetToMi)
 miValToC :: CType -> String -> String
 miValToC (CInt w) name = "(" ++ cIntTypeName w ++ ")(" ++ name ++ ".as.i)"
@@ -429,8 +451,7 @@ buildOutRecordWithRet retTy outs =
      " _r.as.rec.nfields = " ++ show n ++ "; _r;"
 
 outToMi :: CType -> String -> String
-outToMi COutInt name   = "mi_int((int64_t)" ++ name ++ ")"
-outToMi COutFloat name = "mi_float((double)" ++ name ++ ")"
+outToMi (COut ct) name = cRetToMi ct name
 outToMi t name         = cRetToMi t name
 
 cRetTypeName :: CType -> String
@@ -440,8 +461,7 @@ cRetTypeName CFloat32 = "float"
 cRetTypeName CString = "char *"
 cRetTypeName (CPtr _) = "void *"
 cRetTypeName CVoid   = "void"
-cRetTypeName COutInt = "int"
-cRetTypeName COutFloat = "double"
+cRetTypeName (COut ct) = cOutDeclType ct
 cRetTypeName (CStruct name _) = T.unpack name
 cRetTypeName (CCallback _ _) = "void*"  -- function pointers as opaque
 
@@ -493,8 +513,7 @@ cRetToMi CFloat32 expr = "mi_float32((float)(" ++ expr ++ "))"
 cRetToMi CString expr  = "mi_string(" ++ expr ++ ")"
 cRetToMi CVoid expr    = "(" ++ expr ++ ", mi_int(0))"
 cRetToMi (CPtr _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
-cRetToMi COutInt _     = "mi_int(0)"
-cRetToMi COutFloat _   = "mi_float(0)"
+cRetToMi (COut _) _    = "mi_int(0)"
 cRetToMi (CCallback _ _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
 cRetToMi (CStruct name fields) expr =
   "({ " ++ T.unpack name ++ " _s = " ++ expr ++ "; " ++
@@ -509,8 +528,7 @@ miToCArg CFloat32 name = "mi_to_float32(" ++ name ++ ")"
 miToCArg CString name  = name ++ ".as.str.data"
 miToCArg CVoid _       = "/* void */"
 miToCArg (CPtr base) name = let b = T.unpack base in if "FILE" `isInfixOf` b then "(FILE*)mi_raw_ptr(" ++ name ++ ")" else "mi_raw_ptr(" ++ name ++ ")"
-miToCArg COutInt name  = "&_out_" ++ name
-miToCArg COutFloat name = "&_out_" ++ name
+miToCArg (COut _) name = "&_out_" ++ name
 miToCArg (CStruct sname fields) name =
   "((" ++ T.unpack sname ++ "){ " ++
   intercalate ", " ["." ++ T.unpack fn ++ " = " ++ miToCArg ft ("mi_struct_field(" ++ name ++ ", \"" ++ T.unpack fn ++ "\")") | (fn, ft) <- fields] ++
@@ -518,8 +536,7 @@ miToCArg (CStruct sname fields) name =
 miToCArg (CCallback _ _) _ = "/* callback handled by trampoline */"
 
 isOutputParam :: CType -> Bool
-isOutputParam COutInt   = True
-isOutputParam COutFloat = True
+isOutputParam (COut _)  = True
 isOutputParam _         = False
 
 -- | Convert a Binding to C MiBinding struct
