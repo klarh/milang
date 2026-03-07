@@ -468,6 +468,19 @@ reduceApp d env (Lam p body) arg =
           in reduceD d' env' body'
      else let env' = envInsert p arg env
           in reduceD d' env' body
+-- Sized type constructors: Int' N val, UInt' N val, Float' N val
+-- Int'/UInt'/Float' are uppercase names, so they auto-construct as records.
+-- After first arg (width), we get Record "Int'" [_0=width].
+-- On second arg (value), we intercept and produce SizedInt/SizedFloat.
+reduceApp _ _ (Record "Int'" [b]) val
+  | Just w <- intVal (bindBody b), Just n <- intVal val =
+      let w' = fromInteger w in SizedInt (clampSigned w' n) w' True
+reduceApp _ _ (Record "UInt'" [b]) val
+  | Just w <- intVal (bindBody b), Just n <- intVal val =
+      let w' = fromInteger w in SizedInt (clampUnsigned w' n) w' False
+reduceApp _ _ (Record "Float'" [b]) val
+  | Just w <- intVal (bindBody b), Just d <- floatVal val = SizedFloat d (fromInteger w)
+  | Just w <- intVal (bindBody b), Just n <- intVal val   = SizedFloat (fromInteger n) (fromInteger w)
 reduceApp _ _ (Record tag fields) arg =
   -- Auto-constructor application: extend record with positional field
   let idx = length fields

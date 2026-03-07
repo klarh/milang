@@ -1,0 +1,63 @@
+-- Test sized type constructors as value coercions.
+--
+-- Int' N, UInt' N, Float' N are both type constructors (for :: annotations)
+-- and value constructors (for creating SizedInt/SizedFloat values).
+-- The prelude defines: Int = Int' 64, UInt = UInt' 64, Float = Float' 64, Byte = UInt' 8.
+
+-- Signed integer overflow wrapping
+-- Int' 8 range: -128 to 127
+a = Int' 8 127
+b = Int' 8 128
+c = Int' 8 (0 - 129)
+
+-- Unsigned integer wrapping
+-- UInt' 8 range: 0 to 255
+d = UInt' 8 255
+e = UInt' 8 256
+f = UInt' 8 300
+
+-- Int' 16 range: -32768 to 32767
+g = Int' 16 32767
+h = Int' 16 32768
+
+-- Float' 32
+i = Float' 32 3.14
+
+-- Aliases: Int = Int' 64, UInt = UInt' 64, Byte = UInt' 8
+j = Int 42
+k = UInt 100
+l = Byte 200
+m = Float 2.718
+
+-- Arithmetic on SizedInt preserves width and clamps
+n = (Int' 8 100) + (Int' 8 50)
+
+-- Type annotations work with sized types
+o :: Int' 8
+o = Int' 8 42
+
+p :: UInt' 16
+p = UInt' 16 1000
+
+q :: Float' 32
+q = Float' 32 1.5
+
+main world =
+  pr = world.io.println
+  pr (toString a)   -- 127
+  pr (toString b)   -- -128 (signed overflow)
+  pr (toString c)   -- 127  (signed underflow wraps)
+  pr (toString d)   -- 255
+  pr (toString e)   -- 0   (unsigned overflow)
+  pr (toString f)   -- 44  (300 mod 256)
+  pr (toString g)   -- 32767
+  pr (toString h)   -- -32768 (signed 16-bit overflow)
+  pr (toString i)   -- 3.14
+  pr (toString j)   -- 42
+  pr (toString k)   -- 100
+  pr (toString l)   -- 200
+  pr (toString m)   -- 2.718
+  pr (toString n)   -- -106 (150 in Int' 8 wraps)
+  pr (toString o)   -- 42
+  pr (toString p)   -- 1000
+  pr (toString q)   -- 1.5
