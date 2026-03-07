@@ -203,7 +203,8 @@ pValueBinding ref = do
       pure $ Binding dom name params body''' (Just pos)
 
 pBindOp :: Parser Domain
-pBindOp = (Value <$ symbol "=") <|> (Lazy <$ symbol ":=")
+pBindOp = (Value <$ try (string "=" <* notFollowedBy (oneOf ("+-*/^<>=!&|@%?:" :: String)) <* sc))
+      <|> (Lazy <$ symbol ":=")
 
 isNamedBind :: Binding -> Bool
 isNamedBind b = not ("_stmt_" `T.isPrefixOf` bindName b)
@@ -219,9 +220,15 @@ pIndentedChildren ref body = case body of
       pMatchAlt
     pure $ Case scrut (existingAlts ++ alts)
   _ -> do
+    mBlock <- optional (try (symbol "=>"))
     children <- pIndentedStatements ref
-    if null children then pure body
-    else pure $ buildScope children body
+    case mBlock of
+      Just _ ->
+        -- => operator: pass indented block as record argument
+        pure $ App body (Record "" children)
+      Nothing ->
+        if null children then pure body
+        else pure $ buildScope children body
 
 pIndentedStatements :: Pos -> Parser [Binding]
 pIndentedStatements ref = do
@@ -238,15 +245,24 @@ pBareExpr :: Parser [Binding]
 pBareExpr = do
   pos <- grabPos
   off <- getOffset
+  ref <- L.indentLevel
   e <- pExpr
+  mBlock <- optional (try (symbol "=>"))
   let name = T.pack ("_stmt_" ++ show off)
-  pure [Binding Value name [] e (Just pos)]
+  case mBlock of
+    Just _ -> do
+      children <- pIndentedStatements ref
+      pure [Binding Value name [] (App e (Record "" children)) (Just pos)]
+    Nothing ->
+      pure [Binding Value name [] e (Just pos)]
 
 buildScope :: [Binding] -> Expr -> Expr
 buildScope children body = case body of
   IntLit 0 ->
     let named = filter isNamedBind children
-        result = if null named then IntLit 0 else Record "" named
+        -- Reference names from scope instead of duplicating expressions
+        refs = map (\b -> b { bindBody = Name (bindName b) }) named
+        result = if null named then IntLit 0 else Record "" refs
     in With result children
   _ -> With body children
 
@@ -371,7 +387,7 @@ pOperator :: Parser Text
 pOperator = try $ lexeme $ do
   op <- some (oneOf ("+-*/^<>=!&|@%?:" :: String))
   let t = T.pack op
-  if t `elem` ["=", ":=", "->", "::", ":!", ":~", ":?"]
+  if t `elem` ["=", ":=", "->", "=>", "::", ":!", ":~", ":?"]
     then fail "reserved operator"
     else pure t
 
@@ -567,9 +583,15 @@ pBraceBinding = do
         pMatchAlt
       pure $ Case scrut (existingAlts ++ alts)
     _ -> do
+      mBlock <- optional (try (symbol "=>"))
       children <- pIndentedStatements ref
-      if null children then pure body''
-      else pure $ buildScope children body''
+      case mBlock of
+        Just _ ->
+          -- => operator: pass indented block as record argument
+          pure $ App body'' (Record "" children)
+        Nothing ->
+          if null children then pure body''
+          else pure $ buildScope children body''
   pure $ Binding dom name params body''' (Just pos)
 
 pStringLit :: Parser Expr

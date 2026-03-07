@@ -1,0 +1,39 @@
+-- Test the => operator: passes indented block as record argument
+-- The block is auto-quoted when the parameter has #
+
+-- Collect values from a block into a list
+collect #block = go block.fields
+go fields = fields ->
+  Nil = Nil
+  Cons field rest = Cons ($field.val) (go rest)
+
+-- Count fields in a block
+count #block = len block.fields
+len lst = lst ->
+  Nil = 0
+  Cons _ rest = 1 + len rest
+
+main world =
+  -- Basic value collection
+  vals = collect =>
+    10
+    20
+    30
+  world.io.println (toString vals)
+
+  -- Named bindings in block (names visible to subsequent expressions)
+  mixed = collect =>
+    1
+    2
+    3
+  world.io.println (toString mixed)
+
+  -- Count fields
+  n = count =>
+    "a"
+    "b"
+    "c"
+    "d"
+  world.io.println (toString n)
+
+  0
