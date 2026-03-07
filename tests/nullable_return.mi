@@ -1,0 +1,24 @@
+-- Test that FFI functions returning pointers produce Maybe values
+lib = import' "lib/nullable_return.h" ({src = "lib/nullable_return.c"})
+
+unwrap x = x -> Just {_0} = _0
+
+check x ->
+  Just {_0} = "got Just"
+  Nothing = "got Nothing"
+
+main world = r
+  io = world.io
+
+  -- nullable_make_ptr returns a non-null pointer => Just
+  p = lib.nullable_make_ptr 42
+  r1 = io.println (check p)
+
+  -- nullable_make_null returns NULL => Nothing
+  n = lib.nullable_make_null 0
+  r2 = io.println (check n)
+
+  -- Pass Maybe pointer to another C function (auto-unwraps via mi_maybe_ptr)
+  r3 = io.println (toString (lib.nullable_deref_ptr p))
+
+  r = 0

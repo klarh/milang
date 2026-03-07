@@ -540,23 +540,30 @@ cRetToMi (CInt w) expr  = "mi_sized_int((int64_t)(" ++ expr ++ "), " ++ show w +
 cRetToMi (CUInt w) expr = "mi_sized_int((int64_t)(" ++ expr ++ "), " ++ show w ++ ", 0)"
 cRetToMi CFloat expr     = "mi_float((double)(" ++ expr ++ "))"
 cRetToMi CFloat32 expr   = "mi_float32((float)(" ++ expr ++ "))"
-cRetToMi CString expr    = "mi_string(" ++ expr ++ ")"
+cRetToMi CString expr    = "mi_nullable_str(" ++ expr ++ ")"
 cRetToMi CVoid expr      = "(" ++ expr ++ ", mi_int(0))"
-cRetToMi (CPtr _) expr   = "mi_pointer((void*)(" ++ expr ++ "))"
+cRetToMi (CPtr _) expr   = "mi_nullable_ptr((void*)(" ++ expr ++ "))"
 cRetToMi (COut _) _      = "mi_int(0)"
 cRetToMi (CCallback _ _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
 cRetToMi (CStruct name fields) expr =
   "({ " ++ T.unpack name ++ " _s = " ++ expr ++ "; " ++
   "mi_struct_to_record(" ++ show (length fields) ++ ", " ++
   "(const char*[]){" ++ intercalate ", " [show (T.unpack fn) | (fn, _) <- fields] ++ "}, " ++
-  "(MiVal[]){" ++ intercalate ", " [cRetToMi ft ("_s." ++ T.unpack fn) | (fn, ft) <- fields] ++ "}); })"
+  "(MiVal[]){" ++ intercalate ", " [cRetToMiRaw ft ("_s." ++ T.unpack fn) | (fn, ft) <- fields] ++ "}); })"
+
+-- | Like cRetToMi but keeps pointers as raw MI_POINTER (no Maybe wrapping).
+-- Used for struct field extraction where pointers are part of a known layout.
+cRetToMiRaw :: CType -> String -> String
+cRetToMiRaw (CPtr _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
+cRetToMiRaw CString expr = "mi_string(" ++ expr ++ ")"
+cRetToMiRaw t expr = cRetToMi t expr
 
 miToCArg :: CType -> String -> String
 miToCArg (CInt w) name  = "(" ++ cIntTypeName w ++ ")((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i)"
 miToCArg (CUInt w) name = "(" ++ cUIntTypeName w ++ ")((uint64_t)((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i))"
 miToCArg CFloat name    = "mi_to_float(" ++ name ++ ")"
 miToCArg CFloat32 name  = "mi_to_float32(" ++ name ++ ")"
-miToCArg CString name  = name ++ ".as.str.data"
+miToCArg CString name  = "mi_maybe_str(" ++ name ++ ")"
 miToCArg CVoid _       = "/* void */"
 miToCArg (CPtr base) name = let b = T.unpack base in if "FILE" `isInfixOf` b then "(FILE*)mi_maybe_ptr(" ++ name ++ ")" else "mi_maybe_ptr(" ++ name ++ ")"
 miToCArg (COut _) name = "&_out_" ++ name
@@ -1043,7 +1050,15 @@ emitPreamble h = hPutStr h $ unlines
   , "}"
   , "static void *mi_maybe_ptr(MiVal v) {"
   , "  if (v.type == MI_RECORD && strcmp(v.as.rec.tag, \"Nothing\") == 0) return NULL;"
+  , "  if (v.type == MI_RECORD && strcmp(v.as.rec.tag, \"Just\") == 0 && v.as.rec.nfields > 0)"
+  , "    return mi_raw_ptr(v.as.rec.fields[0]);"
   , "  return mi_raw_ptr(v);"
+  , "}"
+  , "static const char *mi_maybe_str(MiVal v) {"
+  , "  if (v.type == MI_RECORD && strcmp(v.as.rec.tag, \"Nothing\") == 0) return NULL;"
+  , "  if (v.type == MI_RECORD && strcmp(v.as.rec.tag, \"Just\") == 0 && v.as.rec.nfields > 0)"
+  , "    return v.as.rec.fields[0].as.str.data;"
+  , "  return v.as.str.data;"
   , "}"
   , "// Struct-by-value helpers"
   , "static MiVal mi_struct_to_record(int n, const char *names[], MiVal fields[]) {"
@@ -1077,6 +1092,8 @@ emitPreamble h = hPutStr h $ unlines
   , "  r.as.rec.fields = mi_alloc(sizeof(MiVal)); r.as.rec.fields[0] = val;"
   , "  return r;"
   , "}"
+  , "static MiVal mi_nullable_ptr(void *p) { if (p == NULL) return mi_nothing(); return mi_just(mi_pointer(p)); }"
+  , "static MiVal mi_nullable_str(const char *s) { if (s == NULL) return mi_nothing(); return mi_just(mi_string(s)); }"
   , "static MiVal mi_native(MiVal (*fn)(MiVal, void*)) {"
   , "  MiVal r; r.type = MI_NATIVE; r.as.native.fn = fn; r.as.native.env = NULL; return r;"
   , "}"
