@@ -115,7 +115,7 @@ parseLine sm line =
   let decl = takeDecl line
   in case break (== '(') decl of
     (_, []) -> Nothing
-    (before, _:after) -> parseDecl sm (before, takeWhile (/= ')') after)
+    (before, _:after) -> parseDecl sm (before, after)
 
 -- takeDecl: get text until semicolon
 takeDecl :: String -> String
@@ -155,15 +155,52 @@ splitAtParen s = case break (== '(') s of
 
 parseParamList :: TypeDefMap -> String -> Maybe [CType]
 parseParamList sm s =
-  let s' = takeWhile (/= ')') s
-      params = map (T.strip . T.pack) (splitOn ',' s')
+  let s' = takeMatchingParen s
+      params = map (T.strip . T.pack) (splitTopLevel ',' s')
   in case params of
        ["void"] -> Just []
        [""]     -> Nothing            -- old-style unspecified parameter list: treat as unknown
        _         -> mapM (parseParamType sm) params
 
+-- | Take content up to the matching ')' for the function parameter list,
+-- respecting nested parentheses (e.g., callback parameters).
+takeMatchingParen :: String -> String
+takeMatchingParen = go (0 :: Int)
+  where
+    go _ [] = []
+    go 0 (')':_) = []
+    go d (')':cs) = ')' : go (d-1) cs
+    go d ('(':cs) = '(' : go (d+1) cs
+    go d (c:cs)   = c : go d cs
+
+-- | Split a string by a delimiter, but only at top-level (depth 0).
+-- Parentheses increase/decrease nesting depth.
+splitTopLevel :: Char -> String -> [String]
+splitTopLevel delim = go (0 :: Int) []
+  where
+    go _ acc [] = [reverse acc]
+    go 0 acc (c:cs) | c == delim = reverse acc : go 0 [] cs
+    go d acc ('(':cs) = go (d+1) ('(':acc) cs
+    go d acc (')':cs) = go (max 0 (d-1)) (')':acc) cs
+    go d acc (c:cs)   = go d (c:acc) cs
+
+-- | Check if a parameter is an inline callback (function pointer).
+-- Matches patterns like: void (*func)(int, void*) or int (*)(int)
+isCallbackParam :: T.Text -> Bool
+isCallbackParam t = "(*" `T.isInfixOf` t && T.count "(" t >= 2
+
 parseParamType :: TypeDefMap -> T.Text -> Maybe CType
 parseParamType sm param
+  -- Inline callback parameters: void (*func)(args...) or void (*)(args...)
+  | isCallbackParam param =
+      let (retPart, rest) = T.breakOn "(*" param
+          afterStar = T.drop 2 rest  -- skip "(*"
+          (_, afterName) = T.breakOn ")" afterStar  -- skip to end of (*name)
+          cbParamStr = T.drop 1 (T.dropWhile (/= '(') (T.drop 1 afterName))
+      in case (parseCType sm (T.unpack (T.strip retPart)),
+               parseParamList sm (T.unpack cbParamStr)) of
+           (Just ret, Just params) -> Just (CCallback ret params)
+           _ -> Just (CPtr "void")  -- fallback: treat as opaque function pointer
   | T.any (== '[') param =
       let base = T.strip $ fst $ T.breakOn "[" param
           baseWords = filter (\w -> not (T.isPrefixOf "__" w)) (T.words base)

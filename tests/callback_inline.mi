@@ -1,0 +1,6 @@
+lib = import' "lib/callback_inline.h" ({src = "lib/callback_inline.c"})
+
+main world =
+  result = lib.add_one 5
+  world.io.println (toString result)
+  0
