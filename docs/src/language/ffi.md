@@ -4,28 +4,28 @@ Milang can call C functions directly by importing a `.h` header file. The compil
 
 ## Type Mapping
 
-| C type | Milang type | C codegen type | Notes |
-|--------|-------------|----------------|-------|
-| `int` | `Int` | `int` | 32-bit signed |
-| `long`, `int64_t` | `Int` | `int64_t` | 64-bit signed |
-| `short`, `int16_t` | `Int` | `int16_t` | 16-bit signed |
-| `int8_t`, `char` | `Int` | `int8_t` | 8-bit signed |
-| `ssize_t`, `ptrdiff_t` | `Int` | `int64_t` | 64-bit signed |
-| `unsigned int`, `uint32_t` | `Int` | `unsigned int` | 32-bit unsigned |
-| `unsigned long`, `uint64_t`, `size_t` | `Int` | `uint64_t` | 64-bit unsigned |
-| `unsigned short`, `uint16_t` | `Int` | `uint16_t` | 16-bit unsigned |
-| `uint8_t`, `unsigned char` | `Int` | `uint8_t` | 8-bit unsigned |
-| `double` | `Float` | `double` | 64-bit float |
-| `float` | `Float` | `float` | 32-bit float |
-| `char*` | `Str` | `char*` | C strings |
-| `void*`, opaque pointers | Opaque handle | `void*` | Use with `gc_manage` for cleanup |
-| `void` return | `Int` (0) | — | Void functions return 0 |
-| `typedef struct { ... } Name` | Record | struct | Fields become record fields |
-| `typedef enum { ... } Name` | `Int` constants | `int64_t` | Enum members exposed on module record |
-| `typedef ret (*Name)(params)` | Callback | function pointer | Pass milang functions as C callbacks |
-| `#define NAME value` | `Int` constant | — | Integer and hex `#define`s exposed on module record |
+| C type | Milang type | C codegen type |
+|--------|-------------|----------------|
+| `int` | `Int' 32` | `int` |
+| `long`, `int64_t` | `Int` | `int64_t` |
+| `short`, `int16_t` | `Int' 16` | `int16_t` |
+| `int8_t`, `char` | `Int' 8` | `int8_t` |
+| `ssize_t`, `ptrdiff_t` | `Int` | `int64_t` |
+| `unsigned int`, `uint32_t` | `UInt' 32` | `unsigned int` |
+| `unsigned long`, `uint64_t`, `size_t` | `UInt` | `uint64_t` |
+| `unsigned short`, `uint16_t` | `UInt' 16` | `uint16_t` |
+| `uint8_t`, `unsigned char` | `Byte` | `uint8_t` |
+| `double` | `Float` | `double` |
+| `float` | `Float' 32` | `float` |
+| `char*` | `Str` | `char*` |
+| `void*`, opaque pointers | Opaque handle | `void*` |
+| `void` return | `Int` (0) | — |
+| `typedef struct { ... } Name` | Record | struct |
+| `typedef enum { ... } Name` | `Int` constants | `int64_t` |
+| `typedef ret (*Name)(params)` | Callback | function pointer |
+| `#define NAME value` | `Int` constant | — |
 
-> **Note:** The compiler tracks both integer bit width (8, 16, 32, 64) and signedness internally, emitting correctly-typed C code (e.g., `uint32_t` for unsigned 32-bit values). At the milang language level, all integer types appear as `Int` — signedness is only relevant for the generated C code and struct field layout.
+The compiler generates `::` type annotations for all imported C functions using sized types. For example, a C function `int add(int a, int b)` gets annotated as `add :: Int' 32 : Int' 32 : Int' 32`, while `double sin(double x)` gets `sin :: Float : Float`. These annotations are visible with `milang dump`.
 
 
 ## Importing C Headers

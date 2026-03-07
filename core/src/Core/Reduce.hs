@@ -1432,6 +1432,8 @@ fieldLookup name bs = case [bindBody b | b <- bs, bindName b == name] of
 -- | Internal type representation for checking
 data MiType
   = TInt | TFloat | TStr
+  | TSizedInt !Int !Bool   -- bit width, isSigned
+  | TSizedFloat !Int       -- bit width
   | TFun MiType MiType
   | TRecord Text [(Text, MiType)]
   | TUnion Text [Text]
@@ -1447,6 +1449,9 @@ prettyType :: MiType -> Text
 prettyType TInt     = "Int"
 prettyType TFloat   = "Float"
 prettyType TStr     = "Str"
+prettyType (TSizedInt w True)  = "Int' " <> T.pack (show w)
+prettyType (TSizedInt w False) = "UInt' " <> T.pack (show w)
+prettyType (TSizedFloat w) = "Float' " <> T.pack (show w)
 prettyType (TVar v) = v
 prettyType TAny     = "?"
 prettyType (TFun a b) = prettyType a <> " : " <> prettyType b
@@ -1489,10 +1494,11 @@ builtinTypeEnv = Map.fromList
 -- | Convert a type annotation expression to MiType
 exprToType :: TypeEnv -> Expr -> MiType
 exprToType _ (Name "Num")   = TInt
-exprToType _ (Name "Int")   = TInt
-exprToType _ (Name "UInt")  = TInt
+exprToType _ (Name "Int")   = TSizedInt 64 True
+exprToType _ (Name "UInt")  = TSizedInt 64 False
 exprToType _ (Name "Str")   = TStr
-exprToType _ (Name "Float") = TFloat
+exprToType _ (Name "Float") = TSizedFloat 64
+exprToType _ (Name "Byte")  = TSizedInt 8 False
 exprToType _ (Name "String") = TStr
 exprToType env (Name n)
   | not (T.null n) && isLower' (T.head n) = TVar n
@@ -1509,6 +1515,9 @@ exprToType env (With (Name tag) fields)
 exprToType env (With body bs) =
   let env' = foldl (\acc b -> Map.insert (bindName b) (exprToType acc (bindBody b)) acc) env bs
   in exprToType env' body
+exprToType _ (App (Name "Int'") (IntLit n))   = TSizedInt (fromInteger n) True
+exprToType _ (App (Name "UInt'") (IntLit n))  = TSizedInt (fromInteger n) False
+exprToType _ (App (Name "Float'") (IntLit n)) = TSizedFloat (fromInteger n)
 exprToType env (App f x) =
   case exprToType env f of
     TFun _ ret -> ret
@@ -1620,9 +1629,11 @@ inferParamFromBody tenv body param = findConstraint body
 
 -- | Infer the type of an expression
 inferExprE :: TypeEnv -> Expr -> MiType
-inferExprE _ (IntLit _)    = TInt
-inferExprE _ (FloatLit _)  = TFloat
-inferExprE _ (StringLit _) = TStr
+inferExprE _ (IntLit _)        = TInt
+inferExprE _ (FloatLit _)      = TFloat
+inferExprE _ (SizedInt _ w s)  = TSizedInt (fromInteger w) s
+inferExprE _ (SizedFloat _ w)  = TSizedFloat (fromInteger w)
+inferExprE _ (StringLit _)     = TStr
 inferExprE tenv (Name n) = Map.findWithDefault TAny n tenv
 inferExprE tenv (BinOp op l r)
   | op `elem` ["-", "*", "/", "^", "%", "**"] =
@@ -1707,6 +1718,12 @@ inferExprE tenv (App f x) =
     typeMatches TInt TInt = True
     typeMatches TFloat TFloat = True
     typeMatches TStr TStr = True
+    typeMatches (TSizedInt _ _) (TSizedInt _ _) = True
+    typeMatches (TSizedFloat _) (TSizedFloat _) = True
+    typeMatches TInt (TSizedInt _ _) = True
+    typeMatches (TSizedInt _ _) TInt = True
+    typeMatches TFloat (TSizedFloat _) = True
+    typeMatches (TSizedFloat _) TFloat = True
     typeMatches (TFun a1 r1) (TFun a2 r2) = typeMatches a1 a2 && typeMatches r1 r2
     typeMatches (TUnion n1 _) (TUnion n2 _) = n1 == n2
     typeMatches (TRecord t1 _) (TUnion _ tags) = t1 `elem` tags
@@ -1785,6 +1802,19 @@ checkCompatWith subst0 pos name expected actual = go subst0 expected actual
     go subst TStr TStr     = (subst, [])
     go subst TInt TFloat   = (subst, [])   -- numeric compat
     go subst TFloat TInt   = (subst, [])
+    -- Sized types: compatible with each other and with TInt/TFloat
+    go subst (TSizedInt _ _) (TSizedInt _ _) = (subst, [])
+    go subst (TSizedFloat _) (TSizedFloat _) = (subst, [])
+    go subst TInt (TSizedInt _ _) = (subst, [])
+    go subst (TSizedInt _ _) TInt = (subst, [])
+    go subst TFloat (TSizedFloat _) = (subst, [])
+    go subst (TSizedFloat _) TFloat = (subst, [])
+    go subst (TSizedInt _ _) TFloat = (subst, [])
+    go subst TFloat (TSizedInt _ _) = (subst, [])
+    go subst (TSizedInt _ _) (TSizedFloat _) = (subst, [])
+    go subst (TSizedFloat _) (TSizedInt _ _) = (subst, [])
+    go subst TInt (TSizedFloat _) = (subst, [])
+    go subst (TSizedFloat _) TInt = (subst, [])
     go subst (TFun ea er) (TFun aa ar) =
       let (subst', errs1) = go subst ea aa
           (subst'', errs2) = go subst' er ar

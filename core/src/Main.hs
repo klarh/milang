@@ -597,17 +597,24 @@ loadCHeader cc path hdrName standardImport = do
     Left err -> pure $ Left err
     Right (sigs, enums) -> do
       let hdr = T.pack hdrName
-          funBindings = map (sigToBinding hdr) sigs
+          funBindings = concatMap (sigToBinding hdr) sigs
           enumBindings = map enumToBinding enums
       pure $ Right (Namespace (funBindings ++ enumBindings))
   where
     sigToBinding hdr (CFunSig n r p) =
-      Binding { bindDomain = Value
-              , bindName   = n
-              , bindParams = []
-              , bindBody   = CFunction hdr n r p standardImport
-              , bindPos    = Nothing
-              }
+      let valBind = Binding { bindDomain = Value
+                            , bindName   = n
+                            , bindParams = []
+                            , bindBody   = CFunction hdr n r p standardImport
+                            , bindPos    = Nothing
+                            }
+          typeBind = Binding { bindDomain = Type
+                             , bindName   = n
+                             , bindParams = []
+                             , bindBody   = ctypeToTypeExpr r p
+                             , bindPos    = Nothing
+                             }
+      in [valBind, typeBind]
     enumToBinding (CEnumConst n v) =
       Binding { bindDomain = Value
               , bindName   = n
@@ -615,6 +622,31 @@ loadCHeader cc path hdrName standardImport = do
               , bindBody   = IntLit (fromIntegral v)
               , bindPos    = Nothing
               }
+
+-- | Convert a CFunction's return type and parameter types to a type annotation expression.
+-- E.g., CInt 32 → App (Name "Int'") (IntLit 32), and builds a chain: param1 : param2 : ... : ret
+ctypeToTypeExpr :: CType -> [CType] -> Expr
+ctypeToTypeExpr ret params =
+  let paramExprs = map ctypeToExpr (filter (not . isOut) params)
+      retExpr = ctypeToExpr ret
+  in foldr (\p r -> BinOp ":" p r) retExpr paramExprs
+  where
+    isOut (COut _) = True
+    isOut _        = False
+    ctypeToExpr :: CType -> Expr
+    ctypeToExpr (CInt 64)   = Name "Int"
+    ctypeToExpr (CInt w)    = App (Name "Int'") (IntLit (fromIntegral w))
+    ctypeToExpr (CUInt 64)  = Name "UInt"
+    ctypeToExpr (CUInt 8)   = Name "Byte"
+    ctypeToExpr (CUInt w)   = App (Name "UInt'") (IntLit (fromIntegral w))
+    ctypeToExpr CFloat      = Name "Float"
+    ctypeToExpr CFloat32    = App (Name "Float'") (IntLit 32)
+    ctypeToExpr CString     = Name "Str"
+    ctypeToExpr CVoid       = Name "Int"  -- void returns 0
+    ctypeToExpr (CPtr _)    = Name "ptr"  -- opaque pointer (type variable)
+    ctypeToExpr (COut ct)   = ctypeToExpr ct
+    ctypeToExpr (CStruct name _) = Name name
+    ctypeToExpr (CCallback _ _)  = Name "fn"  -- callback (type variable)
 
 -- | Auto-detect link flags for a C header
 autoLinkInfo :: FilePath -> IO LinkInfo
