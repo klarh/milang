@@ -7,7 +7,7 @@ import Data.Maybe (mapMaybe)
 import Data.List (isPrefixOf, foldl')
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
-import Data.Char (isAlphaNum, isSpace, isUpper, isDigit, isHexDigit, digitToInt)
+import Data.Char (isAlpha, isAlphaNum, isSpace, isUpper, isDigit, isHexDigit, digitToInt)
 import System.Process (readProcess)
 import Control.Exception (try, SomeException)
 import System.FilePath (takeFileName)
@@ -168,8 +168,9 @@ parseDecl sm (beforeParen, paramStr) = do
     [_] -> Nothing
     _ -> do
       let rawName = last beforeWords
+          stars = takeWhile (== '*') rawName
           name = filter (\c -> isAlphaNum c || c == '_') rawName
-          retWords = init beforeWords
+          retWords = init beforeWords ++ [stars | not (null stars)]
           noise = ["extern","static","inline","__inline__","__cdecl","__stdcall","__attribute__","__declspec","__CRT_INLINE","WINAPI","CDECL","DLLIMPORT"]
           isNoise w = any (`isPrefixOf` w) ["__"] || any (== w) noise || '(' `elem` w || ')' `elem` w
           retFiltered = filter (not . isNoise) retWords
@@ -316,11 +317,12 @@ lookupTypeDef sm name = case Map.lookup name sm of
   Just TDEnum -> Just (CInt 32)
   Just (TDStruct fields) -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
   Just (TDCallback ret params) -> Just (CCallback ret params)
-  -- For unknown single-word types (e.g. SDL_Window, Uint32), treat as opaque
-  -- pointer.  The generated C code includes the original header, so the real
-  -- type is resolved by gcc.  We just need a plausible FFI representation so
-  -- the function isn't silently dropped.
-  Nothing -> if isLikelyType name then Just (CPtr "void") else Nothing
+  -- For unknown single-word types (e.g. Uint32, SDL_bool), treat as int.
+  -- Pointer types already have '*' in the declaration, so any unknown type
+  -- reaching this fallback (without '*') is an integer-like typedef.
+  -- The generated C code includes the original header, so gcc resolves
+  -- the real type.
+  Nothing -> if isLikelyType name then Just (CInt 32) else Nothing
     where isLikelyType n = not (null n) && isUpper (head n) && all (\c -> isAlphaNum c || c == '_') n
 
 -- | Parse struct/typedef definitions from preprocessed output.
@@ -358,7 +360,11 @@ parseStructDefs output =
           let rest = dropWhile isSpace (drop 7 s)
           in if "struct" `isPrefixOf` rest
              then let afterStruct = dropWhile isSpace (drop 6 rest)
-                  in case findBraces afterStruct of
+                      -- Skip optional struct tag name (e.g. "typedef struct SDL_Color { ... }")
+                      afterTag = if not (null afterStruct) && isAlpha (head afterStruct)
+                                 then dropWhile isSpace (dropWhile (\c -> isAlphaNum c || c == '_') afterStruct)
+                                 else afterStruct
+                  in case findBraces afterTag of
                        Just (body, afterClose) ->
                          let name = filter (\c -> isAlphaNum c || c == '_')
                                            (dropWhile isSpace afterClose)
@@ -540,9 +546,9 @@ parseEnumDefs output =
           ws = words trimmed
       in case ws of
            [] -> (nextVal, acc)
-           (name:"=":valStr:_)
+           (name:"=":_)
              | all (\c -> isAlphaNum c || c == '_') name
-             , Just v <- readInt valStr ->
+             , Just v <- readInt (dropWhile isSpace (drop 1 (dropWhile (/= '=') trimmed))) ->
                  (v + 1, acc ++ [CEnumConst (T.pack name) v])
            [name]
              | all (\c -> isAlphaNum c || c == '_') name
@@ -555,9 +561,22 @@ parseEnumDefs output =
       in case s'' of
            ('0':'x':hex) -> parseHexVal hex
            ('0':'X':hex) -> parseHexVal hex
+           ('\'':'\\':'x':rest) -> parseCharHex rest
+           ('\'':'\\':'X':rest) -> parseCharHex rest
+           ('\'':'\\':c:'\'':_) -> Just (escapeChar c)
+           ('\'':c:'\'':_) -> Just (fromEnum c)
            _ -> case reads s'' :: [(Int, String)] of
                   [(n, rest)] | all isSpace rest -> Just n
                   _ -> Nothing
+    escapeChar c = case c of
+      'n' -> 10; 'r' -> 13; 't' -> 9; '0' -> 0
+      'a' -> 7; 'b' -> 8; 'f' -> 12; 'v' -> 11
+      _ -> fromEnum c
+    parseCharHex h =
+      let digits = takeWhile isHexDigit h
+      in if not (null digits)
+         then Just (foldl' (\acc c -> acc * 16 + digitToInt c) 0 digits)
+         else Nothing
     parseHexVal h =
       let digits = takeWhile isHexDigit h
           rest   = dropWhile (\c -> isHexDigit c || c == 'u' || c == 'U' || c == 'l' || c == 'L') h
