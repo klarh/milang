@@ -1248,6 +1248,7 @@ data MiType
   | TUnion Text [Text]
   | TVar Text
   | TAny
+  | TOverload [MiType]  -- multiple valid type annotations (additive ::)
   deriving (Show, Eq)
 
 type TypeEnv = Map.Map Text MiType
@@ -1261,6 +1262,7 @@ prettyType (TVar v) = v
 prettyType TAny     = "?"
 prettyType (TFun a b) = prettyType a <> " : " <> prettyType b
 prettyType (TUnion name _) = name
+prettyType (TOverload ts) = T.intercalate " | " (map prettyType ts)
 prettyType (TRecord tag fields) =
   let t = if T.null tag then "" else tag <> " "
       fs = T.intercalate "; " [n <> " = " <> prettyType ty | (n, ty) <- fields]
@@ -1271,6 +1273,7 @@ occursIn :: Text -> MiType -> Bool
 occursIn v (TVar v')       = False  -- TVar-to-TVar is just aliasing, not recursive
 occursIn v (TFun a b)      = occursInAny v a || occursInAny v b
 occursIn v (TRecord _ fs)  = any (occursInAny v . snd) fs
+occursIn v (TOverload ts)  = any (occursIn v) ts
 occursIn _ _               = False
 
 -- Helper that includes TVar matches (for sub-expression checking)
@@ -1278,6 +1281,7 @@ occursInAny :: Text -> MiType -> Bool
 occursInAny v (TVar v')       = v == v'
 occursInAny v (TFun a b)      = occursInAny v a || occursInAny v b
 occursInAny v (TRecord _ fs)  = any (occursInAny v . snd) fs
+occursInAny v (TOverload ts)  = any (occursInAny v) ts
 occursInAny _ _               = False
 
 -- | Built-in type environment for native functions
@@ -1345,16 +1349,19 @@ collectTypeEnv _env bindings =
       -- All annotations, tagged with whether they're from prelude
       allAnnots = [(bindName b, bindBody b, isPreludePos (bindPos b))
                   | b <- bindings, bindDomain b == Type]
-      annotMap = Map.fromList [(n, (e, fromPrelude)) | (n, e, fromPrelude) <- allAnnots]
+      -- Group annotations by name, accumulating all exprs
+      annotMap = Map.fromListWith (++) [(n, [(e, fromPrelude)]) | (n, e, fromPrelude) <- allAnnots]
   in foldl (go userValues annotMap) builtinTypeEnv bindings
   where
     go userValues annotMap tenv b =
       case Map.lookup (bindName b) annotMap of
-        -- Skip prelude annotation when user has redefined the name
-        Just (_, True) | Set.member (bindName b) userValues -> inferOrDetect tenv b
-        -- Use the annotation otherwise
-        Just (tyExpr, _) ->
-          Map.insert (bindName b) (exprToType tenv tyExpr) tenv
+        -- Skip prelude annotations when user has redefined the name
+        Just pairs | all snd pairs, Set.member (bindName b) userValues -> inferOrDetect tenv b
+        Just pairs ->
+          let types = [exprToType tenv e | (e, _) <- pairs]
+          in case types of
+               [t] -> Map.insert (bindName b) t tenv
+               ts  -> Map.insert (bindName b) (TOverload ts) tenv
         Nothing -> inferOrDetect tenv b
     inferOrDetect tenv b =
       case detectUnion b of
@@ -1471,14 +1478,51 @@ inferExprE tenv (BinOp op l r)
       _          -> TAny
   | otherwise = TAny
 inferExprE tenv (App f x) =
-  case inferExprE tenv f of
+  let fty = inferExprE tenv f
+      xty = inferExprE tenv x
+  in case fty of
     TFun _ ret -> ret
+    TOverload alts ->
+      case [(argTy, retTy) | TFun argTy retTy <- alts] of
+        [] -> TAny
+        pairs ->
+          -- Find overloads whose argument type matches
+          let matching = [ret | (argTy, ret) <- pairs, typeMatches argTy xty]
+          in case matching of
+               []    -> snd (head pairs)  -- fallback
+               [ret] -> ret               -- unique match
+               rets  -> TOverload rets    -- multiple match: keep overloaded
     -- If f is a Name, check the type env for its return type
     _ -> case f of
       Name n -> case Map.lookup n tenv of
-                  Just (TFun _ ret) -> ret
+                  Just ty -> inferReturnType ty xty
                   _ -> TAny
       _ -> TAny
+  where
+    inferReturnType (TFun _ ret) _ = ret
+    inferReturnType (TOverload alts) argTy =
+      case [(a, r) | TFun a r <- alts] of
+        [] -> TAny
+        pairs ->
+          let matching = [ret | (a, ret) <- pairs, typeMatches a argTy]
+          in case matching of
+               []    -> snd (head pairs)
+               [ret] -> ret
+               rets  -> TOverload rets
+    inferReturnType _ _ = TAny
+    -- Check if expected type is compatible with actual (simple structural match)
+    typeMatches TAny _ = True
+    typeMatches _ TAny = True
+    typeMatches (TVar _) _ = True
+    typeMatches _ (TVar _) = True
+    typeMatches TInt TInt = True
+    typeMatches TFloat TFloat = True
+    typeMatches TStr TStr = True
+    typeMatches (TFun a1 r1) (TFun a2 r2) = typeMatches a1 a2 && typeMatches r1 r2
+    typeMatches (TUnion n1 _) (TUnion n2 _) = n1 == n2
+    typeMatches (TRecord t1 _) (TUnion _ tags) = t1 `elem` tags
+    typeMatches (TUnion _ tags) (TRecord t2 _) = t2 `elem` tags
+    typeMatches _ _ = False
 inferExprE tenv (Lam p body) =
   -- Infer param type from body usage (e.g., 2*x → x :: Int)
   let inferred = inferParamFromBody tenv body p
@@ -1529,6 +1573,15 @@ checkCompatWith subst0 pos name expected actual = go subst0 expected actual
 
     go subst TAny _ = (subst, [])
     go subst _ TAny = (subst, [])
+    -- Overloaded types: succeed if ANY alternative matches
+    go subst (TOverload alts) act =
+      case filter (null . snd) [go subst alt act | alt <- alts] of
+        ((s, _):_) -> (s, [])      -- at least one matched
+        []         -> go subst (head alts) act  -- none matched; report against first
+    go subst exp (TOverload alts) =
+      case filter (null . snd) [go subst exp alt | alt <- alts] of
+        ((s, _):_) -> (s, [])
+        []         -> go subst exp (head alts)
     go subst (TVar v) act =
       let resolved = resolve subst (TVar v)
       in case resolved of
@@ -1570,18 +1623,17 @@ checkCompatWith subst0 pos name expected actual = go subst0 expected actual
     showTag t = if T.null t then "(untagged)" else t
     mkErr msg = TypeWarning pos name msg
 
--- | Check a binding's body against its LOCAL type annotation
-checkTypeBinding :: TypeEnv -> Map.Map Text Expr -> Binding -> [Warning]
+-- | Check a binding's body against its LOCAL type annotation(s)
+-- Multiple :: annotations for the same name are additive: the body
+-- must satisfy at least one of them.
+checkTypeBinding :: TypeEnv -> Map.Map Text [Expr] -> Binding -> [Warning]
 checkTypeBinding tenv localAnnots b =
   let (annotErrs, tenv') = case Map.lookup (bindName b) localAnnots of
         Nothing -> ([], tenv)
-        Just tyExpr ->
+        Just tyExprs ->
           case bindBody b of
             IntLit 0 | null (bindParams b) -> ([], tenv)
-            _ ->
-              let expectedType = exprToType tenv tyExpr
-                  (peeledEnv, bodyType) = peelParams tenv (bindParams b) expectedType
-              in (checkExprAgainst peeledEnv (bindPos b) (bindName b) bodyType (bindBody b), peeledEnv)
+            _ -> tryAnnotations tenv tyExprs
       -- When there's no local type annotation, shadow parameter names to
       -- prevent false positives from prelude types (e.g., using `lines` as a
       -- parameter name shouldn't trigger type errors from the prelude's
@@ -1591,6 +1643,21 @@ checkTypeBinding tenv localAnnots b =
         Nothing -> foldl (\e p -> Map.delete p e) tenv' (bindParams b)
       operandErrs = checkOperands paramEnv (bindPos b) (bindName b) (bindBody b)
   in annotErrs ++ operandErrs
+  where
+    -- Try each annotation; succeed if ANY matches (no errors)
+    tryAnnotations tenv0 [] = ([], tenv0)
+    tryAnnotations tenv0 [tyExpr] =
+      let expectedType = exprToType tenv0 tyExpr
+          (peeledEnv, bodyType) = peelParams tenv0 (bindParams b) expectedType
+      in (checkExprAgainst peeledEnv (bindPos b) (bindName b) bodyType (bindBody b), peeledEnv)
+    tryAnnotations tenv0 tyExprs =
+      let results = [(checkExprAgainst peeledEnv (bindPos b) (bindName b) bodyType (bindBody b), peeledEnv)
+                    | tyExpr <- tyExprs
+                    , let expectedType = exprToType tenv0 tyExpr
+                    , let (peeledEnv, bodyType) = peelParams tenv0 (bindParams b) expectedType]
+      in case filter (null . fst) results of
+           ((_, env'):_) -> ([], env')     -- at least one matched
+           []            -> head results   -- none matched; report first error
 
 -- | Peel function type layers for parameters
 peelParams :: TypeEnv -> [Text] -> MiType -> (TypeEnv, MiType)
@@ -1604,6 +1671,12 @@ checkExprAgainst :: TypeEnv -> Maybe SrcPos -> Text -> MiType -> Expr -> [Warnin
 checkExprAgainst tenv pos name (TFun argTy retTy) (Lam p body) =
   let tenv' = Map.insert p argTy tenv
   in checkExprAgainst tenv' pos name retTy body
+checkExprAgainst tenv pos name (TOverload alts) expr =
+  -- Succeed if ANY overload matches
+  let results = [checkExprAgainst tenv pos name alt expr | alt <- alts]
+  in case filter null results of
+       (_:_) -> []         -- at least one matched
+       []    -> head results  -- none matched; report first error
 checkExprAgainst tenv pos name expected expr =
   let actual = inferExprE tenv expr
   in snd (checkCompatWith Map.empty pos name expected actual)
@@ -1634,6 +1707,11 @@ checkOperands tenv0 pos name expr0 = snd (go tenv0 0 expr0)
           (fty, c1) = freshenType c fty0
           argErrs = case fty of
             TFun argTy _ -> snd (checkCompatWith Map.empty pos name argTy xty)
+            TOverload alts ->
+              -- Try each overload; succeed if any function alternative accepts the arg
+              let results = [checkCompatWith Map.empty pos name argTy xty
+                            | TFun argTy _ <- alts]
+              in if null results || any (null . snd) results then [] else snd (head results)
             _ -> []
           (c2, errs1) = go tenv c1 f
           (c3, errs2) = go tenv c2 x
@@ -1666,12 +1744,14 @@ collectTVars :: MiType -> Set.Set Text
 collectTVars (TVar v)       = Set.singleton v
 collectTVars (TFun a b)     = Set.union (collectTVars a) (collectTVars b)
 collectTVars (TRecord _ fs) = Set.unions [collectTVars t | (_, t) <- fs]
+collectTVars (TOverload ts) = Set.unions (map collectTVars ts)
 collectTVars _              = Set.empty
 
 applySubst :: Map.Map Text MiType -> MiType -> MiType
 applySubst s (TVar v)       = Map.findWithDefault (TVar v) v s
 applySubst s (TFun a b)     = TFun (applySubst s a) (applySubst s b)
 applySubst s (TRecord t fs) = TRecord t [(n, applySubst s ty) | (n, ty) <- fs]
+applySubst s (TOverload ts) = TOverload (map (applySubst s) ts)
 applySubst _ t              = t
 
 -- | Check pattern exhaustiveness for case expressions over known union types
@@ -1700,9 +1780,9 @@ checkExhaustiveness tenv pos name scrut alts =
 typeCheckBindings :: Env -> [Binding] -> [Warning]
 typeCheckBindings env bindings =
   let -- Local type annotations: only from user code, not prelude
-      localAnnots = Map.fromList [(bindName b, bindBody b)
-                                 | b <- bindings, bindDomain b == Type
-                                 , not (isPreludePos (bindPos b))]
+      localAnnots = Map.fromListWith (++) [(bindName b, [bindBody b])
+                                          | b <- bindings, bindDomain b == Type
+                                          , not (isPreludePos (bindPos b))]
       tenv = collectTypeEnv env bindings
       -- Only check value/lazy bindings, not annotation bindings
       valueBinds = filter (\b -> bindDomain b == Value || bindDomain b == Lazy) bindings

@@ -1,0 +1,28 @@
+main world =
+  io = world.io
+
+  -- Polymorphic map with additive type annotations
+  my_map :: (a : b) : List : List
+  my_map :: (a : b) : Maybe : Maybe
+  my_map f x = x -> Nil = []; Cons h t = Cons (f h) (my_map f t); Nothing = Nothing; Just v = Just (f v)
+
+  double x = x * 2
+
+  -- Test map over List
+  r1 = my_map double (Cons 3 (Cons 4 Nil))
+  io.println (toString r1)
+
+  -- Test map over Maybe
+  r2 = my_map double (Just 21)
+  io.println (toString r2)
+
+  r3 = my_map double Nothing
+  io.println (toString r3)
+
+  -- Partial application
+  doubler = my_map double
+  r4 = doubler (Cons 5 Nil)
+  io.println (toString r4)
+
+  r5 = doubler (Just 10)
+  io.println (toString r5)
