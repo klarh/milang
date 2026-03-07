@@ -241,7 +241,7 @@ add a b = a + b
 add :: Num : Num : Num
 
 -- Sized numeric types: Int', UInt', Float' take a bit width
--- Prelude aliases: Int = Int' 64, UInt = UInt' 64, Float = Float' 64, Byte = UInt' 8
+-- Prelude aliases: Int = Int' 0, UInt = UInt' 0, Float = Float' 64, Byte = UInt' 8
 add8 :: Int' 8 : Int' 8 : Int' 8
 
 -- Traits domain (:~) — computational attributes / effect sets

@@ -7,12 +7,12 @@ Milang can call C functions directly by importing a `.h` header file. The compil
 | C type | Milang type | C codegen type |
 |--------|-------------|----------------|
 | `int` | `Int' 32` | `int` |
-| `long`, `int64_t` | `Int` | `int64_t` |
+| `long`, `int64_t` | `Int' 64` | `int64_t` |
 | `short`, `int16_t` | `Int' 16` | `int16_t` |
 | `int8_t`, `char` | `Int' 8` | `int8_t` |
-| `ssize_t`, `ptrdiff_t` | `Int` | `int64_t` |
+| `ssize_t`, `ptrdiff_t` | `Int' 64` | `int64_t` |
 | `unsigned int`, `uint32_t` | `UInt' 32` | `unsigned int` |
-| `unsigned long`, `uint64_t`, `size_t` | `UInt` | `uint64_t` |
+| `unsigned long`, `uint64_t`, `size_t` | `UInt' 64` | `uint64_t` |
 | `unsigned short`, `uint16_t` | `UInt' 16` | `uint16_t` |
 | `uint8_t`, `unsigned char` | `Byte` | `uint8_t` |
 | `double` | `Float` | `double` |

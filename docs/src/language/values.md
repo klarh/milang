@@ -9,9 +9,10 @@ minus sign attached to the literal. At compile time integers have arbitrary
 precision; at runtime they default to `int64_t` (signed 64-bit).
 
 The type system supports sized integers via `Int'` (signed) and `UInt'`
-(unsigned) type constructors that take a bit width: `Int' 8`, `Int' 32`,
-`UInt' 64`, etc. The prelude provides aliases: `Int = Int' 64`,
-`UInt = UInt' 64`, `Byte = UInt' 8`.
+(unsigned) constructors that take a bit width: `Int' 8`, `Int' 32`,
+`UInt' 64`, etc. Width 0 means arbitrary precision (auto-promotes to bignum
+on overflow). The prelude provides aliases: `Int = Int' 0`,
+`UInt = UInt' 0`, `Byte = UInt' 8`.
 
 ```milang,run
 small = 42

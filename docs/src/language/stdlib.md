@@ -12,8 +12,8 @@ List = {Nil; Cons head tail}
 Maybe = {Nothing; Just val}
 
 -- Sized numeric type aliases (Int', UInt', Float' are primitive constructors)
-Int = Int' 64       -- signed 64-bit integer
-UInt = UInt' 64     -- unsigned 64-bit integer
+Int = Int' 0        -- arbitrary-precision signed integer
+UInt = UInt' 0      -- arbitrary-precision unsigned integer
 Float = Float' 64   -- 64-bit floating-point
 Byte = UInt' 8      -- unsigned 8-bit integer
 ```
@@ -22,16 +22,17 @@ Byte = UInt' 8      -- unsigned 8-bit integer
 
 `Int'`, `UInt'`, and `Float'` are primitive type constructors that take a
 compile-time bit-width argument (for example `Int' 8`, `UInt' 32`, `Float' 64`).
-They provide precise control over numeric representation and arithmetic
-semantics:
+They also serve as value constructors, creating sized numeric values.
 
+- `Int' 0` — arbitrary-precision signed integer (auto-promotes to bignum on overflow)
 - `Int' n` — signed two's-complement integer of `n` bits (wraps modulo 2^n)
 - `UInt' n` — unsigned integer of `n` bits (range 0..2^n-1)
 - `Float' n` — floating-point with `n`-bit precision (commonly 32 or 64)
 
-The prelude provides friendly aliases (`Int = Int' 64`, `UInt = UInt' 64`,
-`Float = Float' 64`, `Byte = UInt' 8`) for convenience. Use the sized forms
-when precise width or FFI compatibility is required.
+The prelude provides friendly aliases (`Int = Int' 0`, `UInt = UInt' 0`,
+`Float = Float' 64`, `Byte = UInt' 8`) for convenience. All integer arithmetic
+(including bare literals) automatically promotes to bignums on overflow.
+Use the sized forms when precise width or FFI compatibility is required.
 -->
 
 

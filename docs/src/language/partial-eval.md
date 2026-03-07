@@ -90,18 +90,13 @@ following notes explain the current behaviour and constraints:
   expressions like `Int' (4 * 8)` will reduce to `Int' 32` when the arithmetic
   inside the type expression is concrete.
 
-- Type aliases such as `Int = Int' 64` are treated as syntactic sugar and are
+- Type aliases such as `Int = Int' 0` are treated as syntactic sugar and are
   resolved during reduction; they do not remain at runtime.
 
-- Current implementation note: sized types are primarily type-level and used
-  for ABI/representation and annotation. The reducer evaluates constant
-  arithmetic using Milang's general numeric semantics and does not automatically
-  wrap or clamp values to a narrower machine width. If strict fixed-width
-  arithmetic is required, use explicit conversion primitives or the C FFI,
-  which maps milang sized types to fixed-width C types.
-
-- Future work may include full width-aware reduction (clamping/wrapping at
-  reduction time) and richer type-level computation.
+- Sized types are both type-level annotations and value constructors. The
+  reducer performs width-aware arithmetic: fixed-width types (`Int' 8`, etc.)
+  clamp/wrap at their specified width, while arbitrary-precision types
+  (`Int' 0`, bare integers) use Haskell's unbounded `Integer` type.
 
 -->
 
