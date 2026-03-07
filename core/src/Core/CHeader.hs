@@ -60,7 +60,7 @@ parseCHeader cc path = do
           enumMap = Map.fromList [(n, TDEnum) | n <- enumTypeNames]
           cbMap = Map.map (\(r',ps) -> TDCallback r' ps) (parseCallbackDefs output)
           typeMap = structMap `Map.union` enumMap `Map.union` cbMap
-          rawSigs = mapMaybe (parseLine typeMap) (lines output)
+          rawSigs = mapMaybe (parseLine typeMap) (joinDecls (lines output))
           deduped = dedupeSigs rawSigs
           visible = filter (not . isInternal . cfName) deduped
           base = takeFileName path
@@ -96,7 +96,7 @@ parseCHeaderInclude cc hdr = do
           enumMap = Map.fromList [(n, TDEnum) | n <- enumTypeNames]
           cbMap = Map.map (\(r',ps) -> TDCallback r' ps) (parseCallbackDefs output)
           typeMap = structMap `Map.union` enumMap `Map.union` cbMap
-          rawSigs = mapMaybe (parseLine typeMap) (lines output)
+          rawSigs = mapMaybe (parseLine typeMap) (joinDecls (lines output))
           deduped = dedupeSigs rawSigs
           visible = filter (not . isInternal . cfName) deduped
           built = builtinSigsFor hdr
@@ -110,9 +110,27 @@ parseCHeaderInclude cc hdr = do
           newDefines = filter (\c -> not (Map.member (ceName c) enumNames)) defineConsts
       pure $ Right (final, enumConsts ++ newDefines)
 
+-- | Join multi-line declarations.  Preprocessed C output may split function
+-- declarations across lines.  We join non-directive lines that don't end with
+-- ';' or '}' onto the next line so parseLine sees complete declarations.
+joinDecls :: [String] -> [String]
+joinDecls [] = []
+joinDecls (l:ls)
+  | "#" `isPrefixOf` trimmed = l : joinDecls ls
+  | null trimmed             = l : joinDecls ls
+  | endsDecl trimmed         = l : joinDecls ls
+  | otherwise                = joinDecls ((l ++ " " ++ head' ls) : tail' ls)
+  where
+    trimmed = dropWhile isSpace l
+    endsDecl s = case last s of { ';' -> True; '}' -> True; _ -> False }
+    head' [] = ""
+    head' (x:_) = x
+    tail' [] = []
+    tail' (_:xs) = xs
+
 parseLine :: TypeDefMap -> String -> Maybe CFunSig
 parseLine sm line =
-  let decl = takeDecl line
+  let decl = stripAttrs (takeDecl line)
   in case break (== '(') decl of
     (_, []) -> Nothing
     (before, _:after) -> parseDecl sm (before, after)
@@ -121,9 +139,26 @@ parseLine sm line =
 takeDecl :: String -> String
 takeDecl = takeWhile (/= ';')
 
--- stripAttrs: remove obvious attribute tokens (leave rest intact)
+-- stripAttrs: remove __attribute__((...)) sequences from a declaration
+-- These appear in preprocessed output and contain nested parentheses that
+-- confuse the simple break-on-'(' function name parser.
 stripAttrs :: String -> String
-stripAttrs s = s  -- handled later by token filtering
+stripAttrs [] = []
+stripAttrs s
+  | "__attribute__" `isPrefixOf` s =
+      let rest = drop (length ("__attribute__" :: String)) s
+          rest' = dropWhile isSpace rest
+      in case rest' of
+           ('(':r) -> stripAttrs (dropParens 1 r)
+           _       -> stripAttrs rest'
+  | otherwise = head s : stripAttrs (tail s)
+  where
+    dropParens :: Int -> String -> String
+    dropParens 0 cs = cs
+    dropParens _ [] = []
+    dropParens d ('(':cs) = dropParens (d+1) cs
+    dropParens d (')':cs) = dropParens (d-1) cs
+    dropParens d (_:cs)   = dropParens d cs
 
 parseDecl :: TypeDefMap -> (String, String) -> Maybe CFunSig
 parseDecl sm (beforeParen, paramStr) = do
@@ -281,7 +316,12 @@ lookupTypeDef sm name = case Map.lookup name sm of
   Just TDEnum -> Just (CInt 32)
   Just (TDStruct fields) -> Just (CStruct (T.pack name) [(T.pack fn, ft) | (fn, ft) <- fields])
   Just (TDCallback ret params) -> Just (CCallback ret params)
-  Nothing -> Nothing
+  -- For unknown single-word types (e.g. SDL_Window, Uint32), treat as opaque
+  -- pointer.  The generated C code includes the original header, so the real
+  -- type is resolved by gcc.  We just need a plausible FFI representation so
+  -- the function isn't silently dropped.
+  Nothing -> if isLikelyType name then Just (CPtr "void") else Nothing
+    where isLikelyType n = not (null n) && isUpper (head n) && all (\c -> isAlphaNum c || c == '_') n
 
 -- | Parse struct/typedef definitions from preprocessed output.
 -- Handles: typedef struct { fields } Name; and struct Name { fields };
@@ -461,7 +501,9 @@ parseEnumDefs output =
           let rest = dropWhile isSpace (drop 7 s)
           in if "enum" `isPrefixOf` rest
              then let afterEnum = dropWhile isSpace (drop 4 rest)
-                  in case findBraces afterEnum of
+                      -- skip optional enum tag name (e.g. "SDL_RendererFlags")
+                      afterName = dropWhile isSpace (snd (span (\c -> isAlphaNum c || c == '_') afterEnum))
+                  in case findBraces afterName of
                        Just (body, afterClose) ->
                          let name = filter (\c -> isAlphaNum c || c == '_')
                                            (dropWhile isSpace afterClose)
@@ -510,9 +552,18 @@ parseEnumDefs output =
 
     readInt s' =
       let s'' = dropWhile isSpace s'
-      in case reads s'' :: [(Int, String)] of
-           [(n, rest)] | all isSpace rest -> Just n
-           _ -> Nothing
+      in case s'' of
+           ('0':'x':hex) -> parseHexVal hex
+           ('0':'X':hex) -> parseHexVal hex
+           _ -> case reads s'' :: [(Int, String)] of
+                  [(n, rest)] | all isSpace rest -> Just n
+                  _ -> Nothing
+    parseHexVal h =
+      let digits = takeWhile isHexDigit h
+          rest   = dropWhile (\c -> isHexDigit c || c == 'u' || c == 'U' || c == 'l' || c == 'L') h
+      in if not (null digits) && all isSpace rest
+         then Just (foldl' (\acc c -> acc * 16 + digitToInt c) 0 digits)
+         else Nothing
 
 isInternal :: Text -> Bool
 isInternal name = T.isPrefixOf "__" name || T.isPrefixOf "_" name
@@ -533,12 +584,12 @@ parseDefineConstants output =
       _ -> Nothing
     parseIntLiteral s
       | "0x" `isPrefixOf` s || "0X" `isPrefixOf` s =
-          let hex = drop 2 (filter (/= 'U') (filter (/= 'L') s))
+          let hex = drop 2 (filter (\c -> c /= 'U' && c /= 'u' && c /= 'L' && c /= 'l') s)
           in if all isHexDigit hex && not (null hex)
              then Just (foldl' (\acc c -> acc * 16 + digitToInt c) 0 hex)
              else Nothing
       | all isDigit s, not (null s) = Just (read s)
-      | all (\c -> isDigit c || c == 'U' || c == 'L') s, not (null s) =
+      | all (\c -> isDigit c || c == 'U' || c == 'u' || c == 'L' || c == 'l') s, not (null s) =
           let digits = filter isDigit s
           in if null digits then Nothing else Just (read digits)
       | otherwise = Nothing
