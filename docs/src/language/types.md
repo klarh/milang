@@ -25,42 +25,30 @@ Inside a type expression, `:` means "function type" and is right-associative. So
 
 ### Sized Numeric Types
 
-The primitive type constructors `Int'`, `UInt'`, and `Float'` take a compile-time bit width:
+The constructors `Int'`, `UInt'`, and `Float'` take a compile-time bit width
+and serve as both **type annotations** and **value constructors**:
 
 ```milang
+-- as type annotations
 add8 :: Int' 8 : Int' 8 : Int' 8
 add8 a b = a + b
 
-compact :: Float' 32 : Float' 32
-compact x = x * 1.0
+-- as value constructors
+x = Int' 8 42      -- signed 8-bit integer with value 42
+y = UInt' 16 1000   -- unsigned 16-bit integer
+z = Int 42          -- arbitrary-precision integer (Int = Int' 0)
 ```
 
-The prelude defines convenient aliases:
+The prelude defines convenient aliases (you can define your own too):
 
 ```milang
-Int = Int' 0
-UInt = UInt' 0
-Float = Float' 64
-Byte = UInt' 8
-```
+Int = Int' 0       -- arbitrary precision (default)
+UInt = UInt' 0     -- arbitrary precision unsigned
+Float = Float' 64  -- double-precision float
+Byte = UInt' 8     -- unsigned byte
 
-You can define your own aliases:
-
-```milang
-Short = Int' 16
+Short = Int' 16    -- custom alias example
 Word = UInt' 32
-```
-
-### Details on Sized Numeric Types
-
-The primitive constructors `Int'`, `UInt'`, and `Float'` take a compile-time
-bit-width argument and serve as both **type constructors** (for annotations) and
-**value constructors** (for creating sized values):
-
-```milang
-x = Int' 8 42     -- x is a signed 8-bit integer with value 42
-y = UInt' 16 1000  -- y is an unsigned 16-bit integer
-z = Int 42         -- z is an arbitrary-precision integer (Int = Int' 0)
 ```
 
 #### Arbitrary Precision (width = 0)
@@ -76,54 +64,38 @@ c = 42 + 1     -- 43 (stays as int64, no overhead)
 ```
 
 All integer arithmetic (including bare literals) automatically detects overflow
-and promotes to bignums. The prelude aliases `Int = Int' 0` and `UInt = UInt' 0`
-make arbitrary precision the default.
+and promotes to bignums. Since `Int = Int' 0` and `UInt = UInt' 0`, arbitrary
+precision is the default.
 
 #### Fixed-Width Integers (width > 0)
 
--   Signed integers (`Int' n`) use two's-complement semantics; arithmetic on
-    signed integers is performed modulo 2^n and results are interpreted in two's
-    complement when read as signed values. Overflow wraps around (modular
-    arithmetic).
+-   Signed integers (`Int' n`) use two's-complement wrapping: arithmetic is
+    performed modulo 2^n with results in [-2^(n-1), 2^(n-1)-1].
 
--   Unsigned integers (`UInt' n`) are arithmetic modulo 2^n with values in the
-    range [0, 2^n-1]. Mixing signed and unsigned operands follows a conservative
-    promotion model: the operands are first promoted to the wider bit-width and
-    if any operand is unsigned the operation is performed in the unsigned domain
-    of that width.
+-   Unsigned integers (`UInt' n`) are arithmetic modulo 2^n with values in
+    [0, 2^n-1]. Mixing signed and unsigned operands promotes to the wider width;
+    if any operand is unsigned, the result is unsigned.
 
--   Floating-point types (`Float' 32`, `Float' 64`) correspond to standard
-    IEEE-like single- and double-precision floats. Arithmetic on mixed-width
-    floats promotes to the wider precision before performing the operation.
+-   Floating-point types (`Float' 32`, `Float' 64`) correspond to IEEE
+    single- and double-precision. Mixed-width float arithmetic promotes to the
+    wider precision.
 
-#### Promotion and Result Width
+#### Promotion Rules
 
--   For fixed-width integer arithmetic, the result width is the maximum of the
-    operand widths after promotion; the resulting value is wrapped/clamped to
-    that width as described above.
--   For mixed signed/unsigned arithmetic the operation is performed in the
-    unsigned interpretation of the promoted width.
--   Arithmetic between arbitrary-precision and fixed-width integers uses
-    arbitrary precision for the result.
-
-#### Compile-time Requirements and Partial Evaluation
-
--   The bit-width argument (the `n` in `Int' n`) must be a compile-time
-    constant. The reducer treats sized-type aliases (for example `Int = Int' 0`)
-    as syntactic sugar and reduces type aliases away.
--   Fixed-width arithmetic is clamped both at compile time (by the Haskell
-    partial evaluator) and at runtime (by the C runtime), ensuring consistent
-    behavior regardless of when the computation happens.
+-   Result width is the maximum of the operand widths.
+-   Mixed signed/unsigned uses the unsigned interpretation at the promoted width.
+-   Arithmetic between arbitrary-precision and fixed-width uses arbitrary
+    precision for the result.
+-   Fixed-width clamping happens both at compile time (Haskell partial evaluator)
+    and at runtime (C runtime), ensuring consistent behavior.
 
 #### Practical Notes
 
--   Use `Int' 8`, `Int' 16`, `Int' 32`, `Int' 64` when you need explicit
-    control over representation and ABI compatibility (FFI interop, binary
-    formats, embedded targets).
--   Bare integer literals and the `Int`/`UInt` aliases provide arbitrary
-    precision — you never need to worry about overflow in normal code.
--   The prelude exposes convenient aliases (`Int`, `UInt`, `Float`, `Byte`) for
-    common use; you can define your own aliases like `Short = Int' 16`.
+-   The width argument must be a compile-time constant.
+-   Use fixed widths (`Int' 8`, `Int' 32`, etc.) for FFI interop, binary
+    formats, and embedded targets.
+-   Use `Int`/`UInt` (or bare literals) for general-purpose code — overflow is
+    handled automatically.
 
 
 ## Basic Examples
