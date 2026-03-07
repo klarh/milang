@@ -109,6 +109,20 @@ collectApp :: Expr -> (Expr, [Expr])
 collectApp (App f x) = let (h, args) = collectApp f in (h, args ++ [x])
 collectApp e         = (e, [])
 
+-- | True if the expression is a CFunction applied to at least one argument
+-- (i.e., an actual C function call, not just a reference to the function).
+isCFunctionCall :: Expr -> Bool
+isCFunctionCall e = case collectApp e of
+  (CFunction {}, _:_) -> True
+  _ -> False
+
+-- | True if a name has a :~ [pure] trait annotation, allowing inlining
+-- of its value even when it's a CFunction call.
+isPureTrait :: Text -> Env -> Bool
+isPureTrait n env = case Map.lookup n (envTraits env) of
+  Just traitExpr -> "pure" `Set.member` resolveEffects Map.empty traitExpr
+  Nothing -> False
+
 isOperatorName :: Text -> Bool
 isOperatorName t = not (T.null t) && T.all (`elem` ("+-*/^<>=!&|@%?:" :: String)) t
 
@@ -172,6 +186,10 @@ reduceD d env (Name n)
       -- Non-concrete value from a With/let binding: keep as Name so the
       -- runtime evaluates it once (prevents duplicating FFI side effects).
       Just _ | n `Set.member` envLetBound env -> Name n
+      -- Non-concrete FFI call result: keep as Name to prevent duplicating
+      -- side-effectful C function calls (even from lambda parameters).
+      -- Functions annotated :~ [pure] are exempt and may be freely inlined.
+      Just val | isCFunctionCall val, not (isPureTrait n env) -> Name n
       Just val -> reduceD (d - 1) env val
       Nothing
         | isOperatorName n -> Lam "_a" (Lam "_b" (BinOp n (Name "_a") (Name "_b")))
