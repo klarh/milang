@@ -8,6 +8,7 @@ import Data.List (isPrefixOf, foldl')
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import Data.Char (isAlpha, isAlphaNum, isSpace, isUpper, isDigit, isHexDigit, digitToInt)
+import Data.Bits (shiftL, shiftR, (.|.), (.&.), xor, complement)
 import System.Process (readProcess)
 import Control.Exception (try, SomeException)
 import System.FilePath (takeFileName)
@@ -487,7 +488,8 @@ parseEnumDefs output =
       joined = unwords (map (filter (/= '\r')) contentLines)
       -- Use brace-aware splitting
       decls = stlEnum 0 [] [] joined
-  in foldl' collectEnum ([], []) decls
+      (_, consts, typeNames) = foldl' collectEnum (Map.empty, [], []) decls
+  in (consts, typeNames)
   where
     -- Split on ';' at brace depth 0 (reuse same logic)
     stlEnum _ acc cur [] = reverse (reverse cur : acc)
@@ -496,13 +498,13 @@ parseEnumDefs output =
     stlEnum 0 acc cur (';':cs) = stlEnum 0 (reverse cur : acc) [] cs
     stlEnum n acc cur (c:cs)   = stlEnum n acc (c:cur) cs
 
-    collectEnum (consts, typeNames) decl =
+    collectEnum (env, consts, typeNames) decl =
       let trimmed = dropWhile isSpace decl
-      in case parseEnumDecl trimmed of
-           Just (cs, mName) -> (consts ++ cs, typeNames ++ maybe [] (:[]) mName)
-           Nothing -> (consts, typeNames)
+      in case parseEnumDecl env trimmed of
+           Just (cs, env', mName) -> (env', consts ++ cs, typeNames ++ maybe [] (:[]) mName)
+           Nothing -> (env, consts, typeNames)
 
-    parseEnumDecl s
+    parseEnumDecl env s
       | "typedef" `isPrefixOf` s =
           let rest = dropWhile isSpace (drop 7 s)
           in if "enum" `isPrefixOf` rest
@@ -513,8 +515,8 @@ parseEnumDefs output =
                        Just (body, afterClose) ->
                          let name = filter (\c -> isAlphaNum c || c == '_')
                                            (dropWhile isSpace afterClose)
-                             consts = parseEnumBody body
-                         in Just (consts, if null name then Nothing else Just name)
+                             (consts, env') = parseEnumBody env body
+                         in Just (consts, env', if null name then Nothing else Just name)
                        Nothing -> Nothing
              else Nothing
       | "enum" `isPrefixOf` s =
@@ -522,8 +524,8 @@ parseEnumDefs output =
               (possibleName, afterName) = span (\c -> isAlphaNum c || c == '_') rest
           in case findBraces (dropWhile isSpace afterName) of
                Just (body, _) ->
-                 let consts = parseEnumBody body
-                 in Just (consts, if null possibleName then Nothing else Just possibleName)
+                 let (consts, env') = parseEnumBody env body
+                 in Just (consts, env', if null possibleName then Nothing else Just possibleName)
                Nothing -> Nothing
       | otherwise = Nothing
 
@@ -536,82 +538,288 @@ parseEnumDefs output =
         go n acc (c:cs) = go n (c:acc) cs
     findBraces _ = Nothing
 
-    parseEnumBody body =
+    parseEnumBody env body =
       let entries = splitOn ',' body
-          autoVal = 0 :: Int
-      in snd $ foldl' parseEntry (autoVal, []) entries
+      in case foldl' parseEntry (0, env, []) entries of
+           (_, env', consts) -> (consts, env')
 
-    parseEntry (nextVal, acc) entry =
+    parseEntry (nextVal, env, acc) entry =
       let trimmed = dropWhile isSpace entry
           ws = words trimmed
       in case ws of
-           [] -> (nextVal, acc)
+           [] -> (nextVal, env, acc)
            (name:"=":_)
              | all (\c -> isAlphaNum c || c == '_') name
-             , Just v <- readInt (dropWhile isSpace (drop 1 (dropWhile (/= '=') trimmed))) ->
-                 (v + 1, acc ++ [CEnumConst (T.pack name) v])
+             , Just v <- evalConstExpr env (dropWhile isSpace (drop 1 (dropWhile (/= '=') trimmed))) ->
+                 (v + 1, Map.insert name v env, acc ++ [CEnumConst (T.pack name) v])
            [name]
              | all (\c -> isAlphaNum c || c == '_') name
              , not (null name) ->
-                 (nextVal + 1, acc ++ [CEnumConst (T.pack name) nextVal])
-           _ -> (nextVal, acc)
+                 (nextVal + 1, Map.insert name nextVal env, acc ++ [CEnumConst (T.pack name) nextVal])
+           _ -> (nextVal, env, acc)
 
-    readInt s' =
-      let s'' = dropWhile isSpace s'
-      in case s'' of
-           ('0':'x':hex) -> parseHexVal hex
-           ('0':'X':hex) -> parseHexVal hex
-           ('\'':'\\':'x':rest) -> parseCharHex rest
-           ('\'':'\\':'X':rest) -> parseCharHex rest
-           ('\'':'\\':c:'\'':_) -> Just (escapeChar c)
-           ('\'':c:'\'':_) -> Just (fromEnum c)
-           _ -> case reads s'' :: [(Int, String)] of
-                  [(n, rest)] | all isSpace rest -> Just n
-                  _ -> Nothing
+    -- | Evaluate a C constant expression with operator precedence.
+    -- Supports: integer/hex/char literals, named references, |, ^, &, <<, >>, +, -, *, ~
+    evalConstExpr :: Map String Int -> String -> Maybe Int
+    evalConstExpr env s = case parseOr (dropWhile isSpace s) of
+      Just (n, rest) | all isSpace rest -> Just n
+      _ -> Nothing
+      where
+        parseOr = parseBinChain [("|", (.|.))] parseXor
+        parseXor = parseBinChain [("^", xor)] parseAnd
+        parseAnd = parseBinChain [("&", (.&.))] parseShift
+        parseShift = parseBinChain [("<<", shiftL), (">>", shiftR)] parseAdd
+        parseAdd = parseBinChain [("+", (+)), ("-", (-))] parseMul
+        parseMul = parseBinChain [("*", (*))] parseUnary
+
+        parseBinChain ops next s' = do
+          (l, r) <- next s'
+          go l (dropWhile isSpace r)
+          where
+            go l r' = case matchOp ops r' of
+              Just (op, after) -> do
+                (r2, rest) <- next (dropWhile isSpace after)
+                go (op l r2) (dropWhile isSpace rest)
+              Nothing -> Just (l, r')
+            matchOp [] _ = Nothing
+            matchOp ((sym, op):os') r'
+              | sym `isPrefixOf` r'
+              , not (sym == "|" && "||" `isPrefixOf` r')
+              , not (sym == "&" && "&&" `isPrefixOf` r')
+              , not (sym == "<" && "<=" `isPrefixOf` r')
+              , not (sym == ">" && ">=" `isPrefixOf` r')
+              = Just (op, drop (length sym) r')
+              | otherwise = matchOp os' r'
+
+        parseUnary s' = case s' of
+          ('~':rest) -> do
+            (n, r) <- parseUnary (dropWhile isSpace rest)
+            Just (complement n, r)
+          ('-':rest) | not (null rest) && (head rest /= '-') -> do
+            (n, r) <- parseUnary (dropWhile isSpace rest)
+            Just (negate n, r)
+          _ -> parseAtom s'
+
+        parseAtom s' = case s' of
+          ('(':rest) -> do
+            (n, r) <- parseOr (dropWhile isSpace rest)
+            let r' = dropWhile isSpace r
+            case r' of
+              (')':after) -> Just (n, after)
+              _ -> Nothing
+          ('\'':'\\':'x':rest) -> parseCharHex' rest
+          ('\'':'\\':'X':rest) -> parseCharHex' rest
+          ('\'':'\\':c:'\'':rest) -> Just (escapeChar c, rest)
+          ('\'':c:'\'':rest) -> Just (fromEnum c, rest)
+          ('0':'x':rest) -> parseHexAtom rest
+          ('0':'X':rest) -> parseHexAtom rest
+          _ | not (null s') && isDigit (head s') -> parseDecAtom s'
+            | not (null s') && (isAlpha (head s') || head s' == '_') ->
+                let (name, rest) = span (\c -> isAlphaNum c || c == '_') s'
+                in case Map.lookup name env of
+                     Just v -> Just (v, rest)
+                     Nothing -> Nothing
+            | otherwise -> Nothing
+
+        parseHexAtom h =
+          let digits = takeWhile isHexDigit h
+              after = dropWhile (\c -> c == 'u' || c == 'U' || c == 'l' || c == 'L')
+                                (drop (length digits) h)
+          in if not (null digits)
+             then Just (foldl' (\a c -> a * 16 + digitToInt c) 0 digits, after)
+             else Nothing
+
+        parseDecAtom s' =
+          let digits = takeWhile isDigit s'
+              after = dropWhile (\c -> c == 'u' || c == 'U' || c == 'l' || c == 'L')
+                                (drop (length digits) s')
+          in if not (null digits)
+             then Just (read digits, after)
+             else Nothing
+
+        parseCharHex' h =
+          let digits = takeWhile isHexDigit h
+              rest = drop (length digits) h
+          in if not (null digits) then case rest of
+               ('\'':after) -> Just (foldl' (\a c -> a * 16 + digitToInt c) 0 digits, after)
+               _ -> Just (foldl' (\a c -> a * 16 + digitToInt c) 0 digits, rest)
+             else Nothing
     escapeChar c = case c of
       'n' -> 10; 'r' -> 13; 't' -> 9; '0' -> 0
       'a' -> 7; 'b' -> 8; 'f' -> 12; 'v' -> 11
       _ -> fromEnum c
-    parseCharHex h =
-      let digits = takeWhile isHexDigit h
-      in if not (null digits)
-         then Just (foldl' (\acc c -> acc * 16 + digitToInt c) 0 digits)
-         else Nothing
-    parseHexVal h =
-      let digits = takeWhile isHexDigit h
-          rest   = dropWhile (\c -> isHexDigit c || c == 'u' || c == 'U' || c == 'l' || c == 'L') h
-      in if not (null digits) && all isSpace rest
-         then Just (foldl' (\acc c -> acc * 16 + digitToInt c) 0 digits)
-         else Nothing
 
 isInternal :: Text -> Bool
 isInternal name = T.isPrefixOf "__" name || T.isPrefixOf "_" name
 
 -- | Extract #define integer constants from gcc -dM -E output.
 -- Filters to user-facing constants (uppercase names, no __ prefix).
+-- Uses multi-pass resolution to handle cross-references between macros.
+-- Supports function-like macro expansion for constant evaluation.
 parseDefineConstants :: String -> [CEnumConst]
 parseDefineConstants output =
-  mapMaybe parseLine' (lines output)
-  where
-    parseLine' line = case words line of
-      ["#define", name, val]
-        | not ("__" `isPrefixOf` name)
+  let allLines = lines output
+      -- Parse function-like macros: #define NAME(PARAMS) BODY
+      funcMacros = Map.fromList
+        [(name, (params, body))
+        | line <- allLines
+        , let ws = words line
+        , length ws >= 3
+        , head ws == "#define"
+        , let rest = drop 8 (dropWhile isSpace line) -- skip "#define "
+        , let (nameAndParams, body') = span (/= ')') rest
+        , '(' `elem` nameAndParams  -- has opening paren (function-like macro)
+        , let (name, paramStr) = span (\c -> isAlphaNum c || c == '_') nameAndParams
         , not (null name)
-        , isUpper (head name)
-        , Just n <- parseIntLiteral val
-        -> Just (CEnumConst (T.pack name) n)
-      _ -> Nothing
-    parseIntLiteral s
-      | "0x" `isPrefixOf` s || "0X" `isPrefixOf` s =
-          let hex = drop 2 (filter (\c -> c /= 'U' && c /= 'u' && c /= 'L' && c /= 'l') s)
-          in if all isHexDigit hex && not (null hex)
-             then Just (foldl' (\acc c -> acc * 16 + digitToInt c) 0 hex)
+        , '(' `elem` paramStr
+        , let params = map (filter (\c -> isAlphaNum c || c == '_'))
+                           (splitOn ',' (drop 1 (dropWhile (/= '(') paramStr)))
+        , let body = dropWhile isSpace (drop 1 body')  -- skip ')'
+        , not (null body)
+        ]
+      -- Parse object-like macros (no parens in name)
+      candidates = [(name, val) | line <- allLines
+                                , let ws = words line
+                                , length ws >= 3
+                                , head ws == "#define"
+                                , let name = ws !! 1
+                                , let val = unwords (drop 2 ws)
+                                , not ("__" `isPrefixOf` name)
+                                , not (null name)
+                                , isUpper (head name)
+                                , '(' `notElem` name]
+      -- Multi-pass: resolve simple literals first, then expressions referencing them
+      resolve env [] = (env, [])
+      resolve env todo =
+        let (resolved, remaining) = foldr tryResolve ([], []) todo
+            tryResolve (name, val) (res, rem') =
+              case evalConstExpr env funcMacros val of
+                Just n  -> ((name, n) : res, rem')
+                Nothing -> (res, (name, val) : rem')
+            env' = foldl' (\m (n, v) -> Map.insert n v m) env resolved
+        in if null resolved
+           then (env', [])  -- no progress, stop
+           else let (env'', more) = resolve env' remaining
+                in (env'', map (\(n,v) -> CEnumConst (T.pack n) v) resolved ++ more)
+      (_, consts) = resolve Map.empty candidates
+  in consts
+  where
+    -- Expression evaluator with function-like macro expansion.
+    -- Depth-limited to prevent infinite recursion from circular macros.
+    evalConstExpr :: Map String Int -> Map String ([String], String) -> String -> Maybe Int
+    evalConstExpr env macros = go 8  -- max 8 levels of macro expansion
+      where
+        go 0 s = error $ "macro expansion depth exceeded (possible circular #define): " ++ take 80 s
+        go depth s = case parseOr depth (dropWhile isSpace s) of
+          Just (n, rest) | all isSpace rest -> Just n
+          _ -> Nothing
+
+        parseOr d = parseBinChain [("|", (.|.))] (parseXor d)
+        parseXor d = parseBinChain [("^", xor)] (parseAnd d)
+        parseAnd d = parseBinChain [("&", (.&.))] (parseShift d)
+        parseShift d = parseBinChain [("<<", shiftL), (">>", shiftR)] (parseAdd d)
+        parseAdd d = parseBinChain [("+", (+)), ("-", (-))] (parseMul d)
+        parseMul d = parseBinChain [("*", (*))] (parseUnary d)
+
+        parseBinChain ops next s' = do
+          (l, r) <- next s'
+          go l (dropWhile isSpace r)
+          where
+            go l r' = case matchOp ops r' of
+              Just (op, after) -> do
+                (r2, rest) <- next (dropWhile isSpace after)
+                go (op l r2) (dropWhile isSpace rest)
+              Nothing -> Just (l, r')
+            matchOp [] _ = Nothing
+            matchOp ((sym, op):os') r'
+              | sym `isPrefixOf` r'
+              , not (sym == "|" && "||" `isPrefixOf` r')
+              , not (sym == "&" && "&&" `isPrefixOf` r')
+              = Just (op, drop (length sym) r')
+              | otherwise = matchOp os' r'
+
+        parseUnary d s' = case s' of
+          ('~':rest) -> do
+            (n, r) <- parseUnary d (dropWhile isSpace rest)
+            Just (complement n, r)
+          ('-':rest) | not (null rest) && head rest /= '-' -> do
+            (n, r) <- parseUnary d (dropWhile isSpace rest)
+            Just (negate n, r)
+          _ -> parseAtom d s'
+
+        parseAtom d s' = case s' of
+          ('(':rest) -> do
+            (n, r) <- parseOr d (dropWhile isSpace rest)
+            let r' = dropWhile isSpace r
+            case r' of
+              (')':after) -> Just (n, after)
+              _ -> Nothing
+          ('0':'x':rest) -> parseHexAtom rest
+          ('0':'X':rest) -> parseHexAtom rest
+          _ | not (null s') && isDigit (head s') -> parseDecAtom s'
+            | not (null s') && (isAlpha (head s') || head s' == '_') ->
+                let (name, rest) = span (\c -> isAlphaNum c || c == '_') s'
+                    rest' = dropWhile isSpace rest
+                in case rest' of
+                     -- Function-like macro call: NAME(args)
+                     ('(':afterParen) ->
+                       case Map.lookup name macros of
+                         Just (params, body) -> expandMacro d params body afterParen
+                         Nothing -> Nothing
+                     -- Simple name reference
+                     _ -> case Map.lookup name env of
+                            Just v -> Just (v, rest)
+                            Nothing -> Nothing
+            | otherwise -> Nothing
+
+        -- Expand a function-like macro by substituting params with evaluated args
+        expandMacro d params body afterParen =
+          let argStr = takeWhile (/= ')') afterParen
+              afterClose = drop 1 (dropWhile (/= ')') afterParen)
+              args = splitTopLevelCommas argStr
+              substituted = substituteParams (zip params args) body
+          in case go (d - 1) substituted of
+               Just n -> Just (n, afterClose)
+               Nothing -> Nothing
+
+        -- Split on commas but respect parentheses
+        splitTopLevelCommas s' = go 0 "" s'
+          where
+            go _ cur [] = [reverse cur]
+            go 0 cur (',':cs) = reverse cur : go 0 "" cs
+            go n cur ('(':cs) = go (n+1) ('(':cur) cs
+            go n cur (')':cs) = go (max 0 (n-1)) (')':cur) cs
+            go n cur (c:cs)   = go n (c:cur) cs
+
+        -- Substitute parameter names with argument text in macro body
+        substituteParams [] body = body
+        substituteParams ((param, arg):rest) body =
+          substituteParams rest (replaceAll param (dropWhile isSpace arg) body)
+
+        replaceAll _ _ [] = []
+        replaceAll param arg s'@(c:cs)
+          | param `isPrefixOf` s'
+          , let after = drop (length param) s'
+          , null after || not (isAlphaNum (head after) || head after == '_')
+          , null s' || c == head param  -- sanity
+          = arg ++ replaceAll param arg after
+          | otherwise = c : replaceAll param arg cs
+
+        parseHexAtom h =
+          let digits = takeWhile isHexDigit h
+              after = dropWhile (\c -> c == 'u' || c == 'U' || c == 'l' || c == 'L')
+                                (drop (length digits) h)
+          in if not (null digits)
+             then Just (foldl' (\a c -> a * 16 + digitToInt c) 0 digits, after)
              else Nothing
-      | all isDigit s, not (null s) = Just (read s)
-      | all (\c -> isDigit c || c == 'U' || c == 'u' || c == 'L' || c == 'l') s, not (null s) =
-          let digits = filter isDigit s
-          in if null digits then Nothing else Just (read digits)
-      | otherwise = Nothing
+
+        parseDecAtom s' =
+          let digits = takeWhile isDigit s'
+              after = dropWhile (\c -> c == 'u' || c == 'U' || c == 'l' || c == 'L')
+                                (drop (length digits) s')
+          in if not (null digits)
+             then Just (read digits, after)
+             else Nothing
 
 -- | Run gcc -dM -E to extract all macro definitions as text
 extractDefines :: String -> [String] -> String -> IO (Either String String)
