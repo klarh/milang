@@ -19,6 +19,7 @@ Milang can call C functions directly by importing a `.h` header file. The compil
 | `float` | `Float' 32` | `float` |
 | `char*` | `Str` | `char*` |
 | `void*`, opaque pointers | Opaque handle | `void*` |
+| `Nothing` (milang value) | NULL pointer | `NULL` |
 | `void` return | `Int` (0) | — |
 | `typedef struct { ... } Name` | Record | struct |
 | `typedef enum { ... } Name` | `Int` constants | `int64_t` |
@@ -201,6 +202,27 @@ ann ffi ns = values =>
 ```
 
 This transforms `point_components(point, &out1, &out2)` into a function that returns `{out1 = ..., out2 = ...}`. Parameter indices are 0-based positions in the C function signature.
+
+For out-parameters that are opaque pointers (e.g., union types or structs you don't want to map field-by-field), use `"ptr:TypeName"` as the ctype:
+
+```milang
+ann ffi ns = values =>
+  ffi.out "poll_event" |> ffi.param 0 "ptr:SDL_Event"
+```
+
+This allocates `sizeof(SDL_Event)` on the heap, passes the pointer directly (not `&`), and returns it as an opaque handle. You can then use `ffi.opaque` with `ffi.accessor` to read fields from the returned pointer.
+
+### Nullable Pointers (Nothing → NULL)
+
+Any C function parameter typed as a pointer (`void*`, `struct*`, etc.) accepts `Nothing` as a milang value, which is passed as `NULL` to C. This is useful for optional parameters:
+
+```milang
+-- SDL_RenderCopy(renderer, texture, srcrect, dstrect)
+-- Pass Nothing for srcrect and dstrect to use the full texture
+lib.SDL_RenderCopy renderer texture Nothing Nothing
+```
+
+Non-`Nothing` values are passed as normal pointers. This works for all pointer parameters automatically — no annotation is needed.
 
 ### Opaque Type Annotations
 
