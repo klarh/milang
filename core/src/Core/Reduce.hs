@@ -414,9 +414,9 @@ evalSCC d env (AcyclicSCC b) =
       env2 = case val of
         Error msg -> envAddWarning (GeneralWarning (bindPos b) (name <> ": " <> msg)) env1
         _         -> env1
-  in if isConcrete val || isNamespaceVal val
-     then envInsert name val env2
-     else env2
+  in case val of
+       Error _ -> env2  -- don't insert error nodes (type mismatches, etc.)
+       _       -> envInsert name val env2
 
 evalSCC _ env (CyclicSCC bs) =
   let recNames = Set.fromList (map bindName bs)
@@ -1791,7 +1791,7 @@ typeCheckBindings env bindings =
       -- composition type mismatches (e.g. 2 * toString(...)) become visible.
       reducedWarns = concatMap (\b ->
         case envLookup (bindName b) env of
-          Just val | not (isPreludePos (bindPos b)) ->
+          Just val | not (isPreludePos (bindPos b)), isConcrete val ->
             checkOperands tenv (bindPos b) (bindName b) val
           _ -> []) valueBinds
   in origWarns ++ reducedWarns
