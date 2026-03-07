@@ -472,15 +472,22 @@ reduceApp d env (Lam p body) arg =
 -- Int'/UInt'/Float' are uppercase names, so they auto-construct as records.
 -- After first arg (width), we get Record "Int'" [_0=width].
 -- On second arg (value), we intercept and produce SizedInt/SizedFloat.
+-- When val is a literal, we clamp at compile time.
+-- When val is a residual, we emit a runtime clamp call.
 reduceApp _ _ (Record "Int'" [b]) val
   | Just w <- intVal (bindBody b), Just n <- intVal val =
       let w' = fromInteger w in SizedInt (clampSigned w' n) w' True
+  | Just w <- intVal (bindBody b) =
+      App (App (Name "__sized_int") (IntLit w)) val
 reduceApp _ _ (Record "UInt'" [b]) val
   | Just w <- intVal (bindBody b), Just n <- intVal val =
       let w' = fromInteger w in SizedInt (clampUnsigned w' n) w' False
+  | Just w <- intVal (bindBody b) =
+      App (App (Name "__sized_uint") (IntLit w)) val
 reduceApp _ _ (Record "Float'" [b]) val
   | Just w <- intVal (bindBody b), Just d <- floatVal val = SizedFloat d (fromInteger w)
   | Just w <- intVal (bindBody b), Just n <- intVal val   = SizedFloat (fromInteger n) (fromInteger w)
+  | Just _ <- intVal (bindBody b) = val  -- Float coercion is a no-op at runtime
 reduceApp _ _ (Record tag fields) arg =
   -- Auto-constructor application: extend record with positional field
   let idx = length fields
@@ -547,6 +554,12 @@ reduceApp _ _ (App (Name "join") (StringLit delim)) lst
     consToStrings (Record "Cons" [hd, tl])
       | StringLit s <- bindBody hd = (s :) <$> consToStrings (bindBody tl)
     consToStrings _ = Nothing
+-- Builtin: __sized_int w val — runtime signed int clamping
+reduceApp _ _ (App (Name "__sized_int") (IntLit w)) val
+  | Just n <- intVal val = let w' = fromInteger w in SizedInt (clampSigned w' n) w' True
+-- Builtin: __sized_uint w val — runtime unsigned int clamping
+reduceApp _ _ (App (Name "__sized_uint") (IntLit w)) val
+  | Just n <- intVal val = let w' = fromInteger w in SizedInt (clampUnsigned w' n) w' False
 -- Builtin: __ffi_apply annotateExpr namespace
 -- Injects the backend-specific ffi object as first arg to the annotate function,
 -- applies it to the namespace, processes descriptors, and returns a modified namespace.

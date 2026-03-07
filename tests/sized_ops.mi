@@ -42,6 +42,10 @@ p = UInt' 16 1000
 q :: Float' 32
 q = Float' 32 1.5
 
+-- Runtime consistency: same results as compile-time
+add_i8 a b = (Int' 8 a) + (Int' 8 b)
+add_u8 a b = (UInt' 8 a) + (UInt' 8 b)
+
 main world =
   pr = world.io.println
   pr (toString a)   -- 127
@@ -61,3 +65,6 @@ main world =
   pr (toString o)   -- 42
   pr (toString p)   -- 1000
   pr (toString q)   -- 1.5
+  -- Runtime consistency: compile-time and runtime must agree
+  pr (toString (add_i8 100 50))   -- -106 (same as compile-time n)
+  pr (toString (add_u8 200 100))  -- 44   (300 mod 256)
