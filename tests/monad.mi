@@ -1,36 +1,7 @@
--- Monad system test: => operator, quote/splice monadic desugaring
--- Tests IO sequencing, Maybe monad, and named bindings
+-- Monad system test: => operator, prelude monad, Maybe monad
+-- Tests that monad/maybe from prelude work for short-circuiting
 
-__AstNode = {App fn arg; Var name; Lam param body}
-
-is_stmt name = indexOf name "_stmt_" == 0
-
-go_then field rest = App {fn = App {fn = Var {name = "_m_bind"}; arg = field.val}; arg = Lam {param = "_"; body = rest}}
-go_bind field rest = App {fn = App {fn = Var {name = "_m_bind"}; arg = field.val}; arg = Lam {param = field.name; body = rest}}
-
-go fields = fields ->
-  Nil = Var {name = "_m_ret"}
-  Cons field (Nil) = App {fn = Var {name = "_m_ret"}; arg = field.val}
-  Cons field rest = if (is_stmt field.name) (go_then field (go rest)) (go_bind field (go rest))
-
-monad defn #block = $(go block.fields)
-  _m_bind = defn.bind
-  _m_ret = defn.return
-
--- IO monad: bind forces evaluation via _seq
-io_bind a f = f a
-  _seq = a
-
-io = monad ({bind = io_bind; return = \v -> v})
-
--- Maybe monad: short-circuits on Nothing
-maybe_bind val f = val ->
-  Nothing = Nothing
-  Just {_0 = x} = f x
-
-maybe = monad ({bind = maybe_bind; return = \v -> Just v})
-
--- Value collector: extracts block values into a list
+-- Value collector using #block
 collect #block = go_collect block.fields
 go_collect fields = fields ->
   Nil = Nil
@@ -39,13 +10,7 @@ go_collect fields = fields ->
 safediv a b = if (b == 0) Nothing (Just (a / b))
 
 main world =
-  -- Test IO sequencing
-  io =>
-    world.io.println "io: one"
-    world.io.println "io: two"
-    world.io.println "io: three"
-
-  -- Test Maybe monad (success case)
+  -- Test Maybe monad from prelude (success case)
   r1 = maybe =>
     x = safediv 10 2
     y = safediv x 1
@@ -58,6 +23,14 @@ main world =
     y = safediv x 5
     y
   world.io.println ("maybe fail: " + toString r2)
+
+  -- Test custom monad (identity)
+  id_m = monad ({bind = \a f -> f a; return = \v -> v})
+  r3 = id_m =>
+    x = 10
+    y = x + 5
+    y * 2
+  world.io.println ("identity: " + toString r3)
 
   -- Test value collector with =>
   vals = collect =>

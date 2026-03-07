@@ -31,9 +31,9 @@ r9 = unwords ["a", "b", "c"]
 r10 = fst {fst = 42; snd = "hello"}
 r11 = snd {fst = 42; snd = "hello"}
 
--- maybe
-r12 = maybe 0 (\x -> x * 2) (Just 21)
-r13 = maybe 0 (\x -> x * 2) Nothing
+-- fold on Maybe (replaces from_maybe)
+r12 = fold (\_ x -> x * 2) 0 (Just 21)
+r13 = fold (\_ x -> x * 2) 0 Nothing
 
 -- curry / uncurry
 addPair = uncurry (\a b -> a + b)
