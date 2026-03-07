@@ -869,7 +869,7 @@ cmdRun cc noCache opts = do
   (reduced, li) <- loadAndReduce cc noCache file
   let stripped = stripDeepModules 3 reduced
       cFile = dropExtension file ++ "_core.c"
-      binBase = dropExtension file ++ "_core"
+      binBase = takeDirectory file </> (takeBaseName file ++ "_core")
       extraFlags = nub (linkFlags li)
       extraSrcs  = nub (linkSources li)
       extraIncls = nub (map ("-I" ++) (linkIncludes li))
