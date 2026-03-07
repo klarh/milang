@@ -216,6 +216,7 @@ ffiFunctions = T.unlines
   , "param index ctype desc = desc <- {params = Cons {head = {index = index; ctype = ctype}; tail = desc.params}}"
   , "opaque name = {_ffi = \"opaque\"; name = name; accessors = []}"
   , "accessor path ctype desc = desc <- {accessors = Cons {head = {name = path; ctype = ctype}; tail = desc.accessors}}"
+  , "include path desc = desc <- {include = path}"
   ]
 
 -- | Build the ffi namespace for the C backend.

@@ -1,0 +1,12 @@
+-- Test ffi.include: opaque type with type definition in a separate header
+ann ffi ns = values =>
+  ffi.opaque "Packet" |> ffi.include "lib/ffi_include_types.h" |> ffi.accessor "id" "uint32" |> ffi.accessor "x" "int32" |> ffi.accessor "y" "int32"
+
+lib = import' "lib/ffi_include_test.h" ({src = "lib/ffi_include_test.c"; annotate = ann})
+
+main world =
+  p = lib.create_packet 42 100 200
+  world.io.println (toString (lib.Packet_id p))
+  world.io.println (toString (lib.Packet_x p))
+  world.io.println (toString (lib.Packet_y p))
+  0

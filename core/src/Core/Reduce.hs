@@ -1058,15 +1058,19 @@ patchOutExpr patches (CFunction hdr fn ret params isStd) =
 patchOutExpr _ e = e
 
 -- | Extract opaque type descriptors.
--- Expected: {_ffi = "opaque"; name = "Name"; accessors = [{field = "x"; ctype = "int32"}; ...]}
-extractOpaqueDesc :: Expr -> [(Text, [(Text, CType)])]
+-- Expected: {_ffi = "opaque"; name = "Name"; accessors = [{field = "x"; ctype = "int32"}; ...]; include = "<header.h>" (optional)}
+extractOpaqueDesc :: Expr -> [(Text, Text, [(Text, CType)])]
 extractOpaqueDesc (Record _ bs) = case fieldLookup "_ffi" bs of
   Just (StringLit "opaque") -> case fieldLookup "name" bs of
-    Just (StringLit name) -> case fieldLookup "accessors" bs >>= consToList of
-      Just accExprs ->
-        let accs = concatMap extractCField accExprs
-        in [(name, accs)]
-      Nothing -> [(name, [])]
+    Just (StringLit name) ->
+      let incl = case fieldLookup "include" bs of
+                   Just (StringLit i) -> i
+                   _                  -> ""
+      in case fieldLookup "accessors" bs >>= consToList of
+        Just accExprs ->
+          let accs = concatMap extractCField accExprs
+          in [(name, incl, accs)]
+        Nothing -> [(name, incl, [])]
     _ -> []
   _ -> []
 extractOpaqueDesc _ = []
@@ -1074,14 +1078,20 @@ extractOpaqueDesc _ = []
 -- | Generate accessor bindings for an opaque type.
 -- Each accessor becomes a CFunction with C name "__acc:StructType:field.path".
 -- The codegen detects this prefix and generates an inline C accessor function.
-ffiOpaqueBindings :: Text -> (Text, [(Text, CType)]) -> [Binding]
-ffiOpaqueBindings hdr (typeName, accessors) =
+-- If an include path is specified, it overrides the default header.
+ffiOpaqueBindings :: Text -> (Text, Text, [(Text, CType)]) -> [Binding]
+ffiOpaqueBindings defaultHdr (typeName, incl, accessors) =
   map mkAccessor accessors
   where
+    accHdr = if T.null incl then defaultHdr else stripAngleBrackets incl
+    isStd = not (T.null incl) && (T.head incl == '<')
+    stripAngleBrackets t
+      | T.head t == '<' && T.last t == '>' = T.init (T.tail t)
+      | otherwise = t
     mkAccessor (fieldPath, ctype) =
       let accName = typeName <> "_" <> T.replace "." "_" fieldPath
           cName = "__acc:" <> typeName <> ":" <> fieldPath
-      in mkBind accName (CFunction hdr cName ctype [CPtr typeName] False)
+      in mkBind accName (CFunction accHdr cName ctype [CPtr typeName] isStd)
 
 -- | Expand union declarations
 expandUnion :: Binding -> [Binding]
