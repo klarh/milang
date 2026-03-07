@@ -59,8 +59,8 @@ preludeSrc = T.unlines
   , "(&&) a #b = if a ($b) 0"
   , "(||) a #b = if a 1 ($b)"
   -- Type aliases
-  , "Int = Int' 64"
-  , "UInt = UInt' 64"
+  , "Int = Int' 0"
+  , "UInt = UInt' 0"
   , "Float = Float' 64"
   , "Byte = UInt' 8"
   -- Trait annotations

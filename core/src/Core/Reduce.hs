@@ -476,12 +476,14 @@ reduceApp d env (Lam p body) arg =
 -- When val is a residual, we emit a runtime clamp call.
 reduceApp _ _ (Record "Int'" [b]) val
   | Just w <- intVal (bindBody b), Just n <- intVal val =
-      let w' = fromInteger w in SizedInt (clampSigned w' n) w' True
+      let w' = fromInteger w in if w' == 0 then SizedInt n w' True
+      else SizedInt (clampSigned w' n) w' True
   | Just w <- intVal (bindBody b) =
       App (App (Name "__sized_int") (IntLit w)) val
 reduceApp _ _ (Record "UInt'" [b]) val
   | Just w <- intVal (bindBody b), Just n <- intVal val =
-      let w' = fromInteger w in SizedInt (clampUnsigned w' n) w' False
+      let w' = fromInteger w in if w' == 0 then SizedInt n w' False
+      else SizedInt (clampUnsigned w' n) w' False
   | Just w <- intVal (bindBody b) =
       App (App (Name "__sized_uint") (IntLit w)) val
 reduceApp _ _ (Record "Float'" [b]) val
@@ -556,10 +558,12 @@ reduceApp _ _ (App (Name "join") (StringLit delim)) lst
     consToStrings _ = Nothing
 -- Builtin: __sized_int w val — runtime signed int clamping
 reduceApp _ _ (App (Name "__sized_int") (IntLit w)) val
-  | Just n <- intVal val = let w' = fromInteger w in SizedInt (clampSigned w' n) w' True
+  | Just n <- intVal val = let w' = fromInteger w in if w' == 0 then SizedInt n w' True
+    else SizedInt (clampSigned w' n) w' True
 -- Builtin: __sized_uint w val — runtime unsigned int clamping
 reduceApp _ _ (App (Name "__sized_uint") (IntLit w)) val
-  | Just n <- intVal val = let w' = fromInteger w in SizedInt (clampUnsigned w' n) w' False
+  | Just n <- intVal val = let w' = fromInteger w in if w' == 0 then SizedInt n w' False
+    else SizedInt (clampUnsigned w' n) w' False
 -- Builtin: __ffi_apply annotateExpr namespace
 -- Injects the backend-specific ffi object as first arg to the annotate function,
 -- applies it to the namespace, processes descriptors, and returns a modified namespace.
@@ -708,9 +712,14 @@ floatVal _               = Nothing
 sizedIntResult :: Integer -> Expr -> Expr -> Expr
 sizedIntResult v (SizedInt _ w1 s1) (SizedInt _ w2 s2) =
   let w = max w1 w2; s = s1 || s2
-  in SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
-sizedIntResult v (SizedInt _ w s) _ = SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
-sizedIntResult v _ (SizedInt _ w s) = SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
+  in if w == 0 then SizedInt v w s
+     else SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
+sizedIntResult v (SizedInt _ w s) _ =
+  if w == 0 then SizedInt v w s
+  else SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
+sizedIntResult v _ (SizedInt _ w s) =
+  if w == 0 then SizedInt v w s
+  else SizedInt (if s then clampSigned w v else clampUnsigned w v) w s
 sizedIntResult v _ _ = IntLit v
 
 -- | Produce a sized float result preserving width
