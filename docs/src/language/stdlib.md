@@ -56,21 +56,24 @@ These functions are designed to be extended via [open function chaining](./open-
 
 ## List Functions
 
+These functions work on `List` values. Functions marked with † also work on `Maybe` via [additive type annotations](./types.md#additive-type-annotations-ad-hoc-polymorphism).
+
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `null` | `List : Num` | Returns `1` if list is `Nil`, `0` otherwise. |
+| `null` † | `List : Num` | Returns `1` if list is `Nil` (or `Nothing`), `0` otherwise. |
 | `head` | `List : Maybe` | First element wrapped in `Maybe` (`Nothing` if empty). |
 | `tail` | `List : Maybe` | Tail wrapped in `Maybe` (`Nothing` if empty). |
-| `fold` | `(a : b : a) : a : List : a` | Left fold over a list. |
-| `map` | `(a : b) : List : List` | Apply function to each element. |
-| `filter` | `(a : Num) : List : List` | Keep elements where predicate is `truthy`. |
-| `concat` | `List : List : List` | Concatenate two lists. |
+| `fold` † | `(a : b : a) : a : List : a` | Left fold over a list (or extracts `Maybe` value with default). |
+| `map` † | `(a : b) : List : List` | Apply function to each element (or to `Just` value). |
+| `filter` † | `(a : Num) : List : List` | Keep elements where predicate is `truthy` (or filter `Just` value). |
+| `concat` † | `List : List : List` | Concatenate two lists (or combine two `Maybe`s, preferring first `Just`). |
+| `flatMap` † | `(a : List) : List : List` | Map then flatten (or chain `Maybe` computations). |
 | `push` | `List : a : List` | Append element to end of list. |
 | `at` | `List : Num : Maybe` | Get element at index (zero-based); returns `Nothing` if out of bounds. `at'` takes index first. |
 | `sum` | `List : Num` | Sum of numeric list. |
 | `product` | `List : Num` | Product of numeric list. |
-| `any` | `(a : Num) : List : Num` | `1` if predicate is `truthy` for any element. |
-| `all` | `(a : Num) : List : Num` | `1` if predicate is `truthy` for all elements. |
+| `any` † | `(a : Num) : List : Num` | `1` if predicate is `truthy` for any element (or for `Just` value). |
+| `all` † | `(a : Num) : List : Num` | `1` if predicate is `truthy` for all elements (or for `Just` value). |
 | `contains` | `List : a : Num` | `1` if list contains element (via `eq`). |
 | `range` | `Num : Num : List` | Integer range `[start, end)`. |
 | `zip` | `List : List : List` | Pair corresponding elements into 2-element lists. |
@@ -81,6 +84,7 @@ These functions are designed to be extended via [open function chaining](./open-
 | `drop` | `Num : List : List` | Drop first `n` elements. |
 | `enumerate` | `List : List` | Pair each element with its index: `[[0, a], [1, b], ...]`. |
 | `join` | `Str : List : Str` | Join string list with separator. |
+| `len` † | `a : Num` | Length of a string, list, or `Maybe` (`1` for `Just`, `0` for `Nothing`). |
 
 ## Numeric Functions
 
@@ -97,8 +101,7 @@ String operations provided by the C runtime:
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `len` | `a : Num` | Length of a string or list; returns `0` for non-iterable values. |
-| `strlen` | `Str : Num` | Length of a string (alias for `len`). |
+| `strlen` | `Str : Num` | Length of a string. |
 | `charAt` | `Str : Num : Maybe` | Character at index; returns `Just` a single-char string when index is valid, or `Nothing` when out of range. |
 | `indexOf` | `Str : Str : Num` | Index of first occurrence of substring (`-1` if not found). |
 | `slice` | `Str : Num : Num : Str` | Substring from start index to end index. |
@@ -128,6 +131,36 @@ Functions for inspecting and modifying record structure at runtime:
 | `getField` | `Record : Str : Maybe` | Dynamic field access by name; returns `Just value` if present, `Nothing` otherwise. |
 | `setField` | `Record : Str : a : Record` | Return copy with field updated; on non-record values returns the original value unchanged. |
 
+## Metaprogramming
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `values` | `List : List` | Block-to-list collector. When used with `=>`, collects each line of the block as a list element. Used by the FFI annotation DSL. |
+
+## Monads
+
+Milang provides a lightweight monad system using quote/splice. The `bind` function sequences computations that may fail or produce multiple results:
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `bind` | `m : (a : m) : m` | Monadic bind. Dispatches to `list_bind` or `maybe_bind` based on the input type. |
+| `list_bind` | `List : (a : List) : List` | FlatMap for lists. |
+| `maybe_bind` | `Maybe : (a : Maybe) : Maybe` | Chain Maybe computations; short-circuits on `Nothing`. |
+
+```milang
+-- Maybe monad: short-circuits on Nothing
+result = bind (Just 5) \x ->
+  bind (Just (x + 1)) \y ->
+    Just (x + y)
+-- result = Just 11
+
+-- List monad: cartesian product
+pairs = bind [1, 2] \x ->
+  bind [10, 20] \y ->
+    [x + y]
+-- pairs = [11, 21, 12, 22]
+```
+
 ## Memory Management
 
 | Function | Signature | Description |
@@ -142,6 +175,7 @@ Functions for inspecting and modifying record structure at runtime:
 | `>>` | `(a : b) : (b : c) : a : c` | Forward composition. |
 | `<<` | `(b : c) : (a : b) : a : c` | Backward composition. |
 | `<-` | `Record : Record : Record` | Record merge: `base <- overlay`. |
+| `=>` | `(a : b) : a : b` | Block argument: `f => body` passes indented block as last argument. |
 | `&&` | `a : a : Num` | Short-circuit logical AND (via `truthy`). |
 | `\|\|` | `a : a : Num` | Short-circuit logical OR (via `truthy`). |
 | `:` | `a : List : List` | Cons (prepend element to list). |

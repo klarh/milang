@@ -182,7 +182,7 @@ parseParamType sm param
            ["const", "char"]  -> Just CString
            ["int"]            -> Just (COut (CInt 32))
            ["long"]           -> Just (COut (CInt 64))
-           ["unsigned"]       -> Just (COut (CInt 32))
+           ["unsigned"]       -> Just (COut (CUInt 32))
            ["double"]         -> Just (COut CFloat)
            ["float"]          -> Nothing
            ["long", "double"] -> Nothing
@@ -209,21 +209,21 @@ parseCType sm s
       ["long"]            -> Just (CInt 64)
       ["long", "int"]     -> Just (CInt 64)
       ["long", "long"]    -> Just (CInt 64)
-      ["unsigned"]        -> Just (CInt 32)
-      ["unsigned", "int"] -> Just (CInt 32)
-      ["unsigned", "long"] -> Just (CInt 64)
-      ["unsigned", "long", "long"] -> Just (CInt 64)
+      ["unsigned"]        -> Just (CUInt 32)
+      ["unsigned", "int"] -> Just (CUInt 32)
+      ["unsigned", "long"] -> Just (CUInt 64)
+      ["unsigned", "long", "long"] -> Just (CUInt 64)
       ["short"]           -> Just (CInt 16)
-      ["unsigned", "short"] -> Just (CInt 16)
+      ["unsigned", "short"] -> Just (CUInt 16)
       ["int8_t"]          -> Just (CInt 8)
       ["int16_t"]         -> Just (CInt 16)
       ["int32_t"]         -> Just (CInt 32)
       ["int64_t"]         -> Just (CInt 64)
-      ["uint8_t"]         -> Just (CInt 8)
-      ["uint16_t"]        -> Just (CInt 16)
-      ["uint32_t"]        -> Just (CInt 32)
-      ["uint64_t"]        -> Just (CInt 64)
-      ["size_t"]          -> Just (CInt 64)
+      ["uint8_t"]         -> Just (CUInt 8)
+      ["uint16_t"]        -> Just (CUInt 16)
+      ["uint32_t"]        -> Just (CUInt 32)
+      ["uint64_t"]        -> Just (CUInt 64)
+      ["size_t"]          -> Just (CUInt 64)
       ["ssize_t"]         -> Just (CInt 64)
       ["ptrdiff_t"]       -> Just (CInt 64)
       ["double"]          -> Just CFloat
@@ -232,7 +232,7 @@ parseCType sm s
       ["void"]            -> Just CVoid
       ["char"]            -> Just (CInt 8)
       ["signed", "char"]  -> Just (CInt 8)
-      ["unsigned", "char"] -> Just (CInt 8)
+      ["unsigned", "char"] -> Just (CUInt 8)
       ["const", "char"]   -> Just (CInt 8)
       _ -> case words s of
         [name] -> lookupTypeDef sm name

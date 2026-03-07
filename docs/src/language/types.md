@@ -182,3 +182,22 @@ This works because `::` on its own line clearly marks the boundary between value
 ## Type Checking Behavior
 
 The type checker is bidirectional: it pushes `::` annotations downward and infers types bottom-up. Type errors are reported as errors. Checking is structural — records match by shape (field names and types), not by name. Any record with the right `fields` satisfies a record type.
+
+## Additive Type Annotations (Ad-Hoc Polymorphism)
+
+Multiple `::` annotations on the same binding declare an overloaded function. The type checker tries each annotation and succeeds if **any** of them match the actual usage:
+
+```milang
+map :: (a : b) : List : List
+map :: (a : b) : Maybe : Maybe
+map f xs = ...
+```
+
+This lets a single function work across different types without a trait system. The prelude uses additive annotations for functions like `map`, `fold`, `filter`, `concat`, and `flatMap` so they work on both `List` and `Maybe` values.
+
+Additive annotations are purely additive — each `::` line adds an alternative, it never replaces a previous one. This is useful for extending prelude functions in your own code:
+
+```milang
+-- Add a new overload for map on a custom type
+map :: (a : b) : MyContainer : MyContainer
+```

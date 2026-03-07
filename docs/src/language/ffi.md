@@ -4,17 +4,28 @@ Milang can call C functions directly by importing a `.h` header file. The compil
 
 ## Type Mapping
 
-| C type | Milang type | Notes |
-|--------|-------------|-------|
-| `int`, `long`, `int64_t`, `size_t` | `Int` | All integer types map to 64-bit int |
-| `double` | `Float` | 64-bit float |
-| `float` | `Float` | 32-bit float (promoted automatically in mixed arithmetic) |
-| `char*` | `Str` | C strings |
-| `void*`, opaque struct pointers | Opaque handle | Use with `gc_manage` for cleanup |
-| `void` return | `Int` (0) | Void functions return 0 |
-| `typedef struct { ... } Name` | Record | Fields become record fields |
-| `typedef enum { ... } Name` | `Int` constants | Enum members exposed on module record |
-| `typedef ret (*Name)(params)` | Callback | Pass milang functions as C callbacks |
+| C type | Milang type | C codegen type | Notes |
+|--------|-------------|----------------|-------|
+| `int` | `Int` | `int` | 32-bit signed |
+| `long`, `int64_t` | `Int` | `int64_t` | 64-bit signed |
+| `short`, `int16_t` | `Int` | `int16_t` | 16-bit signed |
+| `int8_t`, `char` | `Int` | `int8_t` | 8-bit signed |
+| `ssize_t`, `ptrdiff_t` | `Int` | `int64_t` | 64-bit signed |
+| `unsigned int`, `uint32_t` | `Int` | `unsigned int` | 32-bit unsigned |
+| `unsigned long`, `uint64_t`, `size_t` | `Int` | `uint64_t` | 64-bit unsigned |
+| `unsigned short`, `uint16_t` | `Int` | `uint16_t` | 16-bit unsigned |
+| `uint8_t`, `unsigned char` | `Int` | `uint8_t` | 8-bit unsigned |
+| `double` | `Float` | `double` | 64-bit float |
+| `float` | `Float` | `float` | 32-bit float |
+| `char*` | `Str` | `char*` | C strings |
+| `void*`, opaque pointers | Opaque handle | `void*` | Use with `gc_manage` for cleanup |
+| `void` return | `Int` (0) | — | Void functions return 0 |
+| `typedef struct { ... } Name` | Record | struct | Fields become record fields |
+| `typedef enum { ... } Name` | `Int` constants | `int64_t` | Enum members exposed on module record |
+| `typedef ret (*Name)(params)` | Callback | function pointer | Pass milang functions as C callbacks |
+| `#define NAME value` | `Int` constant | — | Integer and hex `#define`s exposed on module record |
+
+> **Note:** The compiler tracks both integer bit width (8, 16, 32, 64) and signedness internally, emitting correctly-typed C code (e.g., `uint32_t` for unsigned 32-bit values). At the milang language level, all integer types appear as `Int` — signedness is only relevant for the generated C code and struct field layout.
 
 
 ## Importing C Headers
@@ -61,6 +72,7 @@ The options record passed to `import'` supports several `fields`:
 | `flags` | `Str` | Additional compiler flags (e.g. `"-O2 -Wall"`) |
 | `include` | `Str` | Additional include directory |
 | `pkg` | `Str` | pkg-config package name — auto-discovers flags and includes |
+| `annotate` | `Function` | Annotation function for struct/out/opaque declarations (see [FFI Annotations](#ffi-annotations)) |
 
 Example with multiple options:
 
@@ -80,12 +92,13 @@ json = import' "json-c/json.h" ({pkg = "json-c"})
 
 ## How It Works
 
-1. The import resolver reads the `.h` file and extracts function declarations, struct definitions, enum constants, and function pointer typedefs.
-2. Each C function becomes an internal `CFunction` AST node with its milang type signature.
+1. The import resolver reads the `.h` file and extracts function declarations, struct definitions, enum constants, `#define` integer constants, and function pointer typedefs.
+2. Each C function becomes an internal `CFunction` AST node with its milang type signature. Integer types preserve their bit width (e.g., `int` → 32-bit, `int64_t` → 64-bit).
 3. Struct and enum type names are resolved so they can be used as parameter and return types.
-4. Enum constants become `Int` bindings on the module record.
-5. During C code generation the header is `#include`d and calls are emitted as direct C function calls.
-6. Any associated source files are compiled and linked automatically.
+4. Enum constants and `#define` integer constants become `Int` bindings on the module record.
+5. If an `annotate` function is provided, it is called with a compiler-provided `ffi` object and the namespace. The function returns descriptors that generate struct constructors, out-parameter wrappers, or opaque type accessors.
+6. During C code generation the header is `#include`d and calls are emitted as direct C function calls. Duplicate `#include` directives are automatically deduplicated.
+7. Any associated source files are compiled and linked automatically.
 
 ## Structs by Value
 
@@ -128,6 +141,90 @@ c.color_value c.BLUE     -- uses enum constant as argument
 ```
 
 Both `typedef enum { ... } Name;` and `enum Name { ... };` are supported. Auto-incrementing values work as in C.
+
+## `#define` Constants
+
+Integer `#define` constants in headers are extracted and exposed on the module record:
+
+```c
+// limits.h
+#define MAX_SIZE 1024
+#define FLAG_A 0x01
+#define FLAG_B 0x02
+```
+
+```milang
+lib = import "limits.h"
+lib.MAX_SIZE     -- 1024
+lib.FLAG_A       -- 1
+```
+
+Both decimal and hexadecimal integer constants are supported. Non-integer `#define`s (macros, strings, expressions) are silently skipped.
+
+## FFI Annotations
+
+For C libraries where the compiler needs more information than the header alone provides — struct constructors, out-parameters, or opaque type accessors — use the `annotate` option. The annotation function receives a compiler-provided `ffi` object and the imported namespace:
+
+```milang
+lib = import' "point.h" ({
+  src = "point.c"
+  annotate = ann
+})
+
+ann ffi ns = values =>
+  ffi.struct "Point" |> ffi.field "x" "int32" |> ffi.field "y" "int32"
+```
+
+### Struct Annotations
+
+`ffi.struct` declares a C struct type and its fields. This generates:
+
+1. A **constructor function** (`make_Name`) that creates a milang record from arguments
+2. **Automatic type patching** — C functions using opaque pointers (`void*`) to this struct type get rewritten to accept/return milang records with proper struct layout
+
+```milang
+ann ffi ns = values =>
+  ffi.struct "Point" |> ffi.field "x" "int32" |> ffi.field "y" "int32"
+```
+
+After annotation, `lib.make_Point 10 20` creates a `Point` struct value, and functions like `lib.point_sum` that take `Point*` parameters accept records directly.
+
+Available field types: `"int8"`, `"int16"`, `"int32"`, `"int64"`, `"uint8"`, `"uint16"`, `"uint32"`, `"uint64"`, `"float32"`, `"float64"`, `"string"`, `"ptr"`.
+
+### Out-Parameter Annotations
+
+C functions that return values through pointer parameters can be annotated so they return a record of results instead:
+
+```milang
+ann ffi ns = values =>
+  ffi.out "point_components" |> ffi.param 1 "int32" |> ffi.param 2 "int32"
+```
+
+This transforms `point_components(point, &out1, &out2)` into a function that returns `{out1 = ..., out2 = ...}`. Parameter indices are 0-based positions in the C function signature.
+
+### Opaque Type Annotations
+
+For opaque struct types (where you can't or don't want to map the full struct layout), use `ffi.opaque` with `ffi.accessor` to generate field accessor functions:
+
+```milang
+ann ffi ns = values =>
+  ffi.opaque "Event"
+    |> ffi.accessor "type" "int32"
+    |> ffi.accessor "detail.code" "int32"
+```
+
+This generates accessor functions on the module: `lib.Event_type event` and `lib.Event_detail_code event`. Dot-separated paths (like `detail.code`) access nested struct fields. The accessor functions are compiled to inline C that casts the opaque pointer and reads the field directly.
+
+### Combining Annotations
+
+Multiple annotations can be declared in a single `values =>` block:
+
+```milang
+ann ffi ns = values =>
+  ffi.struct "Point" |> ffi.field "x" "int32" |> ffi.field "y" "int32"
+  ffi.out "decompose" |> ffi.param 1 "int32" |> ffi.param 2 "int32"
+  ffi.opaque "Handle" |> ffi.accessor "id" "int64"
+```
 
 ## Callbacks (Function Pointers)
 

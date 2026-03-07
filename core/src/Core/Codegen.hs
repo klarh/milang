@@ -404,22 +404,32 @@ cIntTypeName 32 = "int"
 cIntTypeName 64 = "int64_t"
 cIntTypeName _  = "int64_t"
 
+-- | Map CUInt bit width to C type name
+cUIntTypeName :: Int -> String
+cUIntTypeName 8  = "uint8_t"
+cUIntTypeName 16 = "uint16_t"
+cUIntTypeName 32 = "unsigned int"
+cUIntTypeName 64 = "uint64_t"
+cUIntTypeName _  = "uint64_t"
+
 -- | C type name for out-parameter declarations
 cOutDeclType :: CType -> String
-cOutDeclType (CInt w) = cIntTypeName w
-cOutDeclType CFloat   = "double"
-cOutDeclType CFloat32 = "float"
-cOutDeclType _        = "int"
+cOutDeclType (CInt w)  = cIntTypeName w
+cOutDeclType (CUInt w) = cUIntTypeName w
+cOutDeclType CFloat    = "double"
+cOutDeclType CFloat32  = "float"
+cOutDeclType _         = "int"
 
 -- | Extract a C value from a MiVal (reverse of cRetToMi)
 miValToC :: CType -> String -> String
-miValToC (CInt w) name = "(" ++ cIntTypeName w ++ ")(" ++ name ++ ".as.i)"
-miValToC CFloat name   = "(double)(" ++ name ++ ".as.f)"
-miValToC CFloat32 name = "(float)(" ++ name ++ ".as.f32)"
-miValToC CString name  = name ++ ".as.str.data"
-miValToC (CPtr _) name = name ++ ".as.ptr"
-miValToC CVoid _       = ""
-miValToC _ name        = name ++ ".as.i"
+miValToC (CInt w) name  = "(" ++ cIntTypeName w ++ ")(" ++ name ++ ".as.i)"
+miValToC (CUInt w) name = "(" ++ cUIntTypeName w ++ ")((uint64_t)" ++ name ++ ".as.i)"
+miValToC CFloat name    = "(double)(" ++ name ++ ".as.f)"
+miValToC CFloat32 name  = "(float)(" ++ name ++ ".as.f32)"
+miValToC CString name   = name ++ ".as.str.data"
+miValToC (CPtr _) name  = name ++ ".as.ptr"
+miValToC CVoid _        = ""
+miValToC _ name         = name ++ ".as.i"
 
 buildOutRecord :: [(Int, CType)] -> String
 buildOutRecord outs =
@@ -456,6 +466,7 @@ outToMi t name         = cRetToMi t name
 
 cRetTypeName :: CType -> String
 cRetTypeName (CInt w) = cIntTypeName w
+cRetTypeName (CUInt w) = cUIntTypeName w
 cRetTypeName CFloat  = "double"
 cRetTypeName CFloat32 = "float"
 cRetTypeName CString = "char *"
@@ -507,13 +518,14 @@ cffiCurried st cname retTy allParamTys inputParams outputParams = do
       pure $ "mi_native(" ++ wrapperNames !! 0 ++ ")"
 
 cRetToMi :: CType -> String -> String
-cRetToMi (CInt _) expr = "mi_int((int64_t)(" ++ expr ++ "))"
-cRetToMi CFloat expr   = "mi_float((double)(" ++ expr ++ "))"
-cRetToMi CFloat32 expr = "mi_float32((float)(" ++ expr ++ "))"
-cRetToMi CString expr  = "mi_string(" ++ expr ++ ")"
-cRetToMi CVoid expr    = "(" ++ expr ++ ", mi_int(0))"
-cRetToMi (CPtr _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
-cRetToMi (COut _) _    = "mi_int(0)"
+cRetToMi (CInt _) expr  = "mi_int((int64_t)(" ++ expr ++ "))"
+cRetToMi (CUInt _) expr = "mi_int((int64_t)(" ++ expr ++ "))"
+cRetToMi CFloat expr     = "mi_float((double)(" ++ expr ++ "))"
+cRetToMi CFloat32 expr   = "mi_float32((float)(" ++ expr ++ "))"
+cRetToMi CString expr    = "mi_string(" ++ expr ++ ")"
+cRetToMi CVoid expr      = "(" ++ expr ++ ", mi_int(0))"
+cRetToMi (CPtr _) expr   = "mi_pointer((void*)(" ++ expr ++ "))"
+cRetToMi (COut _) _      = "mi_int(0)"
 cRetToMi (CCallback _ _) expr = "mi_pointer((void*)(" ++ expr ++ "))"
 cRetToMi (CStruct name fields) expr =
   "({ " ++ T.unpack name ++ " _s = " ++ expr ++ "; " ++
@@ -522,9 +534,10 @@ cRetToMi (CStruct name fields) expr =
   "(MiVal[]){" ++ intercalate ", " [cRetToMi ft ("_s." ++ T.unpack fn) | (fn, ft) <- fields] ++ "}); })"
 
 miToCArg :: CType -> String -> String
-miToCArg (CInt w) name = "(" ++ cIntTypeName w ++ ")(" ++ name ++ ".as.i)"
-miToCArg CFloat name   = "mi_to_float(" ++ name ++ ")"
-miToCArg CFloat32 name = "mi_to_float32(" ++ name ++ ")"
+miToCArg (CInt w) name  = "(" ++ cIntTypeName w ++ ")(" ++ name ++ ".as.i)"
+miToCArg (CUInt w) name = "(" ++ cUIntTypeName w ++ ")((uint64_t)" ++ name ++ ".as.i)"
+miToCArg CFloat name    = "mi_to_float(" ++ name ++ ")"
+miToCArg CFloat32 name  = "mi_to_float32(" ++ name ++ ")"
 miToCArg CString name  = name ++ ".as.str.data"
 miToCArg CVoid _       = "/* void */"
 miToCArg (CPtr base) name = let b = T.unpack base in if "FILE" `isInfixOf` b then "(FILE*)mi_raw_ptr(" ++ name ++ ")" else "mi_raw_ptr(" ++ name ++ ")"

@@ -125,6 +125,7 @@ altToJSON (Alt pat guard body) = object $
 
 ctypeToJSON :: CType -> Value
 ctypeToJSON (CInt w)   = String (T.pack $ "int" ++ show w)
+ctypeToJSON (CUInt w)  = String (T.pack $ "uint" ++ show w)
 ctypeToJSON CFloat     = String "float64"
 ctypeToJSON CFloat32   = String "float32"
 ctypeToJSON CString    = String "string"

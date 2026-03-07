@@ -121,6 +121,28 @@ base = {x = 1; y = 2; z = 3}
 updated = base <- {x = 10; z = 30}
 ```
 
+## Block Argument
+
+`f => body` passes `body` as the last argument to `f`, where `body` is an
+indented block. This is useful for passing multi-line expressions cleanly:
+
+```milang
+values => 
+  1
+  2
+  3
+```
+
+The `=>` operator is syntactic sugar — `f => body` is equivalent to `f body`.
+The block is parsed as an indented scope, making it natural for DSLs and
+builder patterns:
+
+```milang
+ann ffi ns = values =>
+  ffi.struct "Point" |> ffi.field "x" "int32" |> ffi.field "y" "int32"
+  ffi.out "decompose" |> ffi.param 1 "int32"
+```
+
 ## Operators as Functions
 
 Wrap any operator in parentheses to use it in prefix (function) position:
