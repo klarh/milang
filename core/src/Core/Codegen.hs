@@ -2185,7 +2185,7 @@ emitPreamble h = hPutStr h $ unlines
   , "static MiVal mi_builtin_gc_manage2(MiVal free_fn, void *env) {"
   , "  MiVal ptr_val = *(MiVal*)env;"
   , "  MiGcManaged *m = (MiGcManaged*)malloc(sizeof(MiGcManaged));"
-  , "  m->ptr = mi_raw_ptr(ptr_val); m->c_finalizer = NULL; m->native_fn = free_fn;"
+  , "  m->ptr = mi_maybe_ptr(ptr_val); m->c_finalizer = NULL; m->native_fn = free_fn;"
   , "  m->gc_mark = 0; m->gc_next = mi_gc_managed_list; mi_gc_managed_list = m;"
   , "  MiVal r; r.type = MI_MANAGED; r.as.ptr = m; return r;"
   , "}"

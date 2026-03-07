@@ -26,6 +26,7 @@ data Env = Env
   { envMap    :: !(Map.Map Text Expr)
   , envRec    :: !(Set.Set Text)      -- recursive (cyclic) names
   , envImpure :: !(Set.Set Text)      -- world-tainted names
+  , envLetBound :: !(Set.Set Text)    -- names from With bindings (have runtime let-binding)
   , envTypes  :: !(Map.Map Text Expr) -- type annotations (:: domain)
   , envTraits :: !(Map.Map Text Expr) -- trait annotations (:~ domain)
   , envWarns  :: ![Warning]           -- accumulated warnings/errors
@@ -38,7 +39,7 @@ data Warning
   deriving (Show)
 
 emptyEnv :: Env
-emptyEnv = Env Map.empty Set.empty Set.empty Map.empty Map.empty []
+emptyEnv = Env Map.empty Set.empty Set.empty Set.empty Map.empty Map.empty []
 
 warnings :: Env -> [Warning]
 warnings = envWarns
@@ -118,7 +119,9 @@ isOperatorName t = not (T.null t) && T.all (`elem` ("+-*/^<>=!&|@%?:" :: String)
 reduce :: Env -> Expr -> (Expr, [Warning])
 reduce env e = case e of
   Namespace _ ->
-    let env' = evalBindings maxDepth env (nsBindings e)
+    let letNames = Set.fromList [bindName b | b <- nsBindings e]
+        envWithLet = env { envLetBound = Set.union letNames (envLetBound env) }
+        env' = evalBindings maxDepth envWithLet (nsBindings e)
         expanded = concatMap expandUnion (nsBindings e)
         (valueBs, annotBs) = partitionBindings expanded
         mergedValues = mergeOpenDefs valueBs
@@ -135,7 +138,9 @@ reduce env e = case e of
 reduceWithEnv :: Env -> Expr -> (Env, Expr, [Warning])
 reduceWithEnv env e = case e of
   Namespace _ ->
-    let env' = evalBindings maxDepth env (nsBindings e)
+    let letNames = Set.fromList [bindName b | b <- nsBindings e]
+        envWithLet = env { envLetBound = Set.union letNames (envLetBound env) }
+        env' = evalBindings maxDepth envWithLet (nsBindings e)
         expanded = concatMap expandUnion (nsBindings e)
         (valueBs, annotBs) = partitionBindings expanded
         mergedValues = mergeOpenDefs valueBs
@@ -160,8 +165,13 @@ reduceD d env (Name n)
   | otherwise =
     case envLookup n env of
       Just (Name m) | m == n -> Name n  -- self-reference; don't recurse
+      Just (Name m) -> reduceD (d - 1) env (Name m)  -- follow name aliases
       Just val@(Lam _ _) -> val
       Just val@(Namespace _) -> val  -- Namespace is a value, don't re-reduce
+      Just val | isConcrete val -> reduceD (d - 1) env val
+      -- Non-concrete value from a With/let binding: keep as Name so the
+      -- runtime evaluates it once (prevents duplicating FFI side effects).
+      Just _ | n `Set.member` envLetBound env -> Name n
       Just val -> reduceD (d - 1) env val
       Nothing
         | isOperatorName n -> Lam "_a" (Lam "_b" (BinOp n (Name "_a") (Name "_b")))
@@ -235,7 +245,11 @@ reduceD d env (Lam p b)
             in Lam p (reduceD d env' b)
 
 reduceD d env (With body bindings) =
-  let env' = evalBindings d env bindings
+  let -- Mark With-bound names so the Name handler knows not to inline
+      -- non-concrete values (prevents duplicating FFI side effects)
+      letNames = Set.fromList [bindName b | b <- bindings]
+      envWithLet = env { envLetBound = Set.union letNames (envLetBound env) }
+      env' = evalBindings d envWithLet bindings
       body' = reduceD d env' body
       bs' = map (reduceBind d env') bindings
       keepBinding b = isResidual (bindBody b) || envIsImpure (bindName b) env'
@@ -256,7 +270,9 @@ reduceD d env (Namespace bindings) =
   let expanded = concatMap expandUnion bindings
       (valueBs, annotBs) = partitionBindings expanded
       mergedValues = mergeOpenDefs valueBs
-      env' = evalBindings d env expanded
+      letNames = Set.fromList [bindName b | b <- expanded]
+      envWithLet = env { envLetBound = Set.union letNames (envLetBound env) }
+      env' = evalBindings d envWithLet expanded
       valBs' = map (reduceBind d env') mergedValues
       annBs' = map (reduceBind d env') annotBs
   in Namespace (valBs' ++ annBs')
@@ -453,9 +469,11 @@ reduceApp d env (Lam p body) arg
              fresh = freshName realName allNames
              body' = substExpr realName (Name fresh) body
              quoted = quoteExpr arg
-         in reduceD d' (envInsert fresh quoted env) body'
+             env' = (envInsert fresh quoted env) { envLetBound = Set.delete fresh (envLetBound env) }
+         in reduceD d' env' body'
        else let quoted = quoteExpr arg
-            in reduceD d' (envInsert realName quoted env) body
+                env' = (envInsert realName quoted env) { envLetBound = Set.delete realName (envLetBound env) }
+            in reduceD d' env' body
 reduceApp d env (Lam p body) arg =
   let d' = d - 1
       argFVs = exprFreeVars arg
@@ -464,9 +482,11 @@ reduceApp d env (Lam p body) arg =
      then let allNames = Set.unions [argFVs, exprFreeVars body, Map.keysSet (envMap env)]
               fresh = freshName p allNames
               body' = substExpr p (Name fresh) body
-              env' = envInsert fresh arg env
+              -- Clear fresh from envLetBound: lambda params shadow let bindings
+              env' = (envInsert fresh arg env) { envLetBound = Set.delete fresh (envLetBound env) }
           in reduceD d' env' body'
-     else let env' = envInsert p arg env
+     else let -- Clear p from envLetBound: lambda params shadow let bindings
+              env' = (envInsert p arg env) { envLetBound = Set.delete p (envLetBound env) }
           in reduceD d' env' body
 -- Sized type constructors: Int' N val, UInt' N val, Float' N val
 -- Int'/UInt'/Float' are uppercase names, so they auto-construct as records.
