@@ -671,6 +671,7 @@ ctypeToTypeExpr ret params =
     ctypeToExpr (CPtr _)    = Name "ptr"  -- opaque pointer (type variable)
     ctypeToExpr (COut ct)   = ctypeToExpr ct
     ctypeToExpr (CStruct name _) = Name name
+    ctypeToExpr (CStructPtr name _) = Name name
     ctypeToExpr (CCallback _ _)  = Name "fn"  -- callback (type variable)
 
 -- | Auto-detect link flags for a C header

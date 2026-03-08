@@ -492,6 +492,7 @@ cRetTypeName (CPtr _) = "void *"
 cRetTypeName CVoid   = "void"
 cRetTypeName (COut ct) = cOutDeclType ct
 cRetTypeName (CStruct name _) = T.unpack name
+cRetTypeName (CStructPtr name _) = T.unpack name ++ " *"
 cRetTypeName (CCallback _ _) = "void*"  -- function pointers as opaque
 
 cffiCurried :: CGState -> String -> CType -> [CType]
@@ -550,6 +551,12 @@ cRetToMi (CStruct name fields) expr =
   "mi_struct_to_record(" ++ show (length fields) ++ ", " ++
   "(const char*[]){" ++ intercalate ", " [show (T.unpack fn) | (fn, _) <- fields] ++ "}, " ++
   "(MiVal[]){" ++ intercalate ", " [cRetToMiRaw ft ("_s." ++ T.unpack fn) | (fn, ft) <- fields] ++ "}); })"
+cRetToMi (CStructPtr name fields) expr =
+  "({ " ++ T.unpack name ++ " *_sp = " ++ expr ++ "; " ++
+  "(_sp == NULL) ? mi_record(\"Nothing\", 0, NULL, NULL) : " ++
+  "mi_struct_to_record(" ++ show (length fields) ++ ", " ++
+  "(const char*[]){" ++ intercalate ", " [show (T.unpack fn) | (fn, _) <- fields] ++ "}, " ++
+  "(MiVal[]){" ++ intercalate ", " [cRetToMiRaw ft ("_sp->" ++ T.unpack fn) | (fn, ft) <- fields] ++ "}); })"
 
 -- | Like cRetToMi but keeps pointers as raw MI_POINTER (no Maybe wrapping).
 -- Used for struct field extraction where pointers are part of a known layout.
@@ -571,6 +578,13 @@ miToCArg (CStruct sname fields) name =
   "((" ++ T.unpack sname ++ "){ " ++
   intercalate ", " ["." ++ T.unpack fn ++ " = " ++ miToCArg ft ("mi_struct_field(" ++ name ++ ", \"" ++ T.unpack fn ++ "\")") | (fn, ft) <- fields] ++
   " })"
+miToCArg (CStructPtr sname fields) name =
+  "((" ++ name ++ ".type == MI_RECORD && strcmp(" ++ name ++ ".as.rec.tag, \"Nothing\") == 0) ? NULL : " ++
+  "(" ++ name ++ ".type == MI_RECORD && " ++ name ++ ".as.rec.nfields > 0 && " ++ name ++ ".as.rec.tag[0] == '\\0') ? " ++
+  "&((" ++ T.unpack sname ++ "){ " ++
+  intercalate ", " ["." ++ T.unpack fn ++ " = " ++ miToCArg ft ("mi_struct_field(" ++ name ++ ", \"" ++ T.unpack fn ++ "\")") | (fn, ft) <- fields] ++
+  " }) : " ++
+  "(" ++ T.unpack sname ++ " *)mi_maybe_ptr(" ++ name ++ "))"
 miToCArg (CCallback _ _) _ = "/* callback handled by trampoline */"
 
 isOutputParam :: CType -> Bool

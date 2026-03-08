@@ -7,7 +7,7 @@ import Data.Maybe (mapMaybe)
 import Data.List (isPrefixOf, foldl')
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
-import Data.Char (isAlpha, isAlphaNum, isSpace, isUpper, isDigit, isHexDigit, digitToInt)
+import Data.Char (isAlpha, isAlphaNum, isSpace, isUpper, isLower, isDigit, isHexDigit, digitToInt)
 import Data.Bits (shiftL, shiftR, (.|.), (.&.), xor, complement)
 import System.Process (readProcess)
 import Control.Exception (try, SomeException)
@@ -248,7 +248,14 @@ parseParamType sm param
   | T.any (== '*') param =
       let starCount = T.length (T.filter (== '*') param)
           cleaned = T.words (T.replace "*" " " param)
-          baseWords = filter (\w -> not (T.isPrefixOf "__" w)) cleaned
+          -- Drop trailing parameter name if present.
+          -- A param name starts with lowercase and isn't a C type keyword.
+          typeWords = case cleaned of
+            []  -> []
+            [w] -> [w]
+            _   | isParamName (last cleaned) -> init cleaned
+                | otherwise -> cleaned
+          baseWords = filter (\w -> not (T.isPrefixOf "__" w)) typeWords
       in if starCount > 1
          then Just (CPtr (T.unwords baseWords))
          else case baseWords of
@@ -268,6 +275,17 @@ parseParamType sm param
             [w] -> w
             _   -> T.unwords (init ws)
       in parseCType sm (T.unpack typeStr)
+
+-- | Check if a word looks like a C parameter name rather than a type component.
+-- Param names start with a lowercase letter and aren't C type keywords.
+isParamName :: T.Text -> Bool
+isParamName w = case T.uncons w of
+  Just (c, _) -> isLower c && w `notElem` cTypeKeywords
+  Nothing     -> False
+  where
+    cTypeKeywords = ["int", "char", "long", "short", "float", "double",
+                     "void", "signed", "unsigned", "const", "struct",
+                     "volatile", "size_t", "ssize_t", "ptrdiff_t"]
 
 parseCType :: TypeDefMap -> String -> Maybe CType
 parseCType sm s

@@ -58,6 +58,7 @@ data Expr
 -- CInt/CUInt carry bit width (8, 16, 32, 64) for correct struct layout and casts
 data CType = CInt !Int | CUInt !Int | CFloat | CFloat32 | CString | CVoid | CPtr Text | COut CType
            | CStruct Text [(Text, CType)]
+           | CStructPtr Text [(Text, CType)]  -- pointer to struct (record → &struct)
            | CCallback CType [CType]  -- return type, parameter types
   deriving (Show, Eq)
 

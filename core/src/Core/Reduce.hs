@@ -1009,7 +1009,7 @@ ffiApply descriptors (Namespace bindings) =
                   (h:_) -> h
                   []    -> ""
           opaqueBindings = concatMap (ffiOpaqueBindings hdr) opaqueDescs
-          patchedBindings = map (patchOutParams outDescs . patchCFunBinding structDescs) bindings
+          patchedBindings = map (patchCFunBinding structDescs . patchOutParams outDescs) bindings
       in Namespace (patchedBindings ++ ctorBindings ++ opaqueBindings)
     Nothing -> Namespace bindings  -- couldn't parse descriptors, return as-is
 ffiApply _ ns = ns
@@ -1080,17 +1080,33 @@ patchCFunExpr structs (CFunction hdr fn ret params isStd) =
   CFunction hdr fn (patchCType structs ret) (map (patchCType structs) params) isStd
 patchCFunExpr _ e = e
 
--- | Replace CPtr "Name" with CStruct "Name" fields if a matching struct descriptor exists.
+-- | Replace CPtr "Name" with CStructPtr when a matching struct descriptor exists.
+-- Strips const/struct qualifiers and trailing parameter names so that
+-- e.g. CPtr "const SDL_Rect p" matches "SDL_Rect".
 patchCType :: [(Text, [(Text, CType)])] -> CType -> CType
 patchCType structs (CPtr ptrName) =
-  case lookup ptrName structs of
-    Just fields -> CStruct ptrName fields
+  let stripped = stripPtrQualifiers ptrName
+  in case lookup stripped structs of
+    Just fields -> CStructPtr stripped fields
     Nothing -> CPtr ptrName
 patchCType structs (CStruct sname oldFields) =
   case lookup sname structs of
     Just fields -> CStruct sname fields
     Nothing -> CStruct sname oldFields
 patchCType _ t = t
+
+-- | Strip C type qualifiers and trailing parameter name from a pointer type.
+-- "const Point p" → "Point", "const SDL_Rect" → "SDL_Rect", "Point" → "Point"
+stripPtrQualifiers :: Text -> Text
+stripPtrQualifiers t =
+  let ws = T.words t
+      noQuals = filter (\w -> w /= "const" && w /= "struct" && w /= "volatile") ws
+  in case noQuals of
+    []  -> t
+    [w] -> w
+    -- If multiple words remain after removing qualifiers, the last one is likely
+    -- the parameter name (e.g. "Point p" → "Point")
+    _   -> T.unwords (init noQuals)
 
 -- | Extract out-parameter descriptors.
 -- Expected: {_ffi = "out"; func = "name"; params = [{index = 1; ctype = "int32"}; ...]}

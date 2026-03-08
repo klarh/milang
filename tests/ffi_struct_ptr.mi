@@ -1,0 +1,21 @@
+-- Test FFI struct POINTER parameter marshalling (BUG-ffi-struct-params-not-marshalled)
+-- Verifies that milang records are correctly converted to C struct pointers
+lib = import' "lib/struct_param.h" ({
+  src = "lib/struct_param.c"
+  annotate = ann
+})
+
+ann ffi ns = values =>
+  ffi.struct "Point" |> ffi.field "x" "int32" |> ffi.field "y" "int32"
+
+main world =
+  -- Test struct pointer parameter: point_sum takes const Point*
+  p = lib.make_Point 10 20
+  result = lib.point_sum p
+  -- Test struct by-value parameter: point_product takes Point
+  prod = lib.point_product p
+  -- Test with record literal passed as struct pointer
+  q = {x = 3; y = 7}
+  result2 = lib.point_sum q
+  -- Validate: 30 + 200 + 10 = 240, return 240 - 240 = 0
+  result + prod + result2 - 240
