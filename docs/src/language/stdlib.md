@@ -64,6 +64,7 @@ These functions work on `List` values. Functions marked with † also work on `M
 | `null` † | `List : Num` | Returns `1` if list is `Nil` (or `Nothing`), `0` otherwise. |
 | `head` | `List : Maybe` | First element wrapped in `Maybe` (`Nothing` if empty). |
 | `tail` | `List : Maybe` | Tail wrapped in `Maybe` (`Nothing` if empty). |
+| `default` † | `a : List : a` | Extract value or return a default. For `Maybe`: inner value or default. For `List`: first element or default. Like Haskell's `fromMaybe`. |
 | `fold` † | `(a : b : a) : a : List : a` | Left fold over a list (or extracts `Maybe` value with default). |
 | `map` † | `(a : b) : List : List` | Apply function to each element (or to `Just` value). |
 | `filter` † | `(a : Num) : List : List` | Keep elements where predicate is `truthy` (or filter `Just` value). |
@@ -200,4 +201,14 @@ main world =
   world.io.println (toString p3)
   world.io.println (show (getField r "a"))
   world.io.println (show (getField r "b"))
+```
+
+Use `default` to extract a value with a fallback:
+
+```milang,run
+main world =
+  world.io.println (toString (default 0 (Just 42)))
+  world.io.println (toString (default 0 Nothing))
+  world.io.println (toString (default 99 [1, 2, 3]))
+  world.io.println (toString (default 99 []))
 ```
