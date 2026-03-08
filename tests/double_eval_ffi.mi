@@ -1,0 +1,28 @@
+-- Test: double-eval bug fix
+-- When a function parameter is used both as case scrutinee AND in alt body,
+-- the expression should only be evaluated once (via With binding).
+-- Also tests the prelude `default` function.
+
+lib = import' "lib/nullable_return.h" ({src = "lib/nullable_return.c"})
+
+-- Pattern that triggers double-eval: mb used as scrutinee AND in body
+fromMaybe d mb = mb ->
+  Nothing = d
+  Just = mb.val
+
+main world = r
+  io = world.io
+
+  -- Test fromMaybe with FFI call (was duplicating the call before fix)
+  p = lib.nullable_make_ptr 42
+  r1 = io.println (toString (lib.nullable_deref_ptr (fromMaybe 0 p)))
+
+  -- Test default with Maybe
+  r2 = io.println (toString (default 99 (Just 7)))
+  r3 = io.println (toString (default 99 Nothing))
+
+  -- Test default with List
+  r4 = io.println (toString (default 99 [1, 2, 3]))
+  r5 = io.println (toString (default 99 []))
+
+  r = 0

@@ -299,30 +299,39 @@ reduceD d env (Case scrut alts) =
   let scrut' = forceThunk d env (reduceD d env scrut)
   in if isResidual scrut'
      then case scrut of
-       -- When the scrutinee came from a name in env and a wildcard alt body
-       -- references it, convert PWild to PVar so the C runtime binds the
-       -- evaluated scrutinee once, preventing double evaluation of effectful
-       -- expressions (e.g. toString (println x)).
+       -- When the scrutinee is a name from env and ANY alt body references it,
+       -- shadow the name with a fresh binding to prevent double evaluation.
+       -- For non-let-bound names (e.g. lambda params bound to FFI calls),
+       -- wrap in a With binding so the scrutinee is evaluated once at runtime.
        Name n
          | Map.member n (envMap env)
-         , any (\(Alt p _ b) -> case p of
-             PWild -> n `Set.member` exprFreeVars b
-             _     -> False) alts ->
+         , any (\(Alt _ g b) ->
+             n `Set.member` exprFreeVars b
+             || maybe False ((n `Set.member`) . exprFreeVars) g) alts ->
            let allNames = Set.unions
                  [ Map.keysSet (envMap env), exprFreeVars scrut'
                  , Set.unions (concatMap (\(Alt _ g b) ->
                      exprFreeVars b : maybe [] ((:[]) . exprFreeVars) g) alts) ]
                fresh = freshName n allNames
+               needsWrap = not (n `Set.member` envLetBound env)
                envShadow = envInsert n (Name fresh) (envDelete fresh env)
+               envBase = if needsWrap
+                         then envShadow { envLetBound = Set.insert fresh (envLetBound envShadow) }
+                         else envShadow
                alts' = map (\alt@(Alt p g b) -> case p of
                  PWild | n `Set.member` exprFreeVars b
                          || maybe False ((n `Set.member`) . exprFreeVars) g ->
-                   let envA = Set.foldl' (\e v -> envDelete v e) envShadow (patVars (PVar fresh))
+                   let envA = Set.foldl' (\e v -> envDelete v e) envBase (patVars (PVar fresh))
                    in Alt (PVar fresh) (fmap (reduceD d envA) g) (reduceD d envA b)
                  _ ->
-                   let envA = Set.foldl' (\e v -> envDelete v e) env (patVars p)
+                   let envA = Set.foldl' (\e v -> envDelete v e) envBase (patVars p)
                    in Alt p (fmap (reduceD d envA) g) (reduceD d envA b)) alts
-           in Case scrut' alts'
+           in if needsWrap
+              then let binding = Binding { bindName = fresh, bindParams = []
+                                         , bindBody = scrut'
+                                         , bindDomain = Value, bindPos = Nothing }
+                   in With (Case (Name fresh) alts') [binding]
+              else Case scrut' alts'
        _ ->
          Case scrut' (map (\(Alt p g b) ->
             -- Alpha-rename pattern vars that collide with free vars in env
