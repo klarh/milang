@@ -1,0 +1,9 @@
+lib = import' "lib/nullable_return.h" ({src = "lib/nullable_return.c"})
+
+apply f a = f (lib.nullable_deref_ptr a)
+
+main world =
+  p = lib.nullable_make_ptr 21
+  r = apply (\x -> x * 2) p
+  world.io.println (toString r)
+  0

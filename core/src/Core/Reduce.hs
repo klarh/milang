@@ -324,7 +324,11 @@ reduceD d env (Case scrut alts) =
                    let envA = Set.foldl' (\e v -> envDelete v e) envBase (patVars (PVar fresh))
                    in Alt (PVar fresh) (fmap (reduceD d envA) g) (reduceD d envA b)
                  _ ->
-                   let envA = Set.foldl' (\e v -> envDelete v e) envBase (patVars p)
+                   -- For non-PWild patterns: when needsWrap, use envBase (fresh
+                   -- will be bound by the With); otherwise use env (n is already
+                   -- let-bound and safe to reference directly).
+                   let envN = if needsWrap then envBase else env
+                       envA = Set.foldl' (\e v -> envDelete v e) envN (patVars p)
                    in Alt p (fmap (reduceD d envA) g) (reduceD d envA b)) alts
            in if needsWrap
               then let binding = Binding { bindName = fresh, bindParams = []
@@ -504,17 +508,35 @@ reduceApp d env (Lam p body) arg
 reduceApp d env (Lam p body) arg =
   let d' = d - 1
       argFVs = exprFreeVars arg
+      -- When the arg is a CFunction call, bind it via With so the Name handler's
+      -- isCFunctionCall guard doesn't produce a dangling Name reference.
+      needsLetBind = isCFunctionCall arg && not (isPureTrait p env)
   in if p `Set.member` argFVs
      -- Param name appears free in arg — alpha-rename to avoid capture
      then let allNames = Set.unions [argFVs, exprFreeVars body, Map.keysSet (envMap env)]
               fresh = freshName p allNames
               body' = substExpr p (Name fresh) body
-              -- Clear fresh from envLetBound: lambda params shadow let bindings
-              env' = (envInsert fresh arg env) { envLetBound = Set.delete fresh (envLetBound env) }
-          in reduceD d' env' body'
-     else let -- Clear p from envLetBound: lambda params shadow let bindings
-              env' = (envInsert p arg env) { envLetBound = Set.delete p (envLetBound env) }
-          in reduceD d' env' body
+          in if needsLetBind
+             then let env' = (envInsert fresh (Name fresh) env) { envLetBound = Set.insert fresh (envLetBound env) }
+                      result = reduceD d' env' body'
+                      binding = Binding { bindName = fresh, bindParams = []
+                                        , bindBody = arg, bindDomain = Value, bindPos = Nothing }
+                  in if fresh `Set.member` exprFreeVars result
+                     then With result [binding]
+                     else result
+             else let env' = (envInsert fresh arg env) { envLetBound = Set.delete fresh (envLetBound env) }
+                  in reduceD d' env' body'
+     else if needsLetBind
+          then let env' = (envInsert p (Name p) env) { envLetBound = Set.insert p (envLetBound env) }
+                   result = reduceD d' env' body
+                   binding = Binding { bindName = p, bindParams = []
+                                     , bindBody = arg, bindDomain = Value, bindPos = Nothing }
+               in if p `Set.member` exprFreeVars result
+                  then With result [binding]
+                  else result
+          else let -- Clear p from envLetBound: lambda params shadow let bindings
+                   env' = (envInsert p arg env) { envLetBound = Set.delete p (envLetBound env) }
+               in reduceD d' env' body
 -- Sized type constructors: Int' N val, UInt' N val, Float' N val
 -- Int'/UInt'/Float' are uppercase names, so they auto-construct as records.
 -- After first arg (width), we get Record "Int'" [_0=width].
