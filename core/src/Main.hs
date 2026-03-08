@@ -5,7 +5,7 @@ module Main where
 import System.Exit (exitFailure, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (readProcessWithExitCode)
-import System.Directory (removeFile, doesFileExist, getCurrentDirectory)
+import System.Directory (removeFile, doesFileExist, getCurrentDirectory, findExecutable)
 import System.Info (os, arch)
 import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>), normalise)
 import Control.Monad (unless, when)
@@ -73,7 +73,7 @@ data Command
 
 data GlobalOpts = GlobalOpts
   { optNoCache :: Bool
-  , optCC      :: String
+  , optCC      :: Maybe String
   , optCommand :: Command
   }
 
@@ -118,8 +118,8 @@ versionOpt = infoOption ("milang " ++ version)
 globalParser :: Parser GlobalOpts
 globalParser = GlobalOpts
   <$> switch (long "no-cache" <> help "Disable disk cache for remote URL imports")
-  <*> strOption (long "cc" <> value "gcc" <> showDefault <> metavar "COMPILER"
-        <> help "C compiler for header parsing and compilation")
+  <*> optional (strOption (long "cc" <> metavar "COMPILER"
+        <> help "C compiler for header parsing and compilation"))
   <*> commandParser
 
 commandParser :: Parser Command
@@ -184,11 +184,32 @@ pinParser :: Parser Command
 pinParser = fmap CmdPin $ PinOpts
   <$> argument str (metavar "FILE" <> help "Milang source file")
 
+-- | Resolve the C compiler. If explicitly specified via --cc, error if not
+-- found. Otherwise auto-detect from a prioritized list.
+resolveCC :: Maybe String -> IO String
+resolveCC (Just specified) = do
+  found <- findExecutable specified
+  case found of
+    Just _  -> return specified
+    Nothing -> do
+      hPutStrLn stderr $ "error: C compiler '" ++ specified ++ "' not found on PATH"
+      exitFailure
+resolveCC Nothing = tryFallbacks ["gcc", "clang", "cc"]
+  where
+    tryFallbacks [] = do
+      hPutStrLn stderr "error: no C compiler found on PATH (tried gcc, clang, cc)"
+      exitFailure
+    tryFallbacks (c:cs) = do
+      f <- findExecutable c
+      case f of
+        Just _  -> return c
+        Nothing -> tryFallbacks cs
+
 main :: IO ()
 main = do
   gopts <- execParser cliParser
   let nc = optNoCache gopts
-      cc = optCC gopts
+  cc <- resolveCC (optCC gopts)
   case optCommand gopts of
     CmdRun opts     -> cmdRun cc nc opts
     CmdCompile opts -> cmdCompile cc nc opts
