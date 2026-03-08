@@ -1,4 +1,4 @@
-.PHONY: all clean test test-hs docs docs-serve docs-publish
+.PHONY: all clean test docs docs-serve docs-publish
 
 MILANG:=milang
 PYTHON:=python
@@ -28,16 +28,10 @@ all:
 
 clean:
 	cd core && cabal clean
-	cd hs && cabal clean
 	rm -f $(MILANG) milang
 
 test:
 	$(PYTHON) tests/run.py -m ${MILANG}
-
-test-hs:
-	cd hs && cabal build
-	ln -sf $$(cd hs && cabal list-bin milang) milang
-	$(MAKE) test
 
 docs:
 	cd docs && mdbook build
