@@ -1,0 +1,18 @@
+/* Helper module: builds records from function params in where-clause bindings */
+
+/* Record built from params in where-clause, used in arithmetic */
+make_pair a b = result
+  pair = {x = a; y = b}
+  result = pair.x + pair.y
+
+/* Nested: record used as argument to another function */
+sum_point p = p.x + p.y
+build_and_sum a b = result
+  pt = {x = a; y = b}
+  result = sum_point pt
+
+/* Multiple record bindings from params */
+make_rect x y w h = result
+  pos = {x = x; y = y}
+  size = {w = w; h = h}
+  result = pos.x + pos.y + size.w + size.h

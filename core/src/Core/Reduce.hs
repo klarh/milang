@@ -85,7 +85,7 @@ isResidual (FloatLit _)    = False
 isResidual (SizedInt {})   = False
 isResidual (SizedFloat {}) = False
 isResidual (StringLit _)   = False
-isResidual (Record _ _)    = False
+isResidual (Record _ bs)   = any (isResidual . bindBody) bs
 isResidual _               = True
 
 isConcrete :: Expr -> Bool
