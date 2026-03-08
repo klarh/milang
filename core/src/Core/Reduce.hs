@@ -457,7 +457,14 @@ evalSCC d env (AcyclicSCC b) =
       val = if bindDomain b' == Lazy
             then bindBody b'
             else reduceD d env body
-      env1 = if isWorldTainted env body then envMarkImpure name env else env
+      -- Bindings annotated :~ [pure] are never marked impure — the user asserts
+      -- the call chain is side-effect-free, and the trait checker validates that
+      -- independently.  For all other bindings, mark impure if world-tainted OR
+      -- if the reduced value is a C FFI call.
+      env1 = if isPureTrait name env
+             then env
+             else if isWorldTainted env body || isCFunctionCall val
+                  then envMarkImpure name env else env
       -- Emit warnings for Error nodes in reduced value
       env2 = case val of
         Error msg -> envAddWarning (GeneralWarning (bindPos b) (name <> ": " <> msg)) env1

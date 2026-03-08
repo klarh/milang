@@ -1,0 +1,13 @@
+-- Test :~ [pure] with FFI calls
+-- Pure FFI wrappers should not trigger trait warnings
+lib = import "lib/mylib.h"
+
+-- Pure wrapper around FFI function
+add :~ [pure]
+add a b = lib.add_ints a b
+
+-- Pure function calling another pure function (not direct FFI)
+double_add :~ [pure]
+double_add a b = add a b + add a b
+
+main = double_add 3 4 - 14
