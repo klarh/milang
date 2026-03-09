@@ -433,6 +433,8 @@ cUIntTypeName _  = "uint64_t"
 cOutDeclType :: CType -> String
 cOutDeclType (CInt w)  = cIntTypeName w
 cOutDeclType (CUInt w) = cUIntTypeName w
+cOutDeclType CLong     = "long"
+cOutDeclType CULong    = "unsigned long"
 cOutDeclType CFloat    = "double"
 cOutDeclType CFloat32  = "float"
 cOutDeclType (CPtr t)  = T.unpack t ++ " *"
@@ -442,6 +444,8 @@ cOutDeclType _         = "int"
 miValToC :: CType -> String -> String
 miValToC (CInt w) name  = "(" ++ cIntTypeName w ++ ")((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i)"
 miValToC (CUInt w) name = "(" ++ cUIntTypeName w ++ ")((uint64_t)((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i))"
+miValToC CLong name     = "(long)((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i)"
+miValToC CULong name    = "(unsigned long)((uint64_t)((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i))"
 miValToC CFloat name    = "(double)(" ++ name ++ ".as.f)"
 miValToC CFloat32 name  = "(float)(" ++ name ++ ".as.f32)"
 miValToC CString name   = name ++ ".as.str.data"
@@ -485,6 +489,8 @@ outToMi t name         = cRetToMi t name
 cRetTypeName :: CType -> String
 cRetTypeName (CInt w) = cIntTypeName w
 cRetTypeName (CUInt w) = cUIntTypeName w
+cRetTypeName CLong   = "long"
+cRetTypeName CULong  = "unsigned long"
 cRetTypeName CFloat  = "double"
 cRetTypeName CFloat32 = "float"
 cRetTypeName CString = "char *"
@@ -539,6 +545,8 @@ cffiCurried st cname retTy allParamTys inputParams outputParams = do
 cRetToMi :: CType -> String -> String
 cRetToMi (CInt w) expr  = "mi_sized_int((int64_t)(" ++ expr ++ "), " ++ show w ++ ", 1)"
 cRetToMi (CUInt w) expr = "mi_sized_int((int64_t)(" ++ expr ++ "), " ++ show w ++ ", 0)"
+cRetToMi CLong expr      = "mi_sized_int((int64_t)(" ++ expr ++ "), 64, 1)"
+cRetToMi CULong expr     = "mi_sized_int((int64_t)(" ++ expr ++ "), 64, 0)"
 cRetToMi CFloat expr     = "mi_float((double)(" ++ expr ++ "))"
 cRetToMi CFloat32 expr   = "mi_float32((float)(" ++ expr ++ "))"
 cRetToMi CString expr    = "mi_nullable_str(" ++ expr ++ ")"
@@ -568,6 +576,8 @@ cRetToMiRaw t expr = cRetToMi t expr
 miToCArg :: CType -> String -> String
 miToCArg (CInt w) name  = "(" ++ cIntTypeName w ++ ")((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i)"
 miToCArg (CUInt w) name = "(" ++ cUIntTypeName w ++ ")((uint64_t)((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i))"
+miToCArg CLong name     = "(long)((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i)"
+miToCArg CULong name    = "(unsigned long)((uint64_t)((" ++ name ++ ".type == MI_SIZED_INT) ? (" ++ name ++ ".as.sized.is_big ? mi_bn_to_i64(" ++ name ++ ".as.sized.big) : " ++ name ++ ".as.sized.i) : " ++ name ++ ".as.i))"
 miToCArg CFloat name    = "mi_to_float(" ++ name ++ ")"
 miToCArg CFloat32 name  = "mi_to_float32(" ++ name ++ ")"
 miToCArg CString name  = "mi_maybe_str(" ++ name ++ ")"

@@ -56,7 +56,8 @@ data Expr
 
 -- | C type representation for FFI
 -- CInt/CUInt carry bit width (8, 16, 32, 64) for correct struct layout and casts
-data CType = CInt !Int | CUInt !Int | CFloat | CFloat32 | CString | CVoid | CPtr Text | COut CType
+-- CLong/CULong emit 'long'/'unsigned long' in C (platform-dependent width)
+data CType = CInt !Int | CUInt !Int | CLong | CULong | CFloat | CFloat32 | CString | CVoid | CPtr Text | COut CType
            | CStruct Text [(Text, CType)]
            | CStructPtr Text [(Text, CType)]  -- pointer to struct (record → &struct)
            | CCallback CType [CType]  -- return type, parameter types

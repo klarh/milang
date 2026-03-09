@@ -298,12 +298,12 @@ parseCType sm s
            _                 -> Just (CPtr (T.pack (unwords base)))
   | otherwise = case words s of
       ["int"]             -> Just (CInt 32)
-      ["long"]            -> Just (CInt 64)
-      ["long", "int"]     -> Just (CInt 64)
+      ["long"]            -> Just CLong
+      ["long", "int"]     -> Just CLong
       ["long", "long"]    -> Just (CInt 64)
       ["unsigned"]        -> Just (CUInt 32)
       ["unsigned", "int"] -> Just (CUInt 32)
-      ["unsigned", "long"] -> Just (CUInt 64)
+      ["unsigned", "long"] -> Just CULong
       ["unsigned", "long", "long"] -> Just (CUInt 64)
       ["short"]           -> Just (CInt 16)
       ["unsigned", "short"] -> Just (CUInt 16)
