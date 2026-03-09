@@ -26,6 +26,7 @@ import Core.Parser (parseProgram, parseExpr)
 import Text.Megaparsec (errorBundlePretty)
 import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap, protectPrelude)
 import Core.Codegen (codegen)
+import Core.Optimize (optimize)
 import Core.Prelude (preludeBindings)
 import Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..), CEnumConst(..))
 import Core.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
@@ -847,8 +848,8 @@ cmdCompile cc noCache opts = do
   let file = compFile opts
   cwd <- getCurrentDirectory
   (reduced, li) <- loadAndReduce cc noCache file
-  let stripped = stripDeepModules 3 reduced
-      extraFlags = nub (linkFlags li)
+  let stripped = optimize (stripDeepModules 3 reduced)
+      extraFlags = nub ("-lm" : linkFlags li)
       extraSrcs  = nub (linkSources li)
       extraIncls = nub (map ("-I" ++) (linkIncludes li))
       extraCCFlags = nub (linkCCFlags li)
@@ -891,10 +892,10 @@ cmdRun cc noCache opts = do
   let file = runFile opts
   cwd <- getCurrentDirectory
   (reduced, li) <- loadAndReduce cc noCache file
-  let stripped = stripDeepModules 3 reduced
+  let stripped = optimize (stripDeepModules 3 reduced)
       cFile = dropExtension file ++ "_core.c"
       binBase = takeDirectory file </> (takeBaseName file ++ "_core")
-      extraFlags = nub (linkFlags li)
+      extraFlags = nub ("-lm" : linkFlags li)
       extraSrcs  = nub (linkSources li)
       extraIncls = nub (map ("-I" ++) (linkIncludes li))
       extraCCFlags = nub (linkCCFlags li)

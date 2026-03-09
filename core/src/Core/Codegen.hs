@@ -23,10 +23,11 @@ data CGState = CGState
   { cgNextId   :: IORef Int
   , cgTopDefs  :: IORef [String]
   , cgIncludes :: IORef [String]
+  , cgIntCtx   :: IORef (Set.Set Text)  -- known-integer variable names for native binop
   }
 
 newCGState :: IO CGState
-newCGState = CGState <$> newIORef 0 <*> newIORef [] <*> newIORef []
+newCGState = CGState <$> newIORef 0 <*> newIORef [] <*> newIORef [] <*> newIORef Set.empty
 
 freshId :: CGState -> IO Int
 freshId st = do
@@ -36,6 +37,31 @@ freshId st = do
 
 addTopDef :: CGState -> String -> IO ()
 addTopDef st s = modifyIORef (cgTopDefs st) (s :)
+
+-- | Execute an action with a set of known-integer variable names,
+-- restoring the previous context afterward.
+withIntCtx :: CGState -> Set.Set Text -> IO a -> IO a
+withIntCtx st ctx action = do
+  old <- readIORef (cgIntCtx st)
+  writeIORef (cgIntCtx st) (Set.union old ctx)
+  result <- action
+  writeIORef (cgIntCtx st) old
+  pure result
+
+-- | Check if an expression is known to produce an integer value.
+isKnownInt :: Set.Set Text -> Expr -> Bool
+isKnownInt _ (IntLit _) = True
+isKnownInt _ (SizedInt _ _ _) = True
+isKnownInt ctx (Name n) = Set.member n ctx
+isKnownInt ctx (BinOp op l r) = isBuiltinOp op && isKnownInt ctx l && isKnownInt ctx r
+isKnownInt _ _ = False
+
+-- | Check if an expression is a simple integer initializer.
+isIntInit :: Expr -> Bool
+isIntInit (IntLit _) = True
+isIntInit (SizedInt _ _ _) = True
+isIntInit (BinOp op l r) = isBuiltinOp op && isIntInit l && isIntInit r
+isIntInit _ = False
 
 -- | Should this binding domain be skipped during codegen?
 skipDomain :: Domain -> Bool
@@ -208,9 +234,27 @@ exprToC st (BinOp op l r)
     rc <- exprToC st r
     pure $ "mi_expr_app(mi_expr_app(" ++ fc ++ ", " ++ lc ++ "), " ++ rc ++ ")"
   | otherwise = do
+    intCtx <- readIORef (cgIntCtx st)
     lc <- exprToC st l
     rc <- exprToC st r
-    pure $ "mi_expr_binop(\"" ++ T.unpack op ++ "\", " ++ lc ++ ", " ++ rc ++ ")"
+    if not (Set.null intCtx)
+      then pure $ "mi_expr_native_binop(\"" ++ T.unpack op ++ "\", " ++ lc ++ ", " ++ rc ++ ")"
+      else pure $ "mi_expr_binop(\"" ++ T.unpack op ++ "\", " ++ lc ++ ", " ++ rc ++ ")"
+
+-- | Detect fold/range → for-loop pattern:
+--   App(App(App(Name "fold"), Lam acc (Lam iter body)), init,
+--       App(App(App(Name "range_helper"), start), end), Record "Nil" []))
+exprToC st expr
+  | Just (accName, iterName, body, initE, startE, endE) <- matchFoldRange expr = do
+    initC  <- exprToC st initE
+    startC <- exprToC st startE
+    endC   <- exprToC st endE
+    -- both iter_var and acc_var assumed int; native_binop type-checks at runtime
+    let intVars = Set.fromList [iterName, accName]
+    bodyC  <- withIntCtx st intVars (exprToC st body)
+    pure $ "mi_expr_for_range(\"" ++ T.unpack accName ++ "\", \"" ++
+           T.unpack iterName ++ "\", " ++ initC ++ ", " ++ startC ++ ", " ++
+           endC ++ ", " ++ bodyC ++ ")"
 
 exprToC st (App f x) = do
   fc <- exprToC st f
@@ -220,6 +264,20 @@ exprToC st (App f x) = do
 exprToC st (Lam param body) = do
   bc <- exprToC st body
   pure $ "mi_expr_lam(\"" ++ T.unpack param ++ "\", " ++ bc ++ ")"
+
+-- | Detect tail-recursive With binding → EXPR_TAIL_LOOP
+exprToC st expr
+  | Just (funcName, params, initExprs, bodyExpr) <- matchTailLoop expr = do
+    let nparams = length params
+    initCs <- mapM (exprToC st) initExprs
+    -- Params whose init exprs are integer are known-int inside the loop body
+    let intParams = Set.fromList params  -- all tail-loop params assumed int; native_binop type-checks at runtime
+    bodyC  <- withIntCtx st intParams (tailBodyToC st funcName nparams bodyExpr)
+    let paramStrs = map (\p -> "\"" ++ T.unpack p ++ "\"") params
+    pure $ "mi_expr_tail_loop(" ++ show nparams ++ ", " ++
+           "(char*[]){" ++ intercalate ", " paramStrs ++ "}, " ++
+           "(MiExpr*[]){" ++ intercalate ", " initCs ++ "}, " ++
+           bodyC ++ ")"
 
 exprToC st (With body bindings) = do
   bc <- exprToC st body
@@ -240,6 +298,16 @@ exprToC st (Namespace bindings) = do
   bindCodes <- mapM (bindingStructToC st) (filter (not . skipBinding) bindings)
   let args = if null bindCodes then "" else ", " ++ intercalate ", " bindCodes
   pure $ "mi_expr_namespace(" ++ show (length bindCodes) ++ args ++ ")"
+
+-- | Detect the double-case truthiness pattern from `if cond then else`:
+--   Case (Case cond [False→0, Nil→0, Nothing→0, 0→0, ""→0, _→1])
+--        [0→else, _→then]
+exprToC st (Case (Case cond innerAlts) [Alt (PLit (IntLit 0)) Nothing elseBr, Alt PWild Nothing thenBr])
+  | isTruthinessCase innerAlts = do
+    cc <- exprToC st cond
+    tc <- exprToC st thenBr
+    ec <- exprToC st elseBr
+    pure $ "mi_expr_if(" ++ cc ++ ", " ++ tc ++ ", " ++ ec ++ ")"
 
 exprToC st (Case scrut alts) = do
   sc <- exprToC st scrut
@@ -642,6 +710,128 @@ patToC (PList pats mrest) = patToC (plistToConsPat pats mrest)
     plistToConsPat [] (Just name)  = PVar name
     plistToConsPat (p:ps) mr       = PRec "Cons" [("head", p), ("tail", plistToConsPat ps mr)]
 
+-- | Check whether a list of case alternatives is the truthiness-check pattern
+-- generated by `if`: 6 alts where all falsy patterns map to IntLit 0
+-- and the wildcard maps to IntLit 1.
+isTruthinessCase :: [Alt] -> Bool
+isTruthinessCase alts =
+  length alts == 6 &&
+  all isFalsyAlt (init alts) &&
+  case last alts of
+    Alt PWild Nothing (IntLit 1) -> True
+    _                            -> False
+  where
+    isFalsyAlt (Alt _ Nothing (IntLit 0)) = True
+    isFalsyAlt _                          = False
+
+-- | Match the fold/range pattern in the reduced AST.
+-- fold f acc (range start end) appears after reduction as:
+--   App (App (App (Name "fold") (Lam acc (Lam iter body))) init)
+--       (App (App (App (Name "range_helper") start) end) (Record "Nil" []))
+matchFoldRange :: Expr -> Maybe (Text, Text, Expr, Expr, Expr, Expr)
+matchFoldRange
+  (App (App (App (Name "fold") (Lam accName (Lam iterName body))) initE)
+       (App (App (App (Name "range_helper") startE) endE) (Record "Nil" [])))
+  = Just (accName, iterName, body, initE, startE, endE)
+matchFoldRange _ = Nothing
+
+-- | Match tail-recursive With binding pattern:
+--   With (App ... (App (Name funcName) arg1) ... argN) [Binding funcName [] (Lam p1 (Lam p2 ... body))]
+-- where all self-calls in body are in tail position.
+-- Returns: (param names, initial arg exprs, original body)
+matchTailLoop :: Expr -> Maybe (Text, [Text], [Expr], Expr)
+matchTailLoop (With callExpr [b])
+  | bindDomain b == Value
+  , not (null params)
+  , let funcName = bindName b
+  , Just initArgs <- matchCallChain funcName callExpr
+  , length initArgs == length params
+  , allTailCalls funcName (length params) lamBody
+  = Just (funcName, params, initArgs, lamBody)
+  where
+    (params, lamBody) = unwrapLams (bindBody b)
+matchTailLoop _ = Nothing
+
+-- | Unwrap a chain of Lam constructors into (param names, body)
+unwrapLams :: Expr -> ([Text], Expr)
+unwrapLams (Lam p body) = let (ps, b) = unwrapLams body in (p:ps, b)
+unwrapLams body = ([], body)
+
+-- | Match a chain of App calls: App(App(App(Name funcName, a1), a2), a3) → Just [a1, a2, a3]
+matchCallChain :: Text -> Expr -> Maybe [Expr]
+matchCallChain funcName expr = go expr []
+  where
+    go (App f x) args = go f (x : args)
+    go (Name n) args | n == funcName = Just args
+    go _ _ = Nothing
+
+-- | Check if all occurrences of funcName are in tail position.
+allTailCalls :: Text -> Int -> Expr -> Bool
+allTailCalls funcName nparams body = tailCheck body
+  where
+    -- An expression is valid if all self-references are in tail position
+    tailCheck (Case scrut alts) =
+      noRef scrut && all (\(Alt _ g b) -> maybe True noRef g && tailCheck b) alts
+    tailCheck e
+      | Just args <- matchCallChain funcName e
+      , length args == nparams = all noRef args
+    tailCheck (Name n) = n /= funcName
+    tailCheck (BinOp _ l r) = noRef l && noRef r
+    tailCheck (App f x) = noRef f && noRef x
+    tailCheck (Lam _ b) = noRef b
+    tailCheck (With b bs) = tailCheck b && all (noRef . bindBody) bs
+    tailCheck (Record _ bs) = all (noRef . bindBody) bs
+    tailCheck (FieldAccess e _) = noRef e
+    tailCheck (Thunk b) = noRef b
+    tailCheck _ = True
+
+    -- No reference to funcName at all
+    noRef (Name n) = n /= funcName
+    noRef (BinOp _ l r) = noRef l && noRef r
+    noRef (App f x) = noRef f && noRef x
+    noRef (Lam _ b) = noRef b
+    noRef (Case scrut alts) = noRef scrut && all (\(Alt _ g b) -> maybe True noRef g && noRef b) alts
+    noRef (With b bs) = noRef b && all (noRef . bindBody) bs
+    noRef (Record _ bs) = all (noRef . bindBody) bs
+    noRef (FieldAccess e _) = noRef e
+    noRef (Thunk b) = noRef b
+    noRef (Namespace bs) = all (noRef . bindBody) bs
+    noRef (ListLit es) = all noRef es
+    noRef _ = True
+
+-- | Like exprToC but emits mi_expr_tail_call for tail calls to funcName.
+-- In tail position, self-calls become tail_call; in non-tail positions,
+-- falls back to normal exprToC (which won't encounter funcName since
+-- allTailCalls verified it only appears in tail position).
+tailBodyToC :: CGState -> Text -> Int -> Expr -> IO String
+tailBodyToC st funcName nparams (Case (Case cond innerAlts) [Alt (PLit (IntLit 0)) Nothing elseBr, Alt PWild Nothing thenBr])
+  | isTruthinessCase innerAlts = do
+    cc <- exprToC st cond
+    tc <- tailBodyToC st funcName nparams thenBr
+    ec <- tailBodyToC st funcName nparams elseBr
+    pure $ "mi_expr_if(" ++ cc ++ ", " ++ tc ++ ", " ++ ec ++ ")"
+tailBodyToC st funcName nparams (Case scrut alts) = do
+  sc <- exprToC st scrut
+  altCodes <- mapM (tailAltToC st funcName nparams) alts
+  pure $ "mi_expr_case(" ++ sc ++ ", " ++ show (length alts) ++ ", " ++
+    intercalate ", " altCodes ++ ")"
+tailBodyToC st funcName nparams expr
+  | Just args <- matchCallChain funcName expr
+  , length args == nparams = do
+    argCs <- mapM (exprToC st) args
+    pure $ "mi_expr_tail_call(" ++ show nparams ++ ", " ++
+           intercalate ", " argCs ++ ")"
+tailBodyToC st _ _ expr = exprToC st expr
+
+tailAltToC :: CGState -> Text -> Int -> Alt -> IO String
+tailAltToC st funcName nparams (Alt pat guard body) = do
+  pc <- patToC pat
+  bc <- tailBodyToC st funcName nparams body
+  gc <- case guard of
+    Nothing -> pure "NULL"
+    Just g  -> exprToC st g
+  pure $ "mi_alt(" ++ pc ++ ", " ++ gc ++ ", " ++ bc ++ ")"
+
 -- ── C runtime preamble ────────────────────────────────────────────
 
 emitPreamble :: Handle -> IO ()
@@ -654,6 +844,7 @@ emitPreamble h = hPutStr h $ unlines
   , "#include <inttypes.h>"
   , "#include <stdarg.h>"
   , "#include <ctype.h>"
+  , "#include <math.h>"
   , ""
   , "// ── Arena allocator ──"
   , "#define MI_ARENA_BLOCK_SIZE (1024 * 1024)"
@@ -692,7 +883,7 @@ emitPreamble h = hPutStr h $ unlines
   , "typedef struct MiPat MiPat;"
   , ""
   , "// ── MiVal: runtime values ──"
-  , "typedef enum { MI_INT, MI_FLOAT, MI_FLOAT32, MI_STRING, MI_RECORD, MI_CLOSURE, MI_NATIVE, MI_POINTER, MI_MANAGED, MI_SIZED_INT } MiType;"
+  , "typedef enum { MI_INT, MI_FLOAT, MI_FLOAT32, MI_STRING, MI_RECORD, MI_CLOSURE, MI_NATIVE, MI_POINTER, MI_MANAGED, MI_SIZED_INT, MI_TAIL_CALL } MiType;"
   , ""
   , "struct MiVal {"
   , "  MiType type;"
@@ -706,6 +897,7 @@ emitPreamble h = hPutStr h $ unlines
   , "    struct { MiVal (*fn)(MiVal, void*); void *env; } native;"
   , "    void *ptr;"
   , "    struct { union { int64_t i; struct MiBignum *big; }; int width; int is_signed; int is_big; } sized;"
+  , "    struct { MiVal *args; int nargs; } tail_call;"
   , "  } as;"
   , "};"
   , ""
@@ -713,7 +905,9 @@ emitPreamble h = hPutStr h $ unlines
   , "typedef enum {"
   , "  EXPR_INT, EXPR_FLOAT, EXPR_FLOAT32, EXPR_STRING, EXPR_NAME, EXPR_BINOP, EXPR_APP,"
   , "  EXPR_LAM, EXPR_WITH, EXPR_RECORD, EXPR_FIELD, EXPR_NAMESPACE,"
-  , "  EXPR_CASE, EXPR_THUNK, EXPR_VAL, EXPR_SIZED_INT"
+  , "  EXPR_CASE, EXPR_THUNK, EXPR_VAL, EXPR_SIZED_INT,"
+  , "  EXPR_IF, EXPR_FOR_RANGE, EXPR_TAIL_LOOP, EXPR_TAIL_CALL,"
+  , "  EXPR_NATIVE_BINOP"
   , "} ExprType;"
   , ""
   , "struct MiExpr {"
@@ -734,6 +928,11 @@ emitPreamble h = hPutStr h $ unlines
   , "    struct { MiExpr *scrut; int nalts; MiAlt *alts; } cas;"
   , "    struct { MiExpr *body; } thunk;"
   , "    struct { int64_t i; int width; int is_signed; } sized;"
+  , "    struct { MiExpr *cond; MiExpr *then_br; MiExpr *else_br; } if_expr;"
+  , "    struct { char *acc_var; char *iter_var; MiExpr *init; MiExpr *start; MiExpr *end; MiExpr *body; } for_range;"
+  , "    struct { int nparams; char **params; MiExpr **inits; MiExpr *body; } tail_loop;"
+  , "    struct { int nargs; MiExpr **args; } tail_call;"
+  , "    struct { char *op; MiExpr *left; MiExpr *right; } native_binop;"
   , "    MiVal val;"
   , "  } as;"
   , "};"
@@ -1193,6 +1392,9 @@ emitPreamble h = hPutStr h $ unlines
   , "}"
   , ""
   , "static void mi_env_set(MiEnv *env, const char *name, MiVal val) {"
+  , "  for (MiEnv *e = env->next; e; e = e->next) {"
+  , "    if (e->name && strcmp(e->name, name) == 0) { e->val = val; return; }"
+  , "  }"
   , "  MiEnv *entry;"
   , "  if (mi_in_eval) { entry = mi_env_pool_get(); entry->name = (char*)name; }"
   , "  else { entry = mi_alloc(sizeof(MiEnv)); memset(entry, 0, sizeof(MiEnv)); entry->name = mi_strdup(name); }"
@@ -1393,6 +1595,40 @@ emitPreamble h = hPutStr h $ unlines
   , "  va_list args; va_start(args, n);"
   , "  for (int i = 0; i < n; i++) e->as.cas.alts[i] = va_arg(args, MiAlt);"
   , "  va_end(args); return e;"
+  , "}"
+  , ""
+  , "// ── Optimized expression constructors ──"
+  , "static MiExpr *mi_expr_if(MiExpr *cond, MiExpr *then_br, MiExpr *else_br) {"
+  , "  MiExpr *e = mi_alloc(sizeof(MiExpr)); e->type = EXPR_IF;"
+  , "  e->as.if_expr.cond = cond; e->as.if_expr.then_br = then_br;"
+  , "  e->as.if_expr.else_br = else_br; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_for_range(const char *acc_var, const char *iter_var,"
+  , "    MiExpr *init, MiExpr *start, MiExpr *end, MiExpr *body) {"
+  , "  MiExpr *e = mi_alloc(sizeof(MiExpr)); e->type = EXPR_FOR_RANGE;"
+  , "  e->as.for_range.acc_var = mi_strdup(acc_var);"
+  , "  e->as.for_range.iter_var = mi_strdup(iter_var);"
+  , "  e->as.for_range.init = init; e->as.for_range.start = start;"
+  , "  e->as.for_range.end = end; e->as.for_range.body = body; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_tail_loop(int nparams, char **params, MiExpr **inits, MiExpr *body) {"
+  , "  MiExpr *e = mi_alloc(sizeof(MiExpr)); e->type = EXPR_TAIL_LOOP;"
+  , "  e->as.tail_loop.nparams = nparams; e->as.tail_loop.params = params;"
+  , "  e->as.tail_loop.inits = inits; e->as.tail_loop.body = body; return e;"
+  , "}"
+  , "static MiExpr *mi_expr_tail_call(int nargs, ...) {"
+  , "  MiExpr *e = mi_alloc(sizeof(MiExpr)); e->type = EXPR_TAIL_CALL;"
+  , "  e->as.tail_call.nargs = nargs;"
+  , "  e->as.tail_call.args = mi_alloc(nargs * sizeof(MiExpr*));"
+  , "  va_list args; va_start(args, nargs);"
+  , "  for (int i = 0; i < nargs; i++) e->as.tail_call.args[i] = va_arg(args, MiExpr*);"
+  , "  va_end(args); return e;"
+  , "}"
+  , ""
+  , "static MiExpr *mi_expr_native_binop(const char *op, MiExpr *left, MiExpr *right) {"
+  , "  MiExpr *e = mi_alloc(sizeof(MiExpr)); e->type = EXPR_NATIVE_BINOP;"
+  , "  e->as.native_binop.op = mi_strdup(op);"
+  , "  e->as.native_binop.left = left; e->as.native_binop.right = right; return e;"
   , "}"
   , ""
   , "// ── Helpers ──"
@@ -1814,6 +2050,123 @@ emitPreamble h = hPutStr h $ unlines
   , "        }"
   , "      }"
   , "      mi_error(expr->loc, \"match: no matching pattern\");"
+  , "    }"
+  , ""
+  , "    case EXPR_IF: {"
+  , "      if (mi_gc_env_root_count < MI_MAX_ROOTS) mi_gc_env_roots[mi_gc_env_root_count++] = env;"
+  , "      MiVal cond = mi_force(mi_eval(expr->as.if_expr.cond, env), env);"
+  , "      if (mi_gc_env_root_count > 0) mi_gc_env_root_count--;"
+  , "      if (mi_truthy(cond)) {"
+  , "        expr = expr->as.if_expr.then_br; goto eval_top;"
+  , "      } else {"
+  , "        expr = expr->as.if_expr.else_br; goto eval_top;"
+  , "      }"
+  , "    }"
+  , ""
+  , "    case EXPR_FOR_RANGE: {"
+  , "      MiEnv *loop_env = mi_env_new(env);"
+  , "      if (mi_gc_env_root_count < MI_MAX_ROOTS) mi_gc_env_roots[mi_gc_env_root_count++] = loop_env;"
+  , "      MiVal acc = mi_force(mi_eval(expr->as.for_range.init, env), env);"
+  , "      int64_t start = mi_force(mi_eval(expr->as.for_range.start, env), env).as.i;"
+  , "      int64_t end = mi_force(mi_eval(expr->as.for_range.end, env), env).as.i;"
+  , "      for (int64_t _i = start; _i < end; _i++) {"
+  , "        mi_env_set(loop_env, expr->as.for_range.iter_var, mi_int(_i));"
+  , "        mi_env_set(loop_env, expr->as.for_range.acc_var, acc);"
+  , "        acc = mi_force(mi_eval(expr->as.for_range.body, loop_env), loop_env);"
+  , "      }"
+  , "      if (mi_gc_env_root_count > 0) mi_gc_env_root_count--;"
+  , "      return acc;"
+  , "    }"
+  , ""
+  , "    case EXPR_TAIL_LOOP: {"
+  , "      MiEnv *loop_env = mi_env_new(env);"
+  , "      if (mi_gc_env_root_count < MI_MAX_ROOTS) mi_gc_env_roots[mi_gc_env_root_count++] = loop_env;"
+  , "      for (int _ti = 0; _ti < expr->as.tail_loop.nparams; _ti++) {"
+  , "        MiVal init_val = mi_force(mi_eval(expr->as.tail_loop.inits[_ti], env), env);"
+  , "        mi_env_set(loop_env, expr->as.tail_loop.params[_ti], init_val);"
+  , "      }"
+  , "      for (;;) {"
+  , "        MiVal result = mi_eval(expr->as.tail_loop.body, loop_env);"
+  , "        result = mi_force(result, loop_env);"
+  , "        if (result.type != MI_TAIL_CALL) {"
+  , "          if (mi_gc_env_root_count > 0) mi_gc_env_root_count--;"
+  , "          return result;"
+  , "        }"
+  , "        for (int _ti = 0; _ti < result.as.tail_call.nargs; _ti++) {"
+  , "          mi_env_set(loop_env, expr->as.tail_loop.params[_ti], result.as.tail_call.args[_ti]);"
+  , "        }"
+  , "      }"
+  , "    }"
+  , ""
+  , "    case EXPR_TAIL_CALL: {"
+  , "      int _tn = expr->as.tail_call.nargs;"
+  , "      MiVal *_targs = mi_alloc(_tn * sizeof(MiVal));"
+  , "      if (mi_gc_env_root_count < MI_MAX_ROOTS) mi_gc_env_roots[mi_gc_env_root_count++] = env;"
+  , "      for (int _ti = 0; _ti < _tn; _ti++) {"
+  , "        _targs[_ti] = mi_force(mi_eval(expr->as.tail_call.args[_ti], env), env);"
+  , "      }"
+  , "      if (mi_gc_env_root_count > 0) mi_gc_env_root_count--;"
+  , "      MiVal r; r.type = MI_TAIL_CALL;"
+  , "      r.as.tail_call.args = _targs; r.as.tail_call.nargs = _tn;"
+  , "      return r;"
+  , "    }"
+  , ""
+  , "    case EXPR_NATIVE_BINOP: {"
+  , "      MiVal _vl = mi_eval(expr->as.native_binop.left, env);"
+  , "      MiVal _vr = mi_eval(expr->as.native_binop.right, env);"
+  , "      const char *_nop = expr->as.native_binop.op;"
+  , "      if (_vl.type == MI_INT && _vr.type == MI_INT) {"
+  , "        int64_t _nl = _vl.as.i, _nr = _vr.as.i;"
+  , "        if (_nop[0] == '+' && !_nop[1]) { int64_t _res; if (__builtin_add_overflow(_nl, _nr, &_res)) return mi_sized_big(mi_bn_add(mi_bn_from_i64(_nl), mi_bn_from_i64(_nr)), 1); return mi_int(_res); }"
+  , "        if (_nop[0] == '-' && !_nop[1]) { int64_t _res; if (__builtin_sub_overflow(_nl, _nr, &_res)) return mi_sized_big(mi_bn_sub(mi_bn_from_i64(_nl), mi_bn_from_i64(_nr)), 1); return mi_int(_res); }"
+  , "        if (_nop[0] == '*' && !_nop[1]) { int64_t _res; if (__builtin_mul_overflow(_nl, _nr, &_res)) return mi_sized_big(mi_bn_mul(mi_bn_from_i64(_nl), mi_bn_from_i64(_nr)), 1); return mi_int(_res); }"
+  , "        if (_nop[0] == '/' && !_nop[1]) return mi_int(_nr == 0 ? 0 : _nl / _nr);"
+  , "        if (_nop[0] == '%' && !_nop[1]) return mi_int(_nr == 0 ? 0 : _nl % _nr);"
+  , "        if (_nop[0] == '<' && !_nop[1]) return mi_int(_nl < _nr);"
+  , "        if (_nop[0] == '<' && _nop[1] == '=') return mi_int(_nl <= _nr);"
+  , "        if (_nop[0] == '>' && !_nop[1]) return mi_int(_nl > _nr);"
+  , "        if (_nop[0] == '>' && _nop[1] == '=') return mi_int(_nl >= _nr);"
+  , "        if (_nop[0] == '=' && _nop[1] == '=') return mi_int(_nl == _nr);"
+  , "        if (_nop[0] == '/' && _nop[1] == '=') return mi_int(_nl != _nr);"
+  , "        if (_nop[0] == '*' && _nop[1] == '*') {"
+  , "          MiBignum *_base = mi_bn_from_i64(_nl);"
+  , "          MiBignum *_pres = mi_bn_from_i64(1);"
+  , "          for (int64_t _pi = 0; _pi < _nr; _pi++) _pres = mi_bn_mul(_pres, _base);"
+  , "          return mi_sized_big(_pres, 1);"
+  , "        }"
+  , "        return mi_binop(_nop, mi_int(_nl), mi_int(_nr));"
+  , "      }"
+  , "      if (_vl.type == MI_FLOAT && _vr.type == MI_FLOAT) {"
+  , "        double _fl = _vl.as.f, _fr = _vr.as.f;"
+  , "        if (_nop[0] == '+' && !_nop[1]) return mi_float(_fl + _fr);"
+  , "        if (_nop[0] == '-' && !_nop[1]) return mi_float(_fl - _fr);"
+  , "        if (_nop[0] == '*' && !_nop[1]) return mi_float(_fl * _fr);"
+  , "        if (_nop[0] == '/' && !_nop[1]) return mi_float(_fr == 0.0 ? 0.0 : _fl / _fr);"
+  , "        if (_nop[0] == '%' && !_nop[1]) return mi_float(_fr == 0.0 ? 0.0 : fmod(_fl, _fr));"
+  , "        if (_nop[0] == '<' && !_nop[1]) return mi_int(_fl < _fr);"
+  , "        if (_nop[0] == '<' && _nop[1] == '=') return mi_int(_fl <= _fr);"
+  , "        if (_nop[0] == '>' && !_nop[1]) return mi_int(_fl > _fr);"
+  , "        if (_nop[0] == '>' && _nop[1] == '=') return mi_int(_fl >= _fr);"
+  , "        if (_nop[0] == '=' && _nop[1] == '=') return mi_int(_fl == _fr);"
+  , "        if (_nop[0] == '/' && _nop[1] == '=') return mi_int(_fl != _fr);"
+  , "        if (_nop[0] == '*' && _nop[1] == '*') return mi_float(pow(_fl, _fr));"
+  , "      }"
+  , "      if (_vl.type == MI_FLOAT32 && _vr.type == MI_FLOAT32) {"
+  , "        float _fl = _vl.as.f32, _fr = _vr.as.f32;"
+  , "        if (_nop[0] == '+' && !_nop[1]) return mi_float32(_fl + _fr);"
+  , "        if (_nop[0] == '-' && !_nop[1]) return mi_float32(_fl - _fr);"
+  , "        if (_nop[0] == '*' && !_nop[1]) return mi_float32(_fl * _fr);"
+  , "        if (_nop[0] == '/' && !_nop[1]) return mi_float32(_fr == 0.0f ? 0.0f : _fl / _fr);"
+  , "        if (_nop[0] == '%' && !_nop[1]) return mi_float32(_fr == 0.0f ? 0.0f : fmodf(_fl, _fr));"
+  , "        if (_nop[0] == '<' && !_nop[1]) return mi_int(_fl < _fr);"
+  , "        if (_nop[0] == '<' && _nop[1] == '=') return mi_int(_fl <= _fr);"
+  , "        if (_nop[0] == '>' && !_nop[1]) return mi_int(_fl > _fr);"
+  , "        if (_nop[0] == '>' && _nop[1] == '=') return mi_int(_fl >= _fr);"
+  , "        if (_nop[0] == '=' && _nop[1] == '=') return mi_int(_fl == _fr);"
+  , "        if (_nop[0] == '/' && _nop[1] == '=') return mi_int(_fl != _fr);"
+  , "        if (_nop[0] == '*' && _nop[1] == '*') return mi_float32(powf(_fl, _fr));"
+  , "      }"
+  , "      return mi_binop(_nop, _vl, _vr);"
   , "    }"
   , ""
   , "    case EXPR_THUNK: {"
