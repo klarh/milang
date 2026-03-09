@@ -31,7 +31,7 @@ clean:
 	rm -f $(MILANG) milang
 
 test:
-	$(PYTHON) tests/run.py -m ${MILANG}
+	$(PYTHON) tests/run.py -m ${MILANG} $(if $(CC),--cc $(CC),)
 
 docs:
 	cd docs && mdbook build

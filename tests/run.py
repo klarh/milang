@@ -18,11 +18,17 @@ parser.add_argument(
 parser.add_argument(
     "-d", "--test-dir", default=os.path.dirname(__file__), help="Directory for tests"
 )
+parser.add_argument(
+    "--cc", default=None, help="C compiler to pass to milang (e.g. gcc, clang)"
+)
 
 
-def run(filename, milang, timeout):
+def run(filename, milang, timeout, cc):
     error_file = "{}.errors".format(filename)
-    cmd = [milang, "run", filename]
+    cmd = [milang]
+    if cc:
+        cmd += ["--cc", cc]
+    cmd += ["run", filename]
 
     try:
         result = subprocess.run(cmd, timeout=timeout, capture_output=True, text=True)
@@ -57,7 +63,7 @@ def run(filename, milang, timeout):
     )
 
 
-def main(n_workers, milang, timeout, test_dir):
+def main(n_workers, milang, timeout, test_dir, cc):
     milang = os.path.abspath(milang)
 
     tests = []
@@ -69,7 +75,7 @@ def main(n_workers, milang, timeout, test_dir):
     with multiprocessing.Pool(n_workers) as p:
         thunks = []
         for t in tests:
-            thunks.append(p.apply_async(run, (t, milang, timeout)))
+            thunks.append(p.apply_async(run, (t, milang, timeout, cc)))
 
         failures = []
         counts = collections.Counter()
