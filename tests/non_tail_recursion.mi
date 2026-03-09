@@ -1,0 +1,7 @@
+-- Non-tail-recursive function: two self-calls per invocation
+-- This exercises the GC env root stack (env frames on the C stack
+-- must survive garbage collection during deep recursion)
+fib n = if (n < 2) n (fib (n - 1) + fib (n - 2))
+
+main world = world.io.println (toString (fib n))
+  n = 10 + 0 * len world.argv
