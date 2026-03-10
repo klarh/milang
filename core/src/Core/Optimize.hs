@@ -4,6 +4,7 @@
 module Core.Optimize (optimize) where
 
 import Core.Syntax
+import Core.Reduce (substExpr)
 import qualified Data.Text as T
 import Data.List (nub)
 
@@ -382,8 +383,13 @@ wrapMutualGroup grpBs allBs =
       -- Build Case alts: one per function in the group
       tagAlts = [Alt (PLit (IntLit (fromIntegral tag)))
                      Nothing
-                     (let (_, innerBody) = unwrapLams' (bindBody b)
-                      in renameMutualCalls innerBody)
+                     (let (bParams, innerBody) = unwrapLams' (bindBody b)
+                          bParamNames = map bindName bParams
+                          -- Rename this function's params to canonical param names
+                          renamed = foldr (\(from, to) e ->
+                            if from /= to then substExpr from (Name to) e else e)
+                            innerBody (zip bParamNames paramNames)
+                      in renameMutualCalls renamed)
                 | (b, (_, tag)) <- zip grpBs nameToTag]
 
       -- The dispatch body: tag -> 0 = body0; 1 = body1; ...

@@ -1,0 +1,22 @@
+-- BUG: Mutual recursion + FFI causes "unbound variable" at runtime
+-- Affects BOTH interpreter and native codegen.
+-- Pattern: f -> g -> f where g uses FFI on a parameter
+-- The compiler alpha-renames a parameter (n -> n0) during reduction
+-- but loses the binding in the recursive environment.
+--
+-- Expected: prints "0"
+-- Actual (native): "native codegen: unbound variable: n0"
+-- Actual (interp): "unbound variable: _f_g_f" or similar
+
+arr_ffi = import' "lib/mini_array.h" ({})
+arr_new cap = arr_ffi.mini_array_new cap
+arr_length a = arr_ffi.mini_array_len a
+
+f a n = if (n > 3) 0 (g a n)
+
+g a n = f a (n + 1)
+  d = arr_length a
+
+main world =
+  w = arr_new 10
+  world.io.println (toString (f w 0))

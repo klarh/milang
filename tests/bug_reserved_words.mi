@@ -1,0 +1,13 @@
+-- BUG: C reserved words as record field names
+-- Native codegen emits `short` and `long` as C struct members, which are C keywords.
+-- Interpreter works fine. Native codegen fails with:
+--   error: two or more data types in declaration specifiers
+--     MiVal short;
+--            ^~~~~
+
+make_spec short long = {short = short; long = long}
+
+main world =
+  s = make_spec "-v" "--verbose"
+  world.io.println s.short
+  world.io.println s.long

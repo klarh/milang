@@ -1,0 +1,32 @@
+-- BUG: Mutually recursive where-clause closures get uninitialized captures
+-- Native codegen: "apply on non-function"
+-- Interpreter: works correctly, prints "1"
+--
+-- The codegen forward-declares _v_go and _v_check but initializes _v_go first,
+-- which captures an uninitialized _v_check. When go actually calls check at
+-- runtime, it finds garbage instead of a function.
+--
+-- Requires a runtime-dynamic list (via FFI) to prevent partial eval from
+-- inlining the mutual recursion away.
+
+arr_ffi = import' "lib/mini_array.h" ({})
+
+arr_from_list xs = result
+  result = arr_ffi.mini_array_new (len xs)
+  dummy = fold (\_ x -> arr_ffi.mini_array_push result x) 0 xs
+arr_get a idx = arr_ffi.mini_array_get a idx
+
+main world =
+  a = arr_from_list [10, 20, 30]
+  lst = make_list a 3
+  r = search lst a 10
+  world.io.println (toString r)
+
+make_list a n = if (n <= 0) [] (Cons (arr_get a (n - 1)) (make_list a (n - 1)))
+
+search indices a target = result
+  go idxs = idxs ->
+    Nil = 0 - 1
+    Cons v rest = check v rest
+  check v rest = if (v == target) 1 (go rest)
+  result = go indices

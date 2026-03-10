@@ -821,6 +821,11 @@ tailBodyToC st funcName nparams expr
     argCs <- mapM (exprToC st) args
     pure $ "mi_expr_tail_call(" ++ show nparams ++ ", " ++
            intercalate ", " argCs ++ ")"
+tailBodyToC st funcName nparams (With body bindings) = do
+  bc <- tailBodyToC st funcName nparams body
+  bindCodes <- mapM (bindingStructToC st) (filter (not . skipBinding) bindings)
+  pure $ "mi_expr_with(" ++ bc ++ ", " ++ show (length bindCodes) ++ ", " ++
+    intercalate ", " bindCodes ++ ")"
 tailBodyToC st _ _ expr = exprToC st expr
 
 tailAltToC :: CGState -> Text -> Int -> Alt -> IO String

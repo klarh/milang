@@ -1,0 +1,10 @@
+-- BUG: Variable rebinding causes duplicate C declarations in native codegen
+-- When a variable name is bound twice in the same function body,
+-- the codegen emits two `MiVal _v_d2` in the same C block scope.
+-- Interpreter works fine. Native codegen fails with:
+--   error: redefinition of '_v_d2'
+
+main world =
+  d2 = world.io.println "first"
+  d2 = world.io.println "second"
+  0

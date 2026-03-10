@@ -6,7 +6,7 @@ import qualified Data.Text as T
 import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
-import Data.List (intercalate, nub)
+import Data.List (intercalate, nub, partition)
 import Control.Monad (when, forM, foldM_)
 import Core.Syntax
 import Core.Codegen (emitPreamble, CGState(..), cfunctionToC, cRetTypeName)
@@ -26,6 +26,8 @@ data NCGState = NCGState
   , ncgGlobals  :: Set.Set Text        -- names that are static globals (don't capture)
   , ncgSelfNames :: Set.Set Text       -- self-recursive binding names (reconstruct from fn+env)
   , ncgKnownTypes :: Map.Map Text NType -- names with known types at compile time
+  , ncgForwardDecls :: Set.Set Text    -- names that are forward-declared but not yet assigned
+  , ncgEnvPatches :: IORef [(String, String, String)]  -- deferred env patches: (envTypeName, fieldName, valueExpr)
   }
 
 newNCGState :: IO NCGState
@@ -33,6 +35,7 @@ newNCGState = do
   nid <- newIORef 0
   defs <- newIORef []
   incs <- newIORef []
+  patches <- newIORef []
   pure NCGState
     { ncgNextId = nid
     , ncgTopDefs = defs
@@ -41,6 +44,8 @@ newNCGState = do
     , ncgGlobals = Set.empty
     , ncgSelfNames = Set.empty
     , ncgKnownTypes = Map.empty
+    , ncgForwardDecls = Set.empty
+    , ncgEnvPatches = patches
     }
 
 freshId :: NCGState -> IO Int
@@ -64,6 +69,10 @@ withGlobals st gs = st { ncgGlobals = Set.union gs (ncgGlobals st) }
 -- | Get the set of names known to be int (backward compat with isKnownInt/isIntBody)
 knownIntSet :: NCGState -> Set.Set Text
 knownIntSet st = Map.keysSet $ Map.filter (== NInt) (ncgKnownTypes st)
+
+-- | Get the set of names known to be float
+knownFloatSet :: NCGState -> Set.Set Text
+knownFloatSet st = Map.keysSet $ Map.filter (== NFloat) (ncgKnownTypes st)
 
 -- | Infer the compile-time type of an expression from its structure.
 inferType :: NCGState -> Expr -> NType
@@ -107,7 +116,8 @@ withKnownTypes st pairs = st { ncgKnownTypes = Map.union (Map.fromList pairs) (n
 sanitizeName :: Text -> String
 sanitizeName t = case T.unpack t of
   [] -> "_empty"
-  s  -> concatMap sanitizeChar s
+  s  -> let name = concatMap sanitizeChar s
+        in if name `Set.member` cReservedWords then "_mi_" ++ name else name
   where
     sanitizeChar c
       | c >= 'a' && c <= 'z' = [c]
@@ -120,6 +130,16 @@ sanitizeName t = case T.unpack t of
       | c == '?' = "_p"
       | c == '-' = "_"
       | otherwise = "_" ++ show (fromEnum c) ++ "_"
+
+-- | C reserved words that cannot be used as identifiers
+cReservedWords :: Set.Set String
+cReservedWords = Set.fromList
+  [ "auto", "break", "case", "char", "const", "continue", "default", "do"
+  , "double", "else", "enum", "extern", "float", "for", "goto", "if", "int"
+  , "long", "register", "return", "short", "signed", "sizeof", "static"
+  , "struct", "switch", "typedef", "union", "unsigned", "void", "volatile"
+  , "while", "inline", "restrict", "_Bool", "_Complex", "_Imaginary"
+  ]
 
 -- | Make a C variable name from a milang name
 cVarName :: Text -> String
@@ -193,6 +213,17 @@ nExprToC st (BinOp op l r)
     rc <- nExprToC st r
     pure $ "mi_apply(mi_apply(" ++ fc ++ ", " ++ lc ++ "), " ++ rc ++ ")"
 
+-- Closure inlining: App (Lam param body) arg → let-bind instead of mi_apply
+nExprToC st (App (Lam param body) x) = do
+  let realName = lamParamName param
+      cvar = cVarName realName
+  xc <- nExprToC st x
+  let xType = inferType st x
+      st' = withScope st (Map.singleton realName cvar)
+      st'' = if xType /= NUnknown then withKnownType st' realName xType else st'
+  bodyC <- nExprToC st'' body
+  pure $ "({ MiVal " ++ cvar ++ " = " ++ xc ++ "; " ++ bodyC ++ "; })"
+
 nExprToC st (App f x) = do
   fc <- nExprToC st f
   xc <- nExprToC st x
@@ -224,9 +255,10 @@ nExprToC st (Lam param body) = do
           innerScope = Map.fromList $
             (param, "_arg") : [(realName, "_arg") | realName /= param] ++
             [(sn, cVarName sn) | sn <- selfFvs]
-          -- Clear self-names so inner lambdas capture them normally
+          -- Clear self-names and forward-decls so inner lambdas capture normally
           bodyScope = (withScope st innerScope)
-            { ncgSelfNames = Set.difference (ncgSelfNames st) (Set.fromList selfFvs) }
+            { ncgSelfNames = Set.difference (ncgSelfNames st) (Set.fromList selfFvs)
+            , ncgForwardDecls = Set.empty }
       bodyC <- nExprToC bodyScope body
       addTopDef st $ unlines
         [ "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env_raw) {"
@@ -252,9 +284,10 @@ nExprToC st (Lam param body) = do
             [(realName, "_arg") | realName /= param] ++
             [ (fv, "_env->" ++ sanitizeName fv) | fv <- capturedFvs ] ++
             [(sn, cVarName sn) | sn <- selfFvs]
-          -- Clear self-names so inner lambdas capture them normally
+          -- Clear self-names and forward-decls so inner lambdas capture normally
           bodyScope = (withScope st innerScope)
-            { ncgSelfNames = Set.difference (ncgSelfNames st) (Set.fromList selfFvs) }
+            { ncgSelfNames = Set.difference (ncgSelfNames st) (Set.fromList selfFvs)
+            , ncgForwardDecls = Set.empty }
       bodyC <- nExprToC bodyScope body
       addTopDef st $ unlines
         [ "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env_raw) {"
@@ -264,12 +297,35 @@ nExprToC st (Lam param body) = do
         , ""
         ]
       -- Emit code to allocate and fill env struct
-      let envAlloc = "({ " ++ envTypeName ++ " *_e = mi_alloc(sizeof(" ++ envTypeName ++ ")); " ++
-            concatMap (\fv -> "_e->" ++ sanitizeName fv ++ " = " ++
-                       maybe (cVarName fv) id (Map.lookup fv (ncgScope st)) ++ "; ")
-              capturedFvs ++
-            "mi_native_env(" ++ fnName ++ ", _e); })"
-      pure envAlloc
+      let deferredFvs = filter (\fv -> Set.member fv (ncgForwardDecls st)) capturedFvs
+          immediateFvs = filter (\fv -> not (Set.member fv (ncgForwardDecls st))) capturedFvs
+      if null deferredFvs
+        then do
+          -- No deferred captures: emit inline as before
+          let envAlloc = "({ " ++ envTypeName ++ " *_e = mi_alloc(sizeof(" ++ envTypeName ++ ")); " ++
+                concatMap (\fv -> "_e->" ++ sanitizeName fv ++ " = " ++
+                           maybe (cVarName fv) id (Map.lookup fv (ncgScope st)) ++ "; ")
+                  capturedFvs ++
+                "mi_native_env(" ++ fnName ++ ", _e); })"
+          pure envAlloc
+        else do
+          -- Some captures are forward-declared: skip them inline, record patches
+          let envAlloc = "({ " ++ envTypeName ++ " *_e = mi_alloc(sizeof(" ++ envTypeName ++ ")); " ++
+                concatMap (\fv -> "_e->" ++ sanitizeName fv ++ " = " ++
+                           maybe (cVarName fv) id (Map.lookup fv (ncgScope st)) ++ "; ")
+                  immediateFvs ++
+                "mi_native_env(" ++ fnName ++ ", _e); })"
+              -- Backpatch via MiVal's env pointer: ((envType *)cvar.as.native.env)->field = value;
+              -- The cvar for this closure is looked up in ncgScope — it's the
+              -- name that emitBindings assigned to the binding whose body is this Lam.
+              -- We record patches using the captured fv's scope value and the env type,
+              -- which emitBindings will resolve after all closures are assigned.
+              patches = map (\fv ->
+                let val = maybe (cVarName fv) id (Map.lookup fv (ncgScope st))
+                in (envTypeName, sanitizeName fv, val))
+                deferredFvs
+          modifyIORef (ncgEnvPatches st) (patches ++)
+          pure envAlloc
 
 nExprToC st (Record tag bindings) = do
   let runtimeBs = filter (not . skipBinding) bindings
@@ -302,6 +358,8 @@ nExprToC st (With body bindings)
         -- Check if this loop can be fully unboxed (int64_t variables)
         paramSet = Set.fromList params
         bodyIsInt = isIntBody paramSet loopName (length params) loopBody
+        bodyIsFloat = not bodyIsInt &&
+                      isFloatBody paramSet loopName (length params) loopBody
     if bodyIsInt
       then do
         -- Fully unboxed int loop: int64_t variables, direct arithmetic
@@ -311,6 +369,21 @@ nExprToC st (With body bindings)
             initDecls = concat [ "int64_t " ++ pv ++ " = (" ++ ic ++ ").as.i; "
                                | (pv, ic) <- zip paramVars initCs ]
         bodyC <- nTailBodyToIntC intScope loopName (length params) paramVars label loopBody
+        pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
+               label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
+               resultVar ++ "; })"
+      else if bodyIsFloat
+      then do
+        -- Fully unboxed float loop: double variables, direct arithmetic
+        initCs <- mapM (nExprToC st) initArgs
+        let floatTypes = [(p, NFloat) | p <- params]
+            floatScope = withKnownTypes bodyScope floatTypes
+            initDecl pv ic arg = case inferType st arg of
+              NInt   -> "double " ++ pv ++ " = (double)(" ++ ic ++ ").as.i; "
+              _      -> "double " ++ pv ++ " = (" ++ ic ++ ").as.f; "
+            initDecls = concat [ initDecl pv ic arg
+                               | (pv, ic, arg) <- zip3 paramVars initCs initArgs ]
+        bodyC <- nTailBodyToFloatC floatScope loopName (length params) paramVars label loopBody
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
                label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
                resultVar ++ "; })"
@@ -619,7 +692,9 @@ isIntBody ints funcName nparams = go
       | isKnownInt ints scrut
       , all isIntAlt alts = all (\(Alt _ _ b) -> go b) alts
       | otherwise = False
-    go (With b _) = go b
+    go (With b bs)
+      -- Only allow With if all bindings are int-valued (safe to emit in unboxed context)
+      = all (\bi -> isKnownInt ints (bindBody bi)) bs && go b
     go e
       | Just args <- matchCallChain funcName e
       , length args == nparams = all (isKnownInt ints) args
@@ -649,6 +724,62 @@ intCOp "==" = "=="; intCOp "/=" = "!="; intCOp "<" = "<"; intCOp ">" = ">"
 intCOp "<=" = "<="; intCOp ">=" = ">="; intCOp "+" = "+"; intCOp "-" = "-"
 intCOp "*" = "*"; intCOp "/" = "/"; intCOp "%" = "%"
 intCOp op = error $ "intCOp: unsupported " ++ T.unpack op
+
+-- ── Float Loop Optimization ───────────────────────────────────────
+
+-- | Check if an expression is known to produce a float
+isKnownFloat :: Set.Set Text -> Expr -> Bool
+isKnownFloat _      (FloatLit _) = True
+isKnownFloat _      (IntLit _)   = True  -- int promotes to float
+isKnownFloat floats (Name n)     = Set.member n floats
+isKnownFloat floats (BinOp op l r)
+  | op `elem` ["+","-","*","/"]
+  = isKnownFloat floats l && isKnownFloat floats r
+isKnownFloat _ _ = False
+
+-- | Check if a TCO loop body only uses float operations
+isFloatBody :: Set.Set Text -> Text -> Int -> Expr -> Bool
+isFloatBody floats funcName nparams = go
+  where
+    go (Case scrut alts)
+      | Just (_, thenBr, elseBr) <- matchTruthiness scrut alts
+      = go thenBr && go elseBr
+    go (Case scrut alts)
+      | isKnownFloat floats scrut || isKnownInt (Set.empty) scrut
+      , all isNumAlt alts = all (\(Alt _ _ b) -> go b) alts
+      | otherwise = False
+    go (With b bs)
+      = all (\bi -> isKnownFloat floats (bindBody bi) || isKnownInt Set.empty (bindBody bi)) bs && go b
+    go e
+      | Just args <- matchCallChain funcName e
+      , length args == nparams = all (isKnownFloat floats) args
+    go e = isKnownFloat floats e
+
+    isNumAlt (Alt (PLit (IntLit _)) _ _) = True
+    isNumAlt (Alt (PLit (FloatLit _)) _ _) = True
+    isNumAlt (Alt PWild _ _) = True
+    isNumAlt _ = False
+
+-- | Emit an expression as a double value (no MiVal boxing)
+nExprToFloat :: NCGState -> Expr -> IO String
+nExprToFloat _ (FloatLit f) = pure (show f)
+nExprToFloat _ (IntLit n)   = pure (show n ++ ".0")
+nExprToFloat st (Name n) = case Map.lookup n (ncgScope st) of
+  Just cname -> pure cname
+  Nothing    -> pure $ "/* unbound " ++ T.unpack n ++ " */ 0.0"
+nExprToFloat st (BinOp op l r) = do
+  lc <- nExprToFloat st l
+  rc <- nExprToFloat st r
+  pure $ "(" ++ lc ++ " " ++ floatCOp op ++ " " ++ rc ++ ")"
+nExprToFloat st expr = do
+  c <- nExprToC st expr
+  pure $ "(" ++ c ++ ").as.f"
+
+floatCOp :: Text -> String
+floatCOp "+" = "+"; floatCOp "-" = "-"; floatCOp "*" = "*"; floatCOp "/" = "/"
+floatCOp "==" = "=="; floatCOp "/=" = "!="; floatCOp "<" = "<"; floatCOp ">" = ">"
+floatCOp "<=" = "<="; floatCOp ">=" = ">="
+floatCOp op = error $ "floatCOp: unsupported " ++ T.unpack op
 
 -- | Compile TCO loop body with int64_t variables (fully unboxed).
 -- Tail calls update int64_t vars and goto; base cases re-box with mi_int().
@@ -706,6 +837,43 @@ nTailBodyToIntC st _ _ _ _ expr
   | isKnownInt (knownIntSet st) expr = do
     c <- nExprToInt st expr
     pure $ "mi_int(" ++ c ++ ")"
+  | otherwise = nExprToC st expr
+
+-- | Compile TCO loop body with double variables (fully unboxed float loop).
+nTailBodyToFloatC :: NCGState -> Text -> Int -> [String] -> String -> Expr -> IO String
+nTailBodyToFloatC st funcName nparams paramVars label expr
+  | Just args <- matchCallChain funcName expr
+  , length args == nparams = do
+    argCs <- mapM (nExprToFloat st) args
+    cid <- freshId st
+    let tmpVars = ["_tc_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
+        tmpDecls = concat ["double " ++ tv ++ " = " ++ ac ++ "; " | (tv, ac) <- zip tmpVars argCs]
+        assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
+    pure $ "({ " ++ tmpDecls ++ assignments ++ "goto " ++ label ++ "; mi_float(0); })"
+
+nTailBodyToFloatC st funcName nparams paramVars label (Case scrut alts) =
+  case matchTruthiness scrut alts of
+    Just (cond, thenBr, elseBr) -> do
+      condC <- emitCondCheck st cond
+      thenC <- nTailBodyToFloatC st funcName nparams paramVars label thenBr
+      elseC <- nTailBodyToFloatC st funcName nparams paramVars label elseBr
+      pure $ "(" ++ condC ++ " ? " ++ thenC ++ " : " ++ elseC ++ ")"
+    Nothing -> nTailBodyToC st funcName nparams paramVars label (Case scrut alts)
+
+nTailBodyToFloatC st funcName nparams paramVars label (With body bindings) = do
+  let runtimeBs = filter (not . skipBinding) bindings
+  if null runtimeBs
+    then nTailBodyToFloatC st funcName nparams paramVars label body
+    else do
+      (bindDecls, newScope, typedSt) <- emitBindings st runtimeBs
+      let bodyScope = withScope typedSt newScope
+      bodyC <- nTailBodyToFloatC bodyScope funcName nparams paramVars label body
+      pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
+
+nTailBodyToFloatC st _ _ _ _ expr
+  | isKnownFloat (knownFloatSet st) expr = do
+    c <- nExprToFloat st expr
+    pure $ "mi_float(" ++ c ++ ")"
   | otherwise = nExprToC st expr
 
 -- | Match a tail-recursive With pattern produced by wrapTailRecBindings.
@@ -829,7 +997,20 @@ nTailAltToC st funcName nparams paramVars label scrutVar (Alt pat guard body) = 
 emitBindings :: NCGState -> [Binding] -> IO ([String], Map.Map Text String, NCGState)
 emitBindings st bindings = do
   -- Pre-compute all binding names and cvars for self-recursive support
-  let bindingScope = Map.fromList [(bindName b, cVarName (bindName b)) | b <- bindings]
+  -- Handle duplicate names by suffixing with unique counter
+  cid <- freshId st
+  let assignCVars :: [Binding] -> Set.Set Text -> [(Binding, String)] -> [(Binding, String)]
+      assignCVars [] _ acc = reverse acc
+      assignCVars (b:bs) seen acc =
+        let name = bindName b
+            baseCVar = cVarName name
+            (cvar, seen') = if Set.member name seen
+              then let idx = length (filter (\(b', _) -> bindName b' == name) acc) + 1
+                   in (baseCVar ++ "_" ++ show cid ++ "_" ++ show idx, seen)
+              else (baseCVar, Set.insert name seen)
+        in assignCVars bs seen' ((b, cvar) : acc)
+      bsWithCVars = assignCVars bindings Set.empty []
+      bindingScope = Map.fromList [(bindName b, cv) | (b, cv) <- bsWithCVars]
       -- Detect self-recursive bindings
       selfRecNames = Set.fromList
         [ bindName b | b <- bindings
@@ -837,36 +1018,93 @@ emitBindings st bindings = do
                          else foldr Lam (bindBody b) (bindParams b)
         , Set.member (bindName b) (exprFreeVars bodyExpr)
         ]
-  go st [] bindingScope selfRecNames bindings
+      -- Check for forward references: does any binding reference a later-defined name?
+      hasForwardRef = any (\(i, b) ->
+        let bodyFvs = exprFreeVars (bindBody b)
+            laterNames = Set.fromList [bindName b' | (j, b') <- zip [0::Int ..] bindings, j > i]
+        in not (Set.null (Set.intersection bodyFvs laterNames))
+        ) (zip [0::Int ..] bindings)
+      -- Also need forward decls when there are mutual references
+      needForwardDecls = hasForwardRef || Set.size selfRecNames > 1
+  if needForwardDecls && length bsWithCVars > 1
+    then do
+      -- Two-phase: forward-declare all vars, then assign
+      let fwdDecls = [("MiVal " ++ cv ++ "; ") | (_, cv) <- bsWithCVars]
+          -- Set forward-declared names so lambda captures can defer patches
+          fwdNames = Set.fromList [bindName b | (b, _) <- bsWithCVars]
+          stWithFwd = st { ncgForwardDecls = Set.union fwdNames (ncgForwardDecls st) }
+          -- Separate closure bindings from non-closure bindings
+          isLamBind (b, _) = case (if null (bindParams b) then bindBody b
+                                   else foldr Lam (bindBody b) (bindParams b)) of
+            Lam _ _ -> True
+            _ -> False
+          (closureBs, otherBs) = partition isLamBind bsWithCVars
+      -- Clear any previous patches
+      writeIORef (ncgEnvPatches st) []
+      -- Process closures first
+      (closureDecls, scope1, st1, patches) <- goAssign stWithFwd fwdDecls bindingScope [] selfRecNames closureBs
+      -- Then process non-closures (patches are already resolved)
+      (otherDecls, scope2, st2, _) <- goAssign st1 [] scope1 [] selfRecNames otherBs
+      -- Order: fwdDecls + closure assignments + patches + other assignments
+      let finalSt' = st2 { ncgForwardDecls = ncgForwardDecls st }
+      pure (closureDecls ++ patches ++ otherDecls, scope2, finalSt')
+    else
+      go st [] bindingScope selfRecNames bsWithCVars
   where
+    -- Standard single-phase: declare + assign in one statement
     go curSt accDecls accScope _ [] = pure (reverse accDecls, accScope, curSt)
-    go curSt accDecls accScope selfRec (b:bs) = do
+    go curSt accDecls accScope selfRec ((b, cvar):bs) = do
       let name = bindName b
-          cvar = cVarName name
-          -- Include ALL binding names in scope (for recursive refs)
           curScope = withScope curSt accScope
-          -- Add self-recursive names to the state
           curScope' = if Set.member name selfRec
             then curScope { ncgSelfNames = Set.insert name (ncgSelfNames curScope) }
             else curScope
       bodyExpr <- if null (bindParams b)
         then pure (bindBody b)
         else pure $ foldr Lam (bindBody b) (bindParams b)
-      -- Lazy bindings: wrap body in Thunk to defer evaluation
       let compiledExpr = if bindDomain b == Lazy then Thunk bodyExpr else bodyExpr
       code <- nExprToC curScope' compiledExpr
-      -- Value bindings: force (no-op for non-thunks, evaluates deferred thunks)
       let decl = if bindDomain b == Lazy
             then "MiVal " ++ cvar ++ " = " ++ code ++ "; "
             else "MiVal " ++ cvar ++ " = mi_force(" ++ code ++ ", NULL); "
-      -- Propagate inferred type to downstream bindings (only for Value domain;
-      -- Lazy bindings are thunks at runtime, so their type is unknown until forced)
       let inferredType = if bindDomain b == Lazy then NUnknown
                          else inferType curScope' bodyExpr
           nextSt = if inferredType /= NUnknown
                    then withKnownType curSt name inferredType
                    else curSt
       go nextSt (decl : accDecls) (Map.insert name cvar accScope) selfRec bs
+
+    -- Two-phase: vars already forward-declared, emit assignments only
+    goAssign curSt accDecls accScope accPatches _ [] = pure (reverse accDecls, accScope, curSt, reverse accPatches)
+    goAssign curSt accDecls accScope accPatches selfRec ((b, cvar):bs) = do
+      let name = bindName b
+          curScope = withScope curSt accScope
+          curScope' = if Set.member name selfRec
+            then curScope { ncgSelfNames = Set.insert name (ncgSelfNames curScope) }
+            else curScope
+      bodyExpr <- if null (bindParams b)
+        then pure (bindBody b)
+        else pure $ foldr Lam (bindBody b) (bindParams b)
+      let compiledExpr = if bindDomain b == Lazy then Thunk bodyExpr else bodyExpr
+      -- Snapshot patches before compilation
+      patchesBefore <- readIORef (ncgEnvPatches curSt)
+      code <- nExprToC curScope' compiledExpr
+      -- Collect new patches and associate with this binding's cvar
+      patchesAfter <- readIORef (ncgEnvPatches curSt)
+      writeIORef (ncgEnvPatches curSt) patchesBefore
+      let newPatches = take (length patchesAfter - length patchesBefore) patchesAfter
+          resolvedPatches = map (\(envType, field, val) ->
+            "((" ++ envType ++ " *)" ++ cvar ++ ".as.native.env)->" ++ field ++ " = " ++ val ++ "; ")
+            newPatches
+      let assign = if bindDomain b == Lazy
+            then cvar ++ " = " ++ code ++ "; "
+            else cvar ++ " = mi_force(" ++ code ++ ", NULL); "
+      let inferredType = if bindDomain b == Lazy then NUnknown
+                         else inferType curScope' bodyExpr
+          nextSt = if inferredType /= NUnknown
+                   then withKnownType curSt name inferredType
+                   else curSt
+      goAssign nextSt (assign : accDecls) (Map.insert name cvar accScope) (resolvedPatches ++ accPatches) selfRec bs
 
 -- ── Helpers ────────────────────────────────────────────────────────
 
@@ -880,6 +1118,25 @@ isBuiltinOp op = op `elem`
 skipBinding :: Binding -> Bool
 skipBinding b = bindDomain b `elem` [Type, Trait, Doc, Parse] || isModuleRef (bindName b)
   where isModuleRef n = "__mod_" `T.isPrefixOf` n && "__" `T.isSuffixOf` n
+
+-- | Dead code elimination: compute the set of names transitively reachable
+--   from a set of root names. Only emit bindings for reachable names.
+reachableNames :: [Binding] -> Set.Set Text -> Set.Set Text
+reachableNames bindings roots =
+  let nameToFvs = Map.fromList
+        [ (bindName b, bodyFvs b)
+        | b <- bindings ]
+      bodyFvs b =
+        let body = if null (bindParams b) then bindBody b
+                   else foldr Lam (bindBody b) (bindParams b)
+        in exprFreeVars body
+      go visited frontier
+        | Set.null frontier = visited
+        | otherwise =
+            let newFvs = Set.unions [Map.findWithDefault Set.empty n nameToFvs | n <- Set.toList frontier]
+                newNames = Set.difference newFvs visited
+            in go (Set.union visited newNames) newNames
+  in go roots roots
 
 -- ── Top-Level Code Generation ──────────────────────────────────────
 
@@ -963,16 +1220,26 @@ nativeNamespaceToC :: NCGState -> Set.Set Text -> [Binding] -> IO String
 nativeNamespaceToC st hidden allBindings = do
   let runtimeBs = filter (not . skipBinding) allBindings
       hasMainWithArg = any isMainBinding runtimeBs
+      -- Dead code elimination: only emit bindings reachable from roots
+      roots = if hasMainWithArg
+              then Set.singleton "main"
+              else Set.fromList [bindName b | b <- runtimeBs,
+                                 not (Set.member (bindName b) hidden)]
+      reachable = reachableNames runtimeBs roots
+      -- Only include builtins that are reachable (referenced by live code)
+      liveBuiltinEntries = [(n, v) | (n, v) <- builtinEntries,
+                            Set.member (T.pack n) reachable]
+      liveBuiltinNames = [T.pack n | (n, _) <- liveBuiltinEntries]
+      liveBs = filter (\b -> Set.member (bindName b) reachable) runtimeBs
   ref <- newIORef ""
   let emit s = modifyIORef ref (++ s)
 
-  -- Pre-declare ALL namespace bindings + builtins as static globals
-  let allNames = [bindName b | b <- runtimeBs]
-      builtinNames' = [T.pack n | (n, _) <- builtinEntries]
-      allGlobalNames = Set.fromList (allNames ++ builtinNames')
+  -- Pre-declare live namespace bindings + builtins as static globals
+  let allNames = [bindName b | b <- liveBs]
+      allGlobalNames = Set.fromList (allNames ++ liveBuiltinNames)
       globalScope = Map.fromList $
             [(name, cVarName name) | name <- allNames] ++
-            [(T.pack n, cVarName (T.pack n)) | (n, _) <- builtinEntries] ++
+            [(T.pack n, cVarName (T.pack n)) | (n, _) <- liveBuiltinEntries] ++
             (if not hasMainWithArg then [("world", cVarName "world")] else [])
       st' = withGlobals (withScope st globalScope) allGlobalNames
 
@@ -980,12 +1247,12 @@ nativeNamespaceToC st hidden allBindings = do
   addTopDef st $ unlines $
     ["// Static globals for namespace bindings"] ++
     ["static MiVal " ++ cVarName name ++ ";" | name <- allNames,
-     not (Set.member name (Set.fromList builtinNames'))]
+     not (Set.member name (Set.fromList liveBuiltinNames))]
 
   -- Builtins are also static globals
   addTopDef st $ unlines $
     ["// Static globals for builtins"] ++
-    ["static MiVal " ++ cVarName (T.pack n) ++ ";" | (n, _) <- builtinEntries]
+    ["static MiVal " ++ cVarName (T.pack n) ++ ";" | (n, _) <- liveBuiltinEntries]
 
   if not hasMainWithArg
     then addTopDef st "static MiVal _v_world;\n"
@@ -998,7 +1265,7 @@ nativeNamespaceToC st hidden allBindings = do
   emit "  // Built-in functions\n"
   mapM_ (\(name, val) -> do
     emit $ "  " ++ cVarName (T.pack name) ++ " = " ++ val ++ ";\n"
-    ) builtinEntries
+    ) liveBuiltinEntries
   emit "\n"
 
   if not hasMainWithArg
@@ -1027,12 +1294,15 @@ nativeNamespaceToC st hidden allBindings = do
         pure $ if inferredType /= NUnknown
                then withKnownType curSt name inferredType
                else curSt
-  foldM_ (\curSt b -> emitBinding curSt b) st' runtimeBs
+  foldM_ (\curSt b -> emitBinding curSt b) st' liveBs
 
   -- Re-register len/strlen after prelude (overrides prelude's definition)
-  emit "\n  // Re-register native len after prelude\n"
-  emit $ "  " ++ cVarName "len" ++ " = mi_native(mi_builtin_len);\n"
-  emit $ "  " ++ cVarName "strlen" ++ " = mi_native(mi_builtin_len);\n"
+  when (Set.member "len" reachable || Set.member "strlen" reachable) $ do
+    emit "\n  // Re-register native len after prelude\n"
+    when (Set.member "len" reachable) $
+      emit $ "  " ++ cVarName "len" ++ " = mi_native(mi_builtin_len);\n"
+    when (Set.member "strlen" reachable) $
+      emit $ "  " ++ cVarName "strlen" ++ " = mi_native(mi_builtin_len);\n"
 
   emit "\n"
   if hasMainWithArg
@@ -1049,7 +1319,7 @@ nativeNamespaceToC st hidden allBindings = do
         if Set.member name hidden
           then pure ()
           else emit $ "  printf(\"" ++ T.unpack name ++ " = \"); mi_print_val(" ++ cvar ++ "); printf(\"\\n\");\n"
-        ) runtimeBs
+        ) liveBs
       emit "  return 0;\n"
       emit "}\n"
 

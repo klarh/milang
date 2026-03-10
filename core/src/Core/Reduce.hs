@@ -5,6 +5,7 @@ module Core.Reduce
   , exprFreeVars
   , envInsert, envMap, envLookup
   , protectPrelude
+  , substExpr
   ) where
 
 import Data.Text (Text)
