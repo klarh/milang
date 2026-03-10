@@ -7,11 +7,15 @@ import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
 import Data.List (intercalate, nub)
-import Control.Monad (when, forM)
+import Control.Monad (when, forM, foldM_)
 import Core.Syntax
 import Core.Codegen (emitPreamble, CGState(..), cfunctionToC, cRetTypeName)
 import Core.Reduce (exprFreeVars)
 import System.IO (Handle, hPutStr, hPutStrLn)
+
+-- | Inferred native type for specialized code generation
+data NType = NInt | NFloat | NString | NRecord Text | NClosure | NUnknown
+  deriving (Show, Eq)
 
 -- | State for native code generation
 data NCGState = NCGState
@@ -21,7 +25,7 @@ data NCGState = NCGState
   , ncgScope    :: Map.Map Text String  -- milang name → C variable name
   , ncgGlobals  :: Set.Set Text        -- names that are static globals (don't capture)
   , ncgSelfNames :: Set.Set Text       -- self-recursive binding names (reconstruct from fn+env)
-  , ncgKnownInts :: Set.Set Text       -- names guaranteed to be int64_t at runtime
+  , ncgKnownTypes :: Map.Map Text NType -- names with known types at compile time
   }
 
 newNCGState :: IO NCGState
@@ -36,7 +40,7 @@ newNCGState = do
     , ncgScope = Map.empty
     , ncgGlobals = Set.empty
     , ncgSelfNames = Set.empty
-    , ncgKnownInts = Set.empty
+    , ncgKnownTypes = Map.empty
     }
 
 freshId :: NCGState -> IO Int
@@ -56,6 +60,48 @@ withScope st extra = st { ncgScope = Map.union extra (ncgScope st) }
 
 withGlobals :: NCGState -> Set.Set Text -> NCGState
 withGlobals st gs = st { ncgGlobals = Set.union gs (ncgGlobals st) }
+
+-- | Get the set of names known to be int (backward compat with isKnownInt/isIntBody)
+knownIntSet :: NCGState -> Set.Set Text
+knownIntSet st = Map.keysSet $ Map.filter (== NInt) (ncgKnownTypes st)
+
+-- | Infer the compile-time type of an expression from its structure.
+inferType :: NCGState -> Expr -> NType
+inferType _  (IntLit _)    = NInt
+inferType _  (SizedInt {}) = NInt
+inferType _  (FloatLit _)  = NFloat
+inferType _  (SizedFloat {}) = NFloat
+inferType _  (StringLit _) = NString
+inferType _  (Lam _ _)     = NClosure
+inferType st (Name n)      = Map.findWithDefault NUnknown n (ncgKnownTypes st)
+inferType st (BinOp op l r)
+  | op `elem` ["==", "/=", "<", ">", "<=", ">="] = NInt  -- comparisons always return 0/1
+  | op `elem` ["+", "-", "*", "/", "%"]
+  , inferType st l == NInt, inferType st r == NInt = NInt
+  | op `elem` ["+", "-", "*", "/"]
+  , inferType st l == NFloat || inferType st r == NFloat = NFloat
+  | op == "+" , inferType st l == NString || inferType st r == NString = NString
+inferType _  (Record tag _) = NRecord tag
+inferType st (FieldAccess e _) = case inferType st e of
+  NRecord _ -> NUnknown  -- fields could be any type
+  _         -> NUnknown
+inferType st (Case _ alts) = case alts of
+  -- If all alt bodies have the same type, the case has that type
+  (Alt _ _ body : rest)
+    | let bt = inferType st body
+    , bt /= NUnknown
+    , all (\(Alt _ _ b) -> inferType st b == bt) rest -> bt
+  _ -> NUnknown
+inferType st (With body _) = inferType st body
+inferType _ _ = NUnknown
+
+-- | Add type knowledge for a name
+withKnownType :: NCGState -> Text -> NType -> NCGState
+withKnownType st name typ = st { ncgKnownTypes = Map.insert name typ (ncgKnownTypes st) }
+
+-- | Add type knowledge for multiple names
+withKnownTypes :: NCGState -> [(Text, NType)] -> NCGState
+withKnownTypes st pairs = st { ncgKnownTypes = Map.union (Map.fromList pairs) (ncgKnownTypes st) }
 
 -- | Sanitize a milang name for use as a C identifier
 sanitizeName :: Text -> String
@@ -128,9 +174,18 @@ nExprToC st (Name n) =
 
 nExprToC st (BinOp op l r)
   | isBuiltinOp op = do
-    lc <- nExprToC st l
-    rc <- nExprToC st r
-    pure $ nativeBinop op lc rc
+    let lt = inferType st l
+        rt = inferType st r
+    -- When both operands are known-int, skip type check entirely
+    if lt == NInt && rt == NInt && op `elem` ["+","-","*","/","%","==","/=","<",">","<=",">="]
+      then do
+        lc <- nExprToC st l
+        rc <- nExprToC st r
+        pure $ "mi_int((" ++ lc ++ ").as.i " ++ intCOp op ++ " (" ++ rc ++ ").as.i)"
+      else do
+        lc <- nExprToC st l
+        rc <- nExprToC st r
+        pure $ nativeBinop op lc rc
   | otherwise = do
     -- Custom operator: treat as function application
     fc <- nExprToC st (Name op)
@@ -251,7 +306,8 @@ nExprToC st (With body bindings)
       then do
         -- Fully unboxed int loop: int64_t variables, direct arithmetic
         initCs <- mapM (nExprToC st) initArgs
-        let intScope = bodyScope { ncgKnownInts = Set.union paramSet (ncgKnownInts bodyScope) }
+        let intTypes = [(p, NInt) | p <- params]
+            intScope = withKnownTypes bodyScope intTypes
             initDecls = concat [ "int64_t " ++ pv ++ " = (" ++ ic ++ ").as.i; "
                                | (pv, ic) <- zip paramVars initCs ]
         bodyC <- nTailBodyToIntC intScope loopName (length params) paramVars label loopBody
@@ -259,9 +315,11 @@ nExprToC st (With body bindings)
                label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
                resultVar ++ "; })"
       else do
-        -- Standard MiVal loop
+        -- Standard MiVal loop — but propagate any known types for params
+        let paramTypes = [(p, inferType st arg) | (p, arg) <- zip params initArgs]
+            typedScope = withKnownTypes bodyScope paramTypes
         initCs <- mapM (nExprToC st) initArgs
-        bodyC <- nTailBodyToC bodyScope loopName (length params) paramVars label loopBody
+        bodyC <- nTailBodyToC typedScope loopName (length params) paramVars label loopBody
         let initDecls = concat [ "MiVal " ++ pv ++ " = " ++ ic ++ "; "
                                | (pv, ic) <- zip paramVars initCs ]
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
@@ -274,8 +332,8 @@ nExprToC st (With body bindings) = do
     then nExprToC st body
     else do
       -- Use GCC statement expression: ({ MiVal v1 = ...; ...; body; })
-      (bindDecls, newScope) <- emitBindings st runtimeBs
-      let bodyScope = withScope st newScope
+      (bindDecls, newScope, typedSt) <- emitBindings st runtimeBs
+      let bodyScope = withScope typedSt newScope
       bodyC <- nExprToC bodyScope body
       pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
 
@@ -394,7 +452,7 @@ nExprToC st (Namespace bindings) = do
   -- Nested namespace: like With but without a distinct body
   let runtimeBs = filter (not . skipBinding) bindings
       -- The "body" is the last binding's name, or a record of all bindings
-  (bindDecls, newScope) <- emitBindings st runtimeBs
+  (bindDecls, newScope, _) <- emitBindings st runtimeBs
   -- Return a record containing all the namespace's bindings
   let n = length runtimeBs
       namesArr = "(const char*[]){" ++ intercalate ", " [cStringLit (T.unpack (bindName b)) | b <- runtimeBs] ++ "}"
@@ -485,16 +543,22 @@ isTruthinessAlts
 isTruthinessAlts _ = False
 
 -- | Emit a truthiness check for a condition expression.
--- When the condition is a comparison op (==, <, >, etc.), the result
--- is always MI_INT(0|1) so we can check directly without mi_truthy.
+-- Uses type inference to select the most efficient check:
+-- - Known int: direct .as.i (skip mi_truthy)
+-- - Comparison op: result is always int, use .as.i
+-- - Known record: tag-based check (skip mi_truthy switch)
+-- - Unknown: fall back to mi_truthy()
 emitCondCheck :: NCGState -> Expr -> IO String
-emitCondCheck st cond@(BinOp op _ _)
-  | op `elem` ["==", "/=", "<", ">", "<=", ">="] = do
+emitCondCheck st cond = case inferType st cond of
+  NInt -> do
     c <- nExprToC st cond
     pure $ "(" ++ c ++ ").as.i"
-emitCondCheck st cond = do
-  c <- nExprToC st cond
-  pure $ "mi_truthy(" ++ c ++ ")"
+  NRecord tag -> do
+    -- Known record tag — truthiness is compile-time known
+    pure $ if tag `elem` ["False", "Nil", "Nothing"] then "0" else "1"
+  _ -> do
+    c <- nExprToC st cond
+    pure $ "mi_truthy(" ++ c ++ ")"
 
 -- ── Native Binary Operations ───────────────────────────────────────
 
@@ -609,7 +673,7 @@ nTailBodyToIntC st funcName nparams paramVars label (Case scrut alts) =
       pure $ "(" ++ condC ++ " ? " ++ thenC ++ " : " ++ elseC ++ ")"
     Nothing
       -- Int scrutinee with int-compatible patterns: direct int comparison
-      | isKnownInt (ncgKnownInts st) scrut -> do
+      | isKnownInt (knownIntSet st) scrut -> do
         sc <- nExprToInt st scrut
         altPairs <- mapM (intTailAlt st funcName nparams paramVars label sc) alts
         pure $ buildTernaryChain altPairs
@@ -632,14 +696,14 @@ nTailBodyToIntC st funcName nparams paramVars label (With body bindings) = do
   if null runtimeBs
     then nTailBodyToIntC st funcName nparams paramVars label body
     else do
-      (bindDecls, newScope) <- emitBindings st runtimeBs
-      let bodyScope = withScope st newScope
+      (bindDecls, newScope, typedSt) <- emitBindings st runtimeBs
+      let bodyScope = withScope typedSt newScope
       bodyC <- nTailBodyToIntC bodyScope funcName nparams paramVars label body
       pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
 
 -- Base case: re-box int result as MiVal
 nTailBodyToIntC st _ _ _ _ expr
-  | isKnownInt (ncgKnownInts st) expr = do
+  | isKnownInt (knownIntSet st) expr = do
     c <- nExprToInt st expr
     pure $ "mi_int(" ++ c ++ ")"
   | otherwise = nExprToC st expr
@@ -737,8 +801,8 @@ nTailBodyToC st funcName nparams paramVars label (With body bindings) = do
   if null runtimeBs
     then nTailBodyToC st funcName nparams paramVars label body
     else do
-      (bindDecls, newScope) <- emitBindings st runtimeBs
-      let bodyScope = withScope st newScope
+      (bindDecls, newScope, typedSt) <- emitBindings st runtimeBs
+      let bodyScope = withScope typedSt newScope
       bodyC <- nTailBodyToC bodyScope funcName nparams paramVars label body
       pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
 
@@ -760,9 +824,9 @@ nTailAltToC st funcName nparams paramVars label scrutVar (Alt pat guard body) = 
 
 -- ── Binding Emission ───────────────────────────────────────────────
 
--- | Emit C declarations for a list of bindings, returning the decl strings
---   and a scope map of the new variable names.
-emitBindings :: NCGState -> [Binding] -> IO ([String], Map.Map Text String)
+-- | Emit C declarations for a list of bindings, returning the decl strings,
+--   a scope map of the new variable names, and the updated type knowledge.
+emitBindings :: NCGState -> [Binding] -> IO ([String], Map.Map Text String, NCGState)
 emitBindings st bindings = do
   -- Pre-compute all binding names and cvars for self-recursive support
   let bindingScope = Map.fromList [(bindName b, cVarName (bindName b)) | b <- bindings]
@@ -775,7 +839,7 @@ emitBindings st bindings = do
         ]
   go st [] bindingScope selfRecNames bindings
   where
-    go _ accDecls accScope _ [] = pure (reverse accDecls, accScope)
+    go curSt accDecls accScope _ [] = pure (reverse accDecls, accScope, curSt)
     go curSt accDecls accScope selfRec (b:bs) = do
       let name = bindName b
           cvar = cVarName name
@@ -795,7 +859,14 @@ emitBindings st bindings = do
       let decl = if bindDomain b == Lazy
             then "MiVal " ++ cvar ++ " = " ++ code ++ "; "
             else "MiVal " ++ cvar ++ " = mi_force(" ++ code ++ ", NULL); "
-      go curSt (decl : accDecls) (Map.insert name cvar accScope) selfRec bs
+      -- Propagate inferred type to downstream bindings (only for Value domain;
+      -- Lazy bindings are thunks at runtime, so their type is unknown until forced)
+      let inferredType = if bindDomain b == Lazy then NUnknown
+                         else inferType curScope' bodyExpr
+          nextSt = if inferredType /= NUnknown
+                   then withKnownType curSt name inferredType
+                   else curSt
+      go nextSt (decl : accDecls) (Map.insert name cvar accScope) selfRec bs
 
 -- ── Helpers ────────────────────────────────────────────────────────
 
@@ -935,21 +1006,28 @@ nativeNamespaceToC st hidden allBindings = do
     else pure ()
 
   -- Emit user bindings (all assignments, no declarations)
+  -- Track inferred types as we process each binding for type propagation
   emit "  // User bindings\n"
-  mapM_ (\b -> do
-    let name = bindName b
-        cvar = cVarName name
-    bodyExpr <- if null (bindParams b)
-      then pure (bindBody b)
-      else pure $ foldr Lam (bindBody b) (bindParams b)
-    -- Lazy bindings: wrap body in Thunk to defer evaluation
-    let compiledExpr = if bindDomain b == Lazy then Thunk bodyExpr else bodyExpr
-    code <- nExprToC st' compiledExpr
-    -- Value bindings: force (no-op for non-thunks, evaluates deferred thunks)
-    let forceCode = if bindDomain b == Lazy then code
-                    else "mi_force(" ++ code ++ ", NULL)"
-    emit $ "  " ++ cvar ++ " = " ++ forceCode ++ ";\n"
-    ) runtimeBs
+  let emitBinding curSt b = do
+        let name = bindName b
+            cvar = cVarName name
+        bodyExpr <- if null (bindParams b)
+          then pure (bindBody b)
+          else pure $ foldr Lam (bindBody b) (bindParams b)
+        -- Lazy bindings: wrap body in Thunk to defer evaluation
+        let compiledExpr = if bindDomain b == Lazy then Thunk bodyExpr else bodyExpr
+        code <- nExprToC curSt compiledExpr
+        -- Value bindings: force (no-op for non-thunks, evaluates deferred thunks)
+        let forceCode = if bindDomain b == Lazy then code
+                        else "mi_force(" ++ code ++ ", NULL)"
+        emit $ "  " ++ cvar ++ " = " ++ forceCode ++ ";\n"
+        -- Propagate inferred type (skip lazy bindings — they're thunks at runtime)
+        let inferredType = if bindDomain b == Lazy then NUnknown
+                           else inferType curSt bodyExpr
+        pure $ if inferredType /= NUnknown
+               then withKnownType curSt name inferredType
+               else curSt
+  foldM_ (\curSt b -> emitBinding curSt b) st' runtimeBs
 
   -- Re-register len/strlen after prelude (overrides prelude's definition)
   emit "\n  // Re-register native len after prelude\n"
