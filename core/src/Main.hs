@@ -69,8 +69,6 @@ data ResCtx = ResCtx
 data Command
   = CmdRun RunOpts
   | CmdCompile CompileOpts
-  | CmdCompileNative CompileOpts
-  | CmdRunNative RunOpts
   | CmdReduce ReduceOpts
   | CmdPin PinOpts
   | CmdRepl
@@ -84,12 +82,14 @@ data GlobalOpts = GlobalOpts
 data RunOpts = RunOpts
   { runFile    :: FilePath
   , runKeepC   :: Bool
+  , runInterpret :: Bool
   , runArgs    :: [String]
   }
 
 data CompileOpts = CompileOpts
-  { compFile :: FilePath
-  , compOut  :: Maybe FilePath
+  { compFile    :: FilePath
+  , compOut     :: Maybe FilePath
+  , compInterpret :: Bool
   }
 
 data ReduceOpts = ReduceOpts
@@ -129,13 +129,9 @@ globalParser = GlobalOpts
 commandParser :: Parser Command
 commandParser = hsubparser
   (  command "run" (info runParser
-       (progDesc "Compile and run a .mi file"))
+       (progDesc "Compile and run a .mi file (native codegen; use --interpret for interpreter)"))
   <> command "compile" (info compileParser
-       (progDesc "Compile a .mi file to C or a binary"))
-  <> command "compile-native" (info compileNativeParser
-       (progDesc "Compile a .mi file using native C function codegen (experimental)"))
-  <> command "run-native" (info runNativeParser
-       (progDesc "Compile and run using native C function codegen (experimental)"))
+       (progDesc "Compile a .mi file to C or a binary (native codegen; use --interpret for interpreter)"))
   <> command "reduce" (info reduceParser
        (progDesc "Show AST (parsed, reduced, or as JSON IR)"))
   <> command "dump" (info dumpParser
@@ -152,6 +148,7 @@ runParser :: Parser Command
 runParser = fmap CmdRun $ RunOpts
   <$> argument str (metavar "FILE" <> help "Milang source file")
   <*> switch (long "keep-c" <> help "Keep generated C file after execution")
+  <*> switch (long "interpret" <> help "Use interpreter-based codegen instead of native")
   <*> many (argument str (metavar "ARGS..." <> help "Arguments passed to the compiled program"))
 
 compileParser :: Parser Command
@@ -159,18 +156,7 @@ compileParser = fmap CmdCompile $ CompileOpts
   <$> argument str (metavar "FILE" <> help "Milang source file")
   <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
         <> help "Output file (.c for C source, other for binary; default: <input>.c)"))
-
-compileNativeParser :: Parser Command
-compileNativeParser = fmap CmdCompileNative $ CompileOpts
-  <$> argument str (metavar "FILE" <> help "Milang source file")
-  <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
-        <> help "Output file (.c for C source, other for binary; default: <input>.c)"))
-
-runNativeParser :: Parser Command
-runNativeParser = fmap CmdRunNative $ RunOpts
-  <$> argument str (metavar "FILE" <> help "Milang source file")
-  <*> switch (long "keep-c" <> help "Keep generated C file after execution")
-  <*> many (argument str (metavar "ARGS..." <> help "Arguments passed to the compiled program"))
+  <*> switch (long "interpret" <> help "Use interpreter-based codegen instead of native")
 
 reduceParser :: Parser Command
 reduceParser = fmap CmdReduce $ ReduceOpts
@@ -231,10 +217,12 @@ main = do
   let nc = optNoCache gopts
   cc <- resolveCC (optCC gopts)
   case optCommand gopts of
-    CmdRun opts     -> cmdRun cc nc opts
-    CmdCompile opts -> cmdCompile cc nc opts
-    CmdCompileNative opts -> cmdCompileNative cc nc opts
-    CmdRunNative opts -> cmdRunNative cc nc opts
+    CmdRun opts
+      | runInterpret opts -> cmdRun cc nc opts
+      | otherwise         -> cmdRunNative cc nc opts
+    CmdCompile opts
+      | compInterpret opts -> cmdCompile cc nc opts
+      | otherwise          -> cmdCompileNative cc nc opts
     CmdReduce opts  -> cmdReduce cc nc opts
     CmdPin opts     -> cmdPin cc nc opts
     CmdRepl         -> cmdRepl
@@ -949,7 +937,7 @@ cmdRun cc noCache opts = do
   if not (null runErr) then hPutStrLn stderr runErr else pure ()
   exitWith runExit
 
--- | compile-native: emit C using native function codegen
+-- | Emit C using native function codegen
 cmdCompileNative :: String -> Bool -> CompileOpts -> IO ()
 cmdCompileNative cc noCache opts = do
   let file = compFile opts
@@ -988,7 +976,7 @@ cmdCompileNative cc noCache opts = do
   where
     isCOutput f = takeExtension f == ".c"
 
--- | run-native: compile to C using native codegen, invoke gcc, execute
+-- | Compile to C using native codegen, invoke gcc, execute
 cmdRunNative :: String -> Bool -> RunOpts -> IO ()
 cmdRunNative cc noCache opts = do
   let file = runFile opts
