@@ -21,6 +21,7 @@ data NCGState = NCGState
   , ncgScope    :: Map.Map Text String  -- milang name → C variable name
   , ncgGlobals  :: Set.Set Text        -- names that are static globals (don't capture)
   , ncgSelfNames :: Set.Set Text       -- self-recursive binding names (reconstruct from fn+env)
+  , ncgKnownInts :: Set.Set Text       -- names guaranteed to be int64_t at runtime
   }
 
 newNCGState :: IO NCGState
@@ -35,6 +36,7 @@ newNCGState = do
     , ncgScope = Map.empty
     , ncgGlobals = Set.empty
     , ncgSelfNames = Set.empty
+    , ncgKnownInts = Set.empty
     }
 
 freshId :: NCGState -> IO Int
@@ -128,7 +130,7 @@ nExprToC st (BinOp op l r)
   | isBuiltinOp op = do
     lc <- nExprToC st l
     rc <- nExprToC st r
-    pure $ "mi_binop(" ++ cStringLit (T.unpack op) ++ ", " ++ lc ++ ", " ++ rc ++ ")"
+    pure $ nativeBinop op lc rc
   | otherwise = do
     -- Custom operator: treat as function application
     fc <- nExprToC st (Name op)
@@ -239,20 +241,32 @@ nExprToC st (With body bindings)
     cid <- freshId st
     let label = "_tco_" ++ show cid
         paramVars = [label ++ "_" ++ show i | i <- [0::Int .. length params - 1]]
-    -- Compile initial argument expressions
-    initCs <- mapM (nExprToC st) initArgs
-    -- Scope for the loop body: params map to their _tco_ variables
-    let loopScope = Map.fromList (zip params paramVars)
-        bodyScope = withScope st loopScope
         resultVar = "_tco_res_" ++ show cid
-    -- Compile loop body in "tail-call mode": tail calls become goto, others return
-    bodyC <- nTailBodyToC bodyScope loopName (length params) paramVars label loopBody
-    -- Generate C code: initialize vars, label, body
-    let initDecls = concat [ "MiVal " ++ pv ++ " = " ++ ic ++ "; "
-                           | (pv, ic) <- zip paramVars initCs ]
-    pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
-           label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
-           resultVar ++ "; })"
+        loopScope = Map.fromList (zip params paramVars)
+        bodyScope = withScope st loopScope
+        -- Check if this loop can be fully unboxed (int64_t variables)
+        paramSet = Set.fromList params
+        bodyIsInt = isIntBody paramSet loopName (length params) loopBody
+    if bodyIsInt
+      then do
+        -- Fully unboxed int loop: int64_t variables, direct arithmetic
+        initCs <- mapM (nExprToC st) initArgs
+        let intScope = bodyScope { ncgKnownInts = Set.union paramSet (ncgKnownInts bodyScope) }
+            initDecls = concat [ "int64_t " ++ pv ++ " = (" ++ ic ++ ").as.i; "
+                               | (pv, ic) <- zip paramVars initCs ]
+        bodyC <- nTailBodyToIntC intScope loopName (length params) paramVars label loopBody
+        pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
+               label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
+               resultVar ++ "; })"
+      else do
+        -- Standard MiVal loop
+        initCs <- mapM (nExprToC st) initArgs
+        bodyC <- nTailBodyToC bodyScope loopName (length params) paramVars label loopBody
+        let initDecls = concat [ "MiVal " ++ pv ++ " = " ++ ic ++ "; "
+                               | (pv, ic) <- zip paramVars initCs ]
+        pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
+               label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
+               resultVar ++ "; })"
 
 nExprToC st (With body bindings) = do
   let runtimeBs = filter (not . skipBinding) bindings
@@ -266,12 +280,20 @@ nExprToC st (With body bindings) = do
       pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
 
 nExprToC st (Case scrut alts) = do
-  sc <- nExprToC st scrut
-  cid <- freshId st
-  let scrutVar = "_cs_" ++ show cid
-  altCodes <- mapM (nAltToC st scrutVar) alts
-  pure $ "({ MiVal " ++ scrutVar ++ " = " ++ sc ++ "; " ++
-         buildTernaryChain altCodes ++ "; })"
+  -- Detect the truthiness check pattern and emit efficient code
+  case matchTruthiness scrut alts of
+    Just (cond, thenBr, elseBr) -> do
+      condC <- emitCondCheck st cond
+      thenC <- nExprToC st thenBr
+      elseC <- nExprToC st elseBr
+      pure $ "(" ++ condC ++ " ? " ++ thenC ++ " : " ++ elseC ++ ")"
+    Nothing -> do
+      sc <- nExprToC st scrut
+      cid <- freshId st
+      let scrutVar = "_cs_" ++ show cid
+      altCodes <- mapM (nAltToC st scrutVar) alts
+      pure $ "({ MiVal " ++ scrutVar ++ " = " ++ sc ++ "; " ++
+             buildTernaryChain altCodes ++ "; })"
 
 nExprToC st (Thunk body) = do
   -- A thunk wraps its body in a MI_CLOSURE with param="_thunk_".
@@ -437,7 +459,190 @@ buildTernaryChain [(_, body)] = body  -- last alt (should be wildcard)
 buildTernaryChain ((cond, body) : rest) =
   "(" ++ cond ++ ") ? " ++ body ++ " : " ++ buildTernaryChain rest
 
--- ── Tail Call Optimization ─────────────────────────────────────────
+-- ── Truthiness Pattern Detection ───────────────────────────────────
+
+-- | Detect the double-Case `if` pattern from the prelude:
+--   Case (truthinessCheck cond) [Alt (PLit 0) Nothing elseBr, Alt PWild Nothing thenBr]
+-- where truthinessCheck = Case cond [False→0, Nil→0, Nothing→0, 0→0, ""→0, _→1]
+--
+-- Returns (condition, thenBranch, elseBranch) for direct emission.
+matchTruthiness :: Expr -> [Alt] -> Maybe (Expr, Expr, Expr)
+matchTruthiness (Case innerScrut innerAlts) [Alt (PLit (IntLit 0)) Nothing elseBr, Alt PWild Nothing thenBr]
+  | isTruthinessAlts innerAlts = Just (innerScrut, thenBr, elseBr)
+matchTruthiness _ _ = Nothing
+
+-- | Check if alts match the canonical truthiness pattern:
+-- [False→0, Nil→0, Nothing→0, 0→0, ""→0, _→1]
+isTruthinessAlts :: [Alt] -> Bool
+isTruthinessAlts
+  [ Alt (PRec "False" [])     Nothing (IntLit 0)
+  , Alt (PRec "Nil" [])       Nothing (IntLit 0)
+  , Alt (PRec "Nothing" [])   Nothing (IntLit 0)
+  , Alt (PLit (IntLit 0))     Nothing (IntLit 0)
+  , Alt (PLit (StringLit "")) Nothing (IntLit 0)
+  , Alt PWild                 Nothing (IntLit 1)
+  ] = True
+isTruthinessAlts _ = False
+
+-- | Emit a truthiness check for a condition expression.
+-- When the condition is a comparison op (==, <, >, etc.), the result
+-- is always MI_INT(0|1) so we can check directly without mi_truthy.
+emitCondCheck :: NCGState -> Expr -> IO String
+emitCondCheck st cond@(BinOp op _ _)
+  | op `elem` ["==", "/=", "<", ">", "<=", ">="] = do
+    c <- nExprToC st cond
+    pure $ "(" ++ c ++ ").as.i"
+emitCondCheck st cond = do
+  c <- nExprToC st cond
+  pure $ "mi_truthy(" ++ c ++ ")"
+
+-- ── Native Binary Operations ───────────────────────────────────────
+
+-- | Emit optimized inline C for binary operations.
+-- Instead of calling mi_binop (string dispatch + type checks),
+-- emit direct C with fast-path for int operands.
+nativeBinop :: Text -> String -> String -> String
+nativeBinop op lc rc = case op of
+  "+"  -> intFastMath "+" lc rc
+  "-"  -> intFastMath "-" lc rc
+  "*"  -> intFastMath "*" lc rc
+  "/"  -> intFastMath "/" lc rc
+  "%"  -> intFastMath "%" lc rc
+  "==" -> intFastCmp "==" lc rc
+  "/=" -> intFastCmp "!=" lc rc
+  "<"  -> intFastCmp "<" lc rc
+  ">"  -> intFastCmp ">" lc rc
+  "<=" -> intFastCmp "<=" lc rc
+  ">=" -> intFastCmp ">=" lc rc
+  -- Cons, logical ops, and others: fall through to mi_binop
+  _    -> "mi_binop(" ++ cStringLit (T.unpack op) ++ ", " ++ lc ++ ", " ++ rc ++ ")"
+  where
+    -- Fast path: if both operands are MI_INT, do the op directly.
+    -- Uses statement expression to avoid evaluating operands twice.
+    intFastMath cop a b =
+      "({ MiVal _a = " ++ a ++ ", _b = " ++ b ++ "; " ++
+      "_a.type == MI_INT && _b.type == MI_INT ? " ++
+      "mi_int(_a.as.i " ++ cop ++ " _b.as.i) : " ++
+      "mi_binop(" ++ cStringLit (T.unpack op) ++ ", _a, _b); })"
+    intFastCmp cop a b =
+      "({ MiVal _a = " ++ a ++ ", _b = " ++ b ++ "; " ++
+      "_a.type == MI_INT && _b.type == MI_INT ? " ++
+      "mi_int(_a.as.i " ++ cop ++ " _b.as.i) : " ++
+      "mi_binop(" ++ cStringLit (T.unpack op) ++ ", _a, _b); })"
+
+-- ── Unboxed Integer Loop Optimization ──────────────────────────────
+
+-- | Check if an expression is guaranteed to produce an int value,
+-- given a set of variable names known to be int-typed.
+isKnownInt :: Set.Set Text -> Expr -> Bool
+isKnownInt _    (IntLit _) = True
+isKnownInt ints (Name n)   = Set.member n ints
+isKnownInt ints (BinOp op l r)
+  | op `elem` ["+","-","*","/","%","==","/=","<",">","<=",">="]
+  = isKnownInt ints l && isKnownInt ints r
+isKnownInt _ _ = False
+
+-- | Check if a TCO loop body only uses int operations — all base-case
+-- returns and tail-call arguments are int expressions on the given names.
+isIntBody :: Set.Set Text -> Text -> Int -> Expr -> Bool
+isIntBody ints funcName nparams = go
+  where
+    go (Case scrut alts)
+      | Just (_, thenBr, elseBr) <- matchTruthiness scrut alts
+      = go thenBr && go elseBr
+    go (Case scrut alts)
+      -- Non-truthiness case: scrutinee must be int, patterns must be int-compatible
+      | isKnownInt ints scrut
+      , all isIntAlt alts = all (\(Alt _ _ b) -> go b) alts
+      | otherwise = False
+    go (With b _) = go b
+    go e
+      | Just args <- matchCallChain funcName e
+      , length args == nparams = all (isKnownInt ints) args
+    go e = isKnownInt ints e
+
+    isIntAlt (Alt (PLit (IntLit _)) _ _) = True
+    isIntAlt (Alt PWild _ _) = True
+    isIntAlt _ = False
+
+-- | Emit an expression as an int64_t value (no MiVal boxing).
+-- Only valid when the expression is known to produce MI_INT.
+nExprToInt :: NCGState -> Expr -> IO String
+nExprToInt _  (IntLit n) = pure (show n)
+nExprToInt st (Name n) = case Map.lookup n (ncgScope st) of
+  Just cname -> pure cname
+  Nothing    -> pure $ "/* unbound " ++ T.unpack n ++ " */ 0"
+nExprToInt st (BinOp op l r) = do
+  lc <- nExprToInt st l
+  rc <- nExprToInt st r
+  pure $ "(" ++ lc ++ " " ++ intCOp op ++ " " ++ rc ++ ")"
+nExprToInt st expr = do
+  c <- nExprToC st expr
+  pure $ "(" ++ c ++ ").as.i"
+
+intCOp :: Text -> String
+intCOp "==" = "=="; intCOp "/=" = "!="; intCOp "<" = "<"; intCOp ">" = ">"
+intCOp "<=" = "<="; intCOp ">=" = ">="; intCOp "+" = "+"; intCOp "-" = "-"
+intCOp "*" = "*"; intCOp "/" = "/"; intCOp "%" = "%"
+intCOp op = error $ "intCOp: unsupported " ++ T.unpack op
+
+-- | Compile TCO loop body with int64_t variables (fully unboxed).
+-- Tail calls update int64_t vars and goto; base cases re-box with mi_int().
+nTailBodyToIntC :: NCGState -> Text -> Int -> [String] -> String -> Expr -> IO String
+nTailBodyToIntC st funcName nparams paramVars label expr
+  -- Tail call: compute new int values and goto
+  | Just args <- matchCallChain funcName expr
+  , length args == nparams = do
+    argCs <- mapM (nExprToInt st) args
+    cid <- freshId st
+    let tmpVars = ["_tc_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
+        tmpDecls = concat ["int64_t " ++ tv ++ " = " ++ ac ++ "; " | (tv, ac) <- zip tmpVars argCs]
+        assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
+    pure $ "({ " ++ tmpDecls ++ assignments ++ "goto " ++ label ++ "; mi_int(0); })"
+
+nTailBodyToIntC st funcName nparams paramVars label (Case scrut alts) =
+  case matchTruthiness scrut alts of
+    Just (cond, thenBr, elseBr) -> do
+      condC <- nExprToInt st cond
+      thenC <- nTailBodyToIntC st funcName nparams paramVars label thenBr
+      elseC <- nTailBodyToIntC st funcName nparams paramVars label elseBr
+      pure $ "(" ++ condC ++ " ? " ++ thenC ++ " : " ++ elseC ++ ")"
+    Nothing
+      -- Int scrutinee with int-compatible patterns: direct int comparison
+      | isKnownInt (ncgKnownInts st) scrut -> do
+        sc <- nExprToInt st scrut
+        altPairs <- mapM (intTailAlt st funcName nparams paramVars label sc) alts
+        pure $ buildTernaryChain altPairs
+      | otherwise ->
+        -- Fallback to MiVal for non-int cases
+        nTailBodyToC st funcName nparams paramVars label (Case scrut alts)
+  where
+    intTailAlt s fn np pv lbl scC (Alt (PLit (IntLit n)) Nothing body) = do
+      bodyC <- nTailBodyToIntC s fn np pv lbl body
+      pure ("(" ++ scC ++ " == " ++ show n ++ ")", bodyC)
+    intTailAlt s fn np pv lbl _ (Alt PWild Nothing body) = do
+      bodyC <- nTailBodyToIntC s fn np pv lbl body
+      pure ("1", bodyC)
+    intTailAlt s fn np pv lbl _ (Alt _ _ body) = do
+      bodyC <- nTailBodyToIntC s fn np pv lbl body
+      pure ("0 /* unsupported pattern */", bodyC)
+
+nTailBodyToIntC st funcName nparams paramVars label (With body bindings) = do
+  let runtimeBs = filter (not . skipBinding) bindings
+  if null runtimeBs
+    then nTailBodyToIntC st funcName nparams paramVars label body
+    else do
+      (bindDecls, newScope) <- emitBindings st runtimeBs
+      let bodyScope = withScope st newScope
+      bodyC <- nTailBodyToIntC bodyScope funcName nparams paramVars label body
+      pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
+
+-- Base case: re-box int result as MiVal
+nTailBodyToIntC st _ _ _ _ expr
+  | isKnownInt (ncgKnownInts st) expr = do
+    c <- nExprToInt st expr
+    pure $ "mi_int(" ++ c ++ ")"
+  | otherwise = nExprToC st expr
 
 -- | Match a tail-recursive With pattern produced by wrapTailRecBindings.
 -- Returns (loopName, paramNames, initArgExprs, loopBody)
@@ -512,12 +717,20 @@ nTailBodyToC st funcName nparams paramVars label expr
     pure $ "({ " ++ tmpDecls ++ assignments ++ "goto " ++ label ++ "; mi_int(0); })"
 
 nTailBodyToC st funcName nparams paramVars label (Case scrut alts) = do
-  sc <- nExprToC st scrut
-  cid <- freshId st
-  let scrutVar = "_cs_" ++ show cid
-  altCodes <- mapM (nTailAltToC st funcName nparams paramVars label scrutVar) alts
-  pure $ "({ MiVal " ++ scrutVar ++ " = " ++ sc ++ "; " ++
-         buildTernaryChain altCodes ++ "; })"
+  -- Detect truthiness pattern in tail position too
+  case matchTruthiness scrut alts of
+    Just (cond, thenBr, elseBr) -> do
+      condC <- emitCondCheck st cond
+      thenC <- nTailBodyToC st funcName nparams paramVars label thenBr
+      elseC <- nTailBodyToC st funcName nparams paramVars label elseBr
+      pure $ "(" ++ condC ++ " ? " ++ thenC ++ " : " ++ elseC ++ ")"
+    Nothing -> do
+      sc <- nExprToC st scrut
+      cid <- freshId st
+      let scrutVar = "_cs_" ++ show cid
+      altCodes <- mapM (nTailAltToC st funcName nparams paramVars label scrutVar) alts
+      pure $ "({ MiVal " ++ scrutVar ++ " = " ++ sc ++ "; " ++
+             buildTernaryChain altCodes ++ "; })"
 
 nTailBodyToC st funcName nparams paramVars label (With body bindings) = do
   let runtimeBs = filter (not . skipBinding) bindings
