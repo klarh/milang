@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Core.Codegen (codegen) where
+module Core.Codegen (codegen, emitPreamble, CGState(..), cfunctionToC, cRetTypeName) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -1293,6 +1293,22 @@ emitPreamble h = hPutStr h $ unlines
   , "  for (int i = 0; i < n; i++) { r.as.rec.names[i] = names[i]; r.as.rec.fields[i] = fields[i]; }"
   , "  return r;"
   , "}"
+  , "// General-purpose record constructor with tag (used by native codegen)"
+  , "static MiVal mi_make_rec(const char *tag, int n, const char *names[], MiVal fields[]) {"
+  , "  MiVal r; r.type = MI_RECORD; r.as.rec.tag = tag;"
+  , "  r.as.rec.nfields = n;"
+  , "  if (n == 0) { r.as.rec.names = NULL; r.as.rec.fields = NULL; return r; }"
+  , "  r.as.rec.names = mi_alloc(n * sizeof(const char*));"
+  , "  r.as.rec.fields = mi_alloc(n * sizeof(MiVal));"
+  , "  for (int i = 0; i < n; i++) { r.as.rec.names[i] = names[i]; r.as.rec.fields[i] = fields[i]; }"
+  , "  return r;"
+  , "}"
+  , "// Auto-constructor for capitalized names (e.g. Just, Nil, Cons)"
+  , "static MiVal mi_auto_ctor(const char *name) {"
+  , "  MiVal r; r.type = MI_RECORD; r.as.rec.tag = name;"
+  , "  r.as.rec.nfields = 0; r.as.rec.names = NULL; r.as.rec.fields = NULL;"
+  , "  return r;"
+  , "}"
   , "static MiVal mi_struct_field(MiVal rec, const char *name) {"
   , "  for (int i = 0; i < rec.as.rec.nfields; i++)"
   , "    if (strcmp(rec.as.rec.names[i], name) == 0) return rec.as.rec.fields[i];"
@@ -1665,6 +1681,7 @@ emitPreamble h = hPutStr h $ unlines
   , ""
   , "static MiVal mi_apply(MiVal f, MiVal arg);"
   , "static MiVal mi_eval(MiExpr *expr, MiEnv *env);"
+  , "static MiVal mi_force(MiVal v, MiEnv *env);"
   , "static int64_t mi_truthy(MiVal v);"
   , ""
   , "// ── Printing ──"
@@ -1713,6 +1730,7 @@ emitPreamble h = hPutStr h $ unlines
   , ""
   , "// ── Application ──"
   , "static MiVal mi_apply(MiVal f, MiVal arg) {"
+  , "  f = mi_force(f, NULL);"
   , "  if (f.type == MI_NATIVE) return f.as.native.fn(arg, f.as.native.env);"
   , "  if (f.type == MI_CLOSURE) {"
   , "    MiEnv *call_env = mi_env_new(f.as.closure.env);"
@@ -1793,6 +1811,7 @@ emitPreamble h = hPutStr h $ unlines
   , ""
   , "// ── Arithmetic ──"
   , "static MiVal mi_binop(const char *op, MiVal a, MiVal b) {"
+  , "  a = mi_force(a, NULL); b = mi_force(b, NULL);"
   , "  if (strcmp(op, \":\") == 0) return mi_cons(a, b);"
   , "  if (strcmp(op, \"==\") == 0) return mi_int(mi_vals_equal(a, b));"
   , "  if (strcmp(op, \"/=\") == 0) return mi_int(!mi_vals_equal(a, b));"

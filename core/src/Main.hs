@@ -27,6 +27,7 @@ import Text.Megaparsec (errorBundlePretty)
 import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap, protectPrelude)
 import Core.Codegen (codegen)
 import Core.Optimize (optimize)
+import Core.NativeCodegen (nativeCodegen)
 import Core.Prelude (preludeBindings)
 import Core.CHeader (parseCHeader, parseCHeaderInclude, CFunSig(..), CEnumConst(..))
 import Core.Remote (fetchRemote, hashFile, hashBytes, isURL, urlDirName, resolveURL)
@@ -68,6 +69,8 @@ data ResCtx = ResCtx
 data Command
   = CmdRun RunOpts
   | CmdCompile CompileOpts
+  | CmdCompileNative CompileOpts
+  | CmdRunNative RunOpts
   | CmdReduce ReduceOpts
   | CmdPin PinOpts
   | CmdRepl
@@ -129,6 +132,10 @@ commandParser = hsubparser
        (progDesc "Compile and run a .mi file"))
   <> command "compile" (info compileParser
        (progDesc "Compile a .mi file to C or a binary"))
+  <> command "compile-native" (info compileNativeParser
+       (progDesc "Compile a .mi file using native C function codegen (experimental)"))
+  <> command "run-native" (info runNativeParser
+       (progDesc "Compile and run using native C function codegen (experimental)"))
   <> command "reduce" (info reduceParser
        (progDesc "Show AST (parsed, reduced, or as JSON IR)"))
   <> command "dump" (info dumpParser
@@ -152,6 +159,18 @@ compileParser = fmap CmdCompile $ CompileOpts
   <$> argument str (metavar "FILE" <> help "Milang source file")
   <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
         <> help "Output file (.c for C source, other for binary; default: <input>.c)"))
+
+compileNativeParser :: Parser Command
+compileNativeParser = fmap CmdCompileNative $ CompileOpts
+  <$> argument str (metavar "FILE" <> help "Milang source file")
+  <*> optional (strOption (short 'o' <> long "output" <> metavar "FILE"
+        <> help "Output file (.c for C source, other for binary; default: <input>.c)"))
+
+runNativeParser :: Parser Command
+runNativeParser = fmap CmdRunNative $ RunOpts
+  <$> argument str (metavar "FILE" <> help "Milang source file")
+  <*> switch (long "keep-c" <> help "Keep generated C file after execution")
+  <*> many (argument str (metavar "ARGS..." <> help "Arguments passed to the compiled program"))
 
 reduceParser :: Parser Command
 reduceParser = fmap CmdReduce $ ReduceOpts
@@ -214,6 +233,8 @@ main = do
   case optCommand gopts of
     CmdRun opts     -> cmdRun cc nc opts
     CmdCompile opts -> cmdCompile cc nc opts
+    CmdCompileNative opts -> cmdCompileNative cc nc opts
+    CmdRunNative opts -> cmdRunNative cc nc opts
     CmdReduce opts  -> cmdReduce cc nc opts
     CmdPin opts     -> cmdPin cc nc opts
     CmdRepl         -> cmdRepl
@@ -920,6 +941,86 @@ cmdRun cc noCache opts = do
   exeToRun <- findExisting candidates
   (runExit, runOut, runErr) <- readProcessWithExitCode exeToRun (runArgs opts) ""
   -- cleanup
+  unless (runKeepC opts) $ do
+    existsC2 <- doesFileExist cFile
+    when existsC2 $ removeFile cFile
+  mapM_ (\p -> do ex <- doesFileExist p; when ex $ removeFile p) candidates
+  putStr runOut
+  if not (null runErr) then hPutStrLn stderr runErr else pure ()
+  exitWith runExit
+
+-- | compile-native: emit C using native function codegen
+cmdCompileNative :: String -> Bool -> CompileOpts -> IO ()
+cmdCompileNative cc noCache opts = do
+  let file = compFile opts
+  cwd <- getCurrentDirectory
+  (reduced, li) <- loadAndReduce cc noCache file
+  let stripped = optimize (stripDeepModules 3 reduced)
+      extraFlags = nub ("-lm" : linkFlags li)
+      extraSrcs  = nub (linkSources li)
+      extraIncls = nub (map ("-I" ++) (linkIncludes li))
+      extraCCFlags = nub (linkCCFlags li)
+  case compOut opts of
+    Just "-" -> nativeCodegen stdout preludeNames stripped
+    Just f | not (isCOutput f) -> do
+      let cFile = dropExtension file ++ "_native.c"
+          gccArgs = ["-O2", "-o", f, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraCCFlags ++ extraFlags
+      withFile cFile WriteMode $ \h -> do
+        hPutStrLn h $ "// Compile: " ++ unwords ([cc, "-O2", "-o", f, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraCCFlags ++ extraFlags)
+        hPutStrLn h ""
+        nativeCodegen h preludeNames stripped
+      (gccExit, _, gccErr) <- readProcessWithExitCode cc gccArgs ""
+      case gccExit of
+        ExitSuccess -> removeFile cFile
+        ExitFailure code -> do
+          hPutStrLn stderr $ "error: C compilation failed (" ++ cc ++ " exit " ++ show code ++ ")"
+          unless (null gccErr) $ hPutStrLn stderr gccErr
+          exitFailure
+    outSpec -> do
+      let f = case outSpec of
+                Just name -> name
+                Nothing   -> dropExtension file ++ ".c"
+          compileCmd = unwords ([cc, "-O2", "-o", dropExtension f, f, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraCCFlags ++ extraFlags)
+      withFile f WriteMode $ \h -> do
+        hPutStrLn h $ "// Compile: " ++ compileCmd
+        hPutStrLn h ""
+        nativeCodegen h preludeNames stripped
+  where
+    isCOutput f = takeExtension f == ".c"
+
+-- | run-native: compile to C using native codegen, invoke gcc, execute
+cmdRunNative :: String -> Bool -> RunOpts -> IO ()
+cmdRunNative cc noCache opts = do
+  let file = runFile opts
+  cwd <- getCurrentDirectory
+  (reduced, li) <- loadAndReduce cc noCache file
+  let stripped = optimize (stripDeepModules 3 reduced)
+      cFile = dropExtension file ++ "_native.c"
+      binBase = takeDirectory file </> (takeBaseName file ++ "_native")
+      extraFlags = nub ("-lm" : linkFlags li)
+      extraSrcs  = nub (linkSources li)
+      extraIncls = nub (map ("-I" ++) (linkIncludes li))
+      extraCCFlags = nub (linkCCFlags li)
+      gccArgs = ["-O2", "-o", binBase, cFile, "-I" ++ cwd] ++ extraIncls ++ extraSrcs ++ extraCCFlags ++ extraFlags
+      isWin = any (`isPrefixOf` os) ["mingw", "cygwin", "windows"]
+      exeExt = if isWin then ".exe" else ""
+      candidates = if exeExt /= "" then [binBase ++ exeExt, binBase] else [binBase]
+      findExisting [] = return (head candidates)
+      findExisting (p:ps) = do
+        e <- doesFileExist p
+        if e then return p else findExisting ps
+  withFile cFile WriteMode $ \h -> nativeCodegen h preludeNames stripped
+  (gccExit, _, gccErr) <- readProcessWithExitCode cc gccArgs ""
+  case gccExit of
+    ExitSuccess -> pure ()
+    ExitFailure code -> do
+      hPutStrLn stderr $ "error: C compilation failed (" ++ cc ++ " exit " ++ show code ++ ")"
+      unless (null gccErr) $ hPutStrLn stderr gccErr
+      existsC <- doesFileExist cFile
+      when existsC $ removeFile cFile
+      exitFailure
+  exeToRun <- findExisting candidates
+  (runExit, runOut, runErr) <- readProcessWithExitCode exeToRun (runArgs opts) ""
   unless (runKeepC opts) $ do
     existsC2 <- doesFileExist cFile
     when existsC2 $ removeFile cFile

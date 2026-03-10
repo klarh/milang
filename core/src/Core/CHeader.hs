@@ -261,10 +261,6 @@ parseParamType sm param
          else case baseWords of
            ["char"]           -> Just CString
            ["const", "char"]  -> Just CString
-           ["int"]            -> Just (COut (CInt 32))
-           ["long"]           -> Just (COut (CInt 64))
-           ["unsigned"]       -> Just (COut (CUInt 32))
-           ["double"]         -> Just (COut CFloat)
            ["float"]          -> Nothing
            ["long", "double"] -> Nothing
            _                  -> Just (CPtr (T.unwords baseWords))

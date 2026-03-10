@@ -13,6 +13,7 @@ executable milang-core
                   , Core.Reduce
                   , Core.Codegen
                   , Core.Optimize
+                  , Core.NativeCodegen
                   , Core.Prelude
                   , Core.CHeader
                   , Core.Remote
