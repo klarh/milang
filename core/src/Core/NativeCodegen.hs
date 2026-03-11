@@ -7,7 +7,7 @@ import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
 import Data.List (intercalate, nub, partition)
-import Control.Monad (when, forM, foldM_)
+import Control.Monad (when, unless, forM, foldM_)
 import Core.Syntax
 import Core.Codegen (emitPreamble, CGState(..), cfunctionToC, cRetTypeName)
 import Core.Reduce (exprFreeVars)
@@ -28,6 +28,7 @@ data NCGState = NCGState
   , ncgKnownTypes :: Map.Map Text NType -- names with known types at compile time
   , ncgForwardDecls :: Set.Set Text    -- names that are forward-declared but not yet assigned
   , ncgEnvPatches :: IORef [(String, String, String)]  -- deferred env patches: (envTypeName, fieldName, valueExpr)
+  , ncgTags     :: IORef (Set.Set String) -- interned record tag strings
   }
 
 newNCGState :: IO NCGState
@@ -36,6 +37,7 @@ newNCGState = do
   defs <- newIORef []
   incs <- newIORef []
   patches <- newIORef []
+  tags <- newIORef Set.empty
   pure NCGState
     { ncgNextId = nid
     , ncgTopDefs = defs
@@ -46,6 +48,7 @@ newNCGState = do
     , ncgKnownTypes = Map.empty
     , ncgForwardDecls = Set.empty
     , ncgEnvPatches = patches
+    , ncgTags = tags
     }
 
 freshId :: NCGState -> IO Int
@@ -69,6 +72,19 @@ withGlobals st gs = st { ncgGlobals = Set.union gs (ncgGlobals st) }
 -- | Get the set of names known to be int (backward compat with isKnownInt/isIntBody)
 knownIntSet :: NCGState -> Set.Set Text
 knownIntSet st = Map.keysSet $ Map.filter (== NInt) (ncgKnownTypes st)
+
+-- | Intern a record tag, returning the C variable name for the interned string.
+internTag :: NCGState -> String -> IO String
+internTag st tag = do
+  modifyIORef (ncgTags st) (Set.insert tag)
+  pure $ "_mi_tag_" ++ sanitizeName (T.pack tag)
+
+-- | Emit static tag string declarations for all interned tags.
+emitTagDecls :: NCGState -> IO [String]
+emitTagDecls st = do
+  tags <- readIORef (ncgTags st)
+  pure [ "static const char " ++ "_mi_tag_" ++ sanitizeName (T.pack t) ++ "[] = " ++ cStringLit t ++ ";"
+       | t <- Set.toList tags ]
 
 -- | Get the set of names known to be float
 knownFloatSet :: NCGState -> Set.Set Text
@@ -329,8 +345,9 @@ nExprToC st (Lam param body) = do
 
 nExprToC st (Record tag bindings) = do
   let runtimeBs = filter (not . skipBinding) bindings
+  tagVar <- internTag st (T.unpack tag)
   if null runtimeBs
-    then pure $ "mi_make_rec(" ++ cStringLit (T.unpack tag) ++ ", 0, NULL, NULL)"
+    then pure $ "mi_make_rec(" ++ tagVar ++ ", 0, NULL, NULL)"
     else do
       let n = length runtimeBs
       fieldExprs <- forM runtimeBs $ \b -> do
@@ -338,7 +355,7 @@ nExprToC st (Record tag bindings) = do
         pure (T.unpack (bindName b), val)
       let namesArr = "(const char*[]){" ++ intercalate ", " [cStringLit nm | (nm, _) <- fieldExprs] ++ "}"
           fieldsArr = "(MiVal[]){" ++ intercalate ", " [val | (_, val) <- fieldExprs] ++ "}"
-      pure $ "mi_make_rec(" ++ cStringLit (T.unpack tag) ++ ", " ++ show n ++
+      pure $ "mi_make_rec(" ++ tagVar ++ ", " ++ show n ++
              ", " ++ namesArr ++ ", " ++ fieldsArr ++ ")"
 
 nExprToC st (FieldAccess e field) = do
@@ -530,15 +547,16 @@ nExprToC st (Namespace bindings) = do
   let n = length runtimeBs
       namesArr = "(const char*[]){" ++ intercalate ", " [cStringLit (T.unpack (bindName b)) | b <- runtimeBs] ++ "}"
       fieldsArr = "(MiVal[]){" ++ intercalate ", " [maybe "mi_int(0)" id (Map.lookup (bindName b) newScope) | b <- runtimeBs] ++ "}"
+  modTag <- internTag st "_module_"
   pure $ "({ " ++ concat bindDecls ++
-         "mi_make_rec(\"_module_\", " ++ show n ++ ", " ++ namesArr ++ ", " ++ fieldsArr ++ "); })"
+         "mi_make_rec(" ++ modTag ++ ", " ++ show n ++ ", " ++ namesArr ++ ", " ++ fieldsArr ++ "); })"
 
 -- ── Pattern Matching ───────────────────────────────────────────────
 
 -- | Generate a condition + body pair for one case alternative
 nAltToC :: NCGState -> String -> Alt -> IO (String, String)
 nAltToC st scrutVar (Alt pat guard body) = do
-  let (cond, bindings) = patternToC scrutVar pat
+  (cond, bindings) <- patternToC st scrutVar pat
   let newScope = Map.fromList [(T.pack k, v) | (k, v) <- bindings]
       bodyScope = withScope st newScope
   bodyC <- nExprToC bodyScope body
@@ -549,39 +567,51 @@ nAltToC st scrutVar (Alt pat guard body) = do
       guardC <- nExprToC bodyScope g
       pure ("(" ++ cond ++ " && mi_truthy(" ++ guardC ++ "))", bodyC)
 
--- | Convert a pattern to a C condition expression + list of variable bindings
-patternToC :: String -> Pat -> (String, [(String, String)])
-patternToC _ PWild = ("1", [])
-patternToC scrutVar (PVar v) = ("1", [(T.unpack v, scrutVar)])
-patternToC scrutVar (PLit (IntLit n)) =
-  ("(" ++ scrutVar ++ ".type == MI_INT && " ++ scrutVar ++ ".as.i == " ++ show n ++ ")", [])
-patternToC scrutVar (PLit (StringLit s)) =
-  ("(" ++ scrutVar ++ ".type == MI_STRING && strcmp(" ++ scrutVar ++ ".as.str.data, " ++ cStringLit (T.unpack s) ++ ") == 0)", [])
-patternToC scrutVar (PLit _) = ("0 /* unsupported literal pattern */", [])
-patternToC scrutVar (PRec tag fieldPats) =
-  let tagCond = scrutVar ++ ".type == MI_RECORD && strcmp(" ++ scrutVar ++ ".as.rec.tag, " ++ cStringLit (T.unpack tag) ++ ") == 0"
-      (fieldConds, fieldBinds) = unzip $ zipWith (\(_name, subPat) idx ->
-          let fieldExpr = scrutVar ++ ".as.rec.fields[" ++ show idx ++ "]"
-          in patternToC fieldExpr subPat
-        ) fieldPats [0::Int ..]
+-- | Generate a tag match condition. Uses pointer comparison first (fast path
+-- for records created by native codegen), with strcmp fallback for records
+-- created by runtime helpers like mi_cons.
+tagMatchCond :: String -> String -> String
+tagMatchCond scrutVar tagVar =
+  scrutVar ++ ".type == MI_RECORD && (" ++ scrutVar ++ ".as.rec.tag == " ++ tagVar ++
+  " || strcmp(" ++ scrutVar ++ ".as.rec.tag, " ++ tagVar ++ ") == 0)"
+
+-- | Convert a pattern to a C condition expression + list of variable bindings.
+-- Uses interned tags for pointer comparison instead of strcmp.
+patternToC :: NCGState -> String -> Pat -> IO (String, [(String, String)])
+patternToC _ _ PWild = pure ("1", [])
+patternToC _ scrutVar (PVar v) = pure ("1", [(T.unpack v, scrutVar)])
+patternToC _ scrutVar (PLit (IntLit n)) =
+  pure ("(" ++ scrutVar ++ ".type == MI_INT && " ++ scrutVar ++ ".as.i == " ++ show n ++ ")", [])
+patternToC _ scrutVar (PLit (StringLit s)) =
+  pure ("(" ++ scrutVar ++ ".type == MI_STRING && strcmp(" ++ scrutVar ++ ".as.str.data, " ++ cStringLit (T.unpack s) ++ ") == 0)", [])
+patternToC _ scrutVar (PLit _) = pure ("0 /* unsupported literal pattern */", [])
+patternToC st scrutVar (PRec tag fieldPats) = do
+  tagVar <- internTag st (T.unpack tag)
+  let tagCond = tagMatchCond scrutVar tagVar
+  results <- mapM (\((_name, subPat), idx) ->
+      let fieldExpr = scrutVar ++ ".as.rec.fields[" ++ show idx ++ "]"
+      in patternToC st fieldExpr subPat
+    ) (zip fieldPats [0::Int ..])
+  let (fieldConds, fieldBinds) = unzip results
       allCond = if null fieldConds
         then tagCond
         else "(" ++ tagCond ++ " && " ++ intercalate " && " fieldConds ++ ")"
-  in (allCond, concat fieldBinds)
+  pure (allCond, concat fieldBinds)
 
-patternToC scrutVar (PList pats mRest) =
-  let -- [a, b, c] desugars to Cons a (Cons b (Cons c Nil))
-      go _ [] Nothing = ("(" ++ scrutVar ++ ".type == MI_RECORD && strcmp(" ++ scrutVar ++ ".as.rec.tag, \"Nil\") == 0)", [])
-      go sv [] (Just rest) = ("1", [(T.unpack rest, sv)])
-      go sv (p:ps) mR =
+patternToC st scrutVar (PList pats mRest) = do
+  consTag <- internTag st "Cons"
+  nilTag <- internTag st "Nil"
+  let go sv [] Nothing = pure ("(" ++ tagMatchCond sv nilTag ++ ")", [])
+      go sv [] (Just rest) = pure ("1", [(T.unpack rest, sv)])
+      go sv (p:ps) mR = do
         let headExpr = sv ++ ".as.rec.fields[0]"
             tailExpr = sv ++ ".as.rec.fields[1]"
-            consCond = sv ++ ".type == MI_RECORD && strcmp(" ++ sv ++ ".as.rec.tag, \"Cons\") == 0"
-            (headCond, headBinds) = patternToC headExpr p
-            (restCond, restBinds) = go tailExpr ps mR
-        in ("(" ++ consCond ++ " && " ++ headCond ++ " && " ++ restCond ++ ")",
+            consCond = tagMatchCond sv consTag
+        (headCond, headBinds) <- patternToC st headExpr p
+        (restCond, restBinds) <- go tailExpr ps mR
+        pure ("(" ++ consCond ++ " && " ++ headCond ++ " && " ++ restCond ++ ")",
             headBinds ++ restBinds)
-  in go scrutVar pats mRest
+  go scrutVar pats mRest
 
 -- | Build a ternary chain from condition/body pairs
 buildTernaryChain :: [(String, String)] -> String
@@ -666,6 +696,17 @@ nativeBinop op lc rc = case op of
       "_a.type == MI_INT && _b.type == MI_INT ? " ++
       "mi_int(_a.as.i " ++ cop ++ " _b.as.i) : " ++
       "mi_binop(" ++ cStringLit (T.unpack op) ++ ", _a, _b); })"
+
+-- | Check if an expression is already in WHNF (no thunk forcing needed).
+-- Values produced by these expressions can never be MI_CLOSURE with _thunk_.
+isNativeWHNF :: Expr -> Bool
+isNativeWHNF (IntLit _) = True
+isNativeWHNF (FloatLit _) = True
+isNativeWHNF (StringLit _) = True
+isNativeWHNF (Record _ _) = True
+isNativeWHNF (Lam _ _) = True
+isNativeWHNF (BinOp _ _ _) = True
+isNativeWHNF _ = False
 
 -- ── Unboxed Integer Loop Optimization ──────────────────────────────
 
@@ -980,7 +1021,7 @@ nTailBodyToC st _ _ _ _ expr = nExprToC st expr
 -- | Like nAltToC but compiles bodies in tail-call mode
 nTailAltToC :: NCGState -> Text -> Int -> [String] -> String -> String -> Alt -> IO (String, String)
 nTailAltToC st funcName nparams paramVars label scrutVar (Alt pat guard body) = do
-  let (cond, bindings) = patternToC scrutVar pat
+  (cond, bindings) <- patternToC st scrutVar pat
   let newScope = Map.fromList [(T.pack k, v) | (k, v) <- bindings]
       bodyScope = withScope st newScope
   bodyC <- nTailBodyToC bodyScope funcName nparams paramVars label body
@@ -1066,7 +1107,9 @@ emitBindings st bindings = do
       code <- nExprToC curScope' compiledExpr
       let decl = if bindDomain b == Lazy
             then "MiVal " ++ cvar ++ " = " ++ code ++ "; "
-            else "MiVal " ++ cvar ++ " = mi_force(" ++ code ++ ", NULL); "
+            else if isNativeWHNF bodyExpr
+              then "MiVal " ++ cvar ++ " = " ++ code ++ "; "
+              else "MiVal " ++ cvar ++ " = mi_force(" ++ code ++ ", NULL); "
       let inferredType = if bindDomain b == Lazy then NUnknown
                          else inferType curScope' bodyExpr
           nextSt = if inferredType /= NUnknown
@@ -1098,7 +1141,9 @@ emitBindings st bindings = do
             newPatches
       let assign = if bindDomain b == Lazy
             then cvar ++ " = " ++ code ++ "; "
-            else cvar ++ " = mi_force(" ++ code ++ ", NULL); "
+            else if isNativeWHNF bodyExpr
+              then cvar ++ " = " ++ code ++ "; "
+              else cvar ++ " = mi_force(" ++ code ++ ", NULL); "
       let inferredType = if bindDomain b == Lazy then NUnknown
                          else inferType curScope' bodyExpr
           nextSt = if inferredType /= NUnknown
@@ -1210,6 +1255,12 @@ nativeCodegen h hidden expr = do
   emitPreamble h
   incs <- readIORef (ncgIncludes st)
   mapM_ (\inc -> hPutStrLn h inc) (nub (reverse incs))
+  -- Emit interned tag string declarations
+  tagDecls <- emitTagDecls st
+  unless (null tagDecls) $ do
+    hPutStrLn h "\n// Interned record tag strings"
+    mapM_ (hPutStrLn h) tagDecls
+    hPutStrLn h ""
   defs <- readIORef (ncgTopDefs st)
   mapM_ (hPutStr h) (reverse defs)
   hPutStrLn h ""
