@@ -1,0 +1,61 @@
+/* Quote/splice edge cases — nesting, dynamic AST construction, macro patterns */
+
+/* Basic quote and splice */
+q1 = #42
+r1 = $q1
+
+q2 = #(1 + 2)
+r2 = $q2
+
+/* Quote of complex expression */
+q3 = #(3 * (4 + 5))
+r3 = $q3
+
+/* Nested quote — quoting a quoted value */
+q4 = #(#5)
+r4 = $($q4)
+
+/* Dynamic AST construction */
+ast1 = Op {op = "+"; left = Int {val = 10}; right = Int {val = 20}}
+r5 = $ast1
+
+/* AST construction function — a simple macro */
+mk_add a b = Op {op = "+"; left = a; right = b}
+r6 = $(mk_add #3 #4)
+
+/* Macro: double an expression */
+mk_double expr = Op {op = "*"; left = expr; right = Int {val = 2}}
+r7 = $(mk_double #21)
+
+/* Macro: negate */
+mk_negate expr = Op {op = "-"; left = Int {val = 0}; right = expr}
+r8 = $(mk_negate #7)
+
+/* Compose macros */
+r9 = $(mk_double (mk_add #5 #3))
+
+/* Quote preserves structure — field access on quoted AST */
+q_op = #(1 + 2)
+op_name = q_op._0
+
+/* Splice of lambda-constructed AST */
+mk_mul a b = Op {op = "*"; left = a; right = b}
+r10 = $(mk_mul (mk_add #2 #3) #4)
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  assert "basic_quote_splice" 42 r1
+  assert "expr_quote_splice" 3 r2
+  assert "complex_expr" 27 r3
+  assert "nested_quote" 5 r4
+  assert "dynamic_ast" 30 r5
+  assert "mk_add" 7 r6
+  assert "mk_double" 42 r7
+  assert "mk_negate" (0 - 7) r8
+  assert "compose_macros" 16 r9
+  assert "splice_mul_add" 20 r10
+
+  io.println "quote_splice: all passed"
+  0

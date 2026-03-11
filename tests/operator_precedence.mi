@@ -1,0 +1,73 @@
+/* Custom operator precedence and associativity edge cases */
+
+/* Pipe operators — low precedence, opposite associativity */
+(|>) x f = f x
+(|>) :! {prec = 10; assoc = Left}
+
+(<|) f x = f x
+(<|) :! {prec = 10; assoc = Right}
+
+/* Composition — higher precedence than pipe */
+(>=>) f g x = g (f x)
+(>=>) :! {prec = 40; assoc = Right}
+
+/* Custom arithmetic — between default and high */
+(+++) a b = a + b + 1
+(+++) :! {prec = 55; assoc = Left}
+
+/* High precedence custom operator */
+(!!) a b = a * b
+(!!) :! {prec = 80; assoc = Left}
+
+/* Helper functions */
+double x = x * 2
+add1 x = x + 1
+square x = x * x
+
+/* Pipe operator chaining */
+r1 = 5 |> double |> add1
+r2 = add1 <| double <| 5
+
+/* Composition operator */
+r3 = (double >=> add1) 3
+r4 = (add1 >=> double) 3
+
+/* Precedence interaction: +++ vs standard + */
+r5 = 1 +++ 2 + 3
+r6 = 1 + 2 +++ 3
+
+/* High-precedence !! vs + */
+r7 = 2 + 3 !! 4
+r8 = 2 !! 3 + 4
+
+/* Operator as function (in parens) */
+r9 = fold (+) 0 [1, 2, 3, 4, 5]
+r10 = fold (!!!) 1 [2, 3, 4]
+  (!!!) a b = a * b
+
+/* Backtick infix */
+my_div a b = a / b
+r11 = 10 `my_div` 2
+
+/* Complex expression with multiple custom operators */
+r12 = 2 |> double |> (\x -> x +++ 10)
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  assert "pipe_right" 11 r1
+  assert "pipe_left" 11 r2
+  assert "compose_right" 7 r3
+  assert "compose_left" 8 r4
+  assert "custom_prec_1" 7 r5
+  assert "custom_prec_2" 7 r6
+  assert "high_prec_1" 14 r7
+  assert "high_prec_2" 10 r8
+  assert "op_as_fn" 15 r9
+  assert "fold_custom" 24 r10
+  assert "backtick" 5 r11
+  assert "pipe_custom" 15 r12
+
+  io.println "operator_precedence: all passed"
+  0

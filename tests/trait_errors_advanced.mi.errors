@@ -1,0 +1,19 @@
+# Trait system edge cases
+
+# Trait propagation through HOF (map with impure callback)
+bad_hof: effect violation: bad_hof declared :~ [] but uses [console]
+
+# Trait propagation through HOF (fold with impure callback)
+bad_fold: effect violation: bad_fold declared :~ [] but uses [console]
+
+# Impure local helper in pure function
+bad_local: effect violation: bad_local declared :~ [] but uses [console]
+
+# Indirect world.io through local binding
+bad_local2: effect violation: bad_local2 declared :~ [] but uses [console]
+
+# Multiple independent violations
+bad_multi: effect violation: bad_multi declared :~ [] but uses [console]
+
+# Deep transitive violation (3 layers)
+bad_deep: effect violation: bad_deep declared :~ [] but uses [console]

@@ -1,0 +1,26 @@
+# Type error edge cases — errors in complex contexts
+
+# Nested function call type error
+bad_nested: expected Int, got Str
+
+# Division by zero (compile-time constants)
+bad_div: division by zero
+bad_mod: division by zero
+bad_fdiv: division by zero
+
+# String arithmetic errors
+bad_mul: cannot multiply string
+bad_sub: cannot subtract from string
+bad_exp: cannot exponentiate string
+
+# Missing record field
+bad_point: missing field: y
+
+# Infinite type (occurs check)
+bad_inf: infinite type: a occurs in a : a
+
+# Wrong union tags in annotated function
+bad_tag: non-exhaustive pattern match on Shape, missing: Circle, Rect
+
+# Multiple missing constructors
+bad_partial: non-exhaustive pattern match on Color, missing: Green, Blue

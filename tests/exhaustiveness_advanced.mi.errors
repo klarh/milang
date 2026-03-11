@@ -1,0 +1,14 @@
+# Exhaustiveness checking edge cases
+
+# Multiple missing constructors
+bad_colors: non-exhaustive pattern match on Color, missing: Green, Blue
+
+# ADT with fields — missing constructors
+bad_shapes: non-exhaustive pattern match on Shape, missing: Rect, Triangle
+
+# Nested local matches — both missing cases reported
+bad_nested: non-exhaustive pattern match on Color, missing: Blue
+bad_nested: non-exhaustive pattern match on Result, missing: Err
+
+# Result type missing Err
+bad_result: non-exhaustive pattern match on Result, missing: Err

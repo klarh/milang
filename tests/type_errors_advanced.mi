@@ -1,0 +1,43 @@
+/* Type error edge cases — errors in complex contexts */
+
+/* Type error through nested function call */
+negate :: Num : Num
+negate x = 0 - x
+bad_nested = negate (negate "hello")
+
+/* Division by zero — compile-time constant */
+bad_div = 10 / 0
+bad_mod = 10 % 0
+bad_fdiv = 5.0 / 0.0
+
+/* String arithmetic errors */
+bad_mul = "hello" * 3
+bad_sub = "world" - 1
+bad_exp = "foo" ** 2
+
+/* Missing record field */
+Point :: {x = Num; y = Num}
+bad_point :: Point
+bad_point = {x = 1}
+
+/* Infinite type (occurs check) */
+bad_inf :: a : a
+bad_inf x = bad_inf
+
+/* Tag mismatch — wrong union tag in annotated function */
+Shape = {Circle radius; Rect w h}
+Color = {Red; Green; Blue}
+bad_tag :: Shape : Num
+bad_tag s = s -> Red = 1; Green = 2; Blue = 3
+
+/* Multiple missing constructors */
+bad_partial :: Color : Str
+bad_partial c = c -> Red = "red"
+
+/* Valid code to ensure non-error bindings don't interfere */
+double :: Num : Num
+double x = x * 2
+ok1 = double 5
+ok2 = map (\x -> x * 2) [1, 2, 3]
+ok3 = fold (+) 0 [1, 2, 3]
+main = ok1

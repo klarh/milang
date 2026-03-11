@@ -1,0 +1,59 @@
+/* Scope shadowing tests — nested With blocks, closures, parameter shadowing */
+
+/* Basic outer scope access */
+x = 10
+
+/* Shadow in local binding */
+shadow_basic = result
+  x = 20
+  result = x
+
+/* Parameter shadows outer binding */
+shadow_param x = x + 1
+
+/* Nested With shadows — inner function shadows x */
+shadow_nested = result
+  x = 100
+  inner a = x2
+    x2 = 200
+  result = inner 0
+
+/* Closure captures outer, not shadowed */
+make_closure = f
+  val = 42
+  f y = val + y
+
+/* Closure parameter shadows outer */
+shadow_closure = f
+  val = 99
+  f val = val * 2
+
+/* Multiple levels of shadowing */
+deep_shadow = result
+  a = 1
+  level1 = a + level2
+    a = 10
+    level2 = a + 100
+  result = level1
+
+/* With body refers to outer x, local shadows in sub-bindings */
+mixed_scope = result
+  outer_x = x
+  x = 50
+  inner_x = x
+  result = outer_x + inner_x
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  assert "shadow_basic" 20 shadow_basic
+  assert "shadow_param" 6 (shadow_param 5)
+  assert "shadow_nested" 200 shadow_nested
+  assert "make_closure 8" 50 (make_closure 8)
+  assert "shadow_closure 7" 14 (shadow_closure 7)
+  assert "deep_shadow" 120 deep_shadow
+  assert "mixed_scope" 100 mixed_scope
+
+  io.println "scope_shadowing: all passed"
+  0

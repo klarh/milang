@@ -1,0 +1,56 @@
+/* Trait system edge cases — HOF propagation, local bindings, multiple violations */
+
+io :~ [console]
+pure :~ []
+fs_effects :~ [fs.read, fs.write]
+
+/* IO function for testing */
+greet :~ io
+greet world = world.io.println "hello"
+
+/* === Gap 5: Trait propagation through HOF === */
+
+/* Pure function using map with impure callback */
+bad_hof :~ pure
+bad_hof world = map (\x -> world.io.println x) ["a", "b"]
+
+/* Pure function using fold with impure callback */
+bad_fold :~ pure
+bad_fold world = fold (\acc x -> world.io.println x) 0 [1, 2, 3]
+
+/* === Gap 6: Trait annotations on local bindings === */
+
+/* Pure function with impure helper in local scope */
+bad_local :~ pure
+bad_local world = result
+  helper x = world.io.println x
+  result = helper "test"
+
+/* Pure function using world.io transitively through local binding */
+bad_local2 :~ pure
+bad_local2 world = output
+  printer = world.io.println
+  output = printer "indirect"
+
+/* === Gap 7: Multiple trait violations === */
+
+/* Function with multiple independent trait violations */
+bad_multi :~ pure
+bad_multi world =
+  world.io.println "violation 1"
+  greet world
+
+/* Transitive through multiple layers */
+layer1 world = world.io.println "deep"
+layer2 world = layer1 world
+bad_deep :~ pure
+bad_deep world = layer2 world
+
+/* Valid trait annotations for comparison */
+pure_fn :~ pure
+pure_fn x = x * 2
+
+io_fn :~ io
+io_fn world = world.io.println "ok"
+
+main = pure_fn 5

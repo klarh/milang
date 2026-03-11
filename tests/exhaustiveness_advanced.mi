@@ -1,0 +1,37 @@
+/* Exhaustiveness checking edge cases — nested patterns, multiple ADTs, local matches */
+
+/* Multiple ADTs */
+Color = {Red; Green; Blue}
+Shape = {Circle radius; Rect w h; Triangle a b c}
+Result = {Ok val; Err msg}
+
+/* Multiple missing constructors */
+bad_colors :: Color : Str
+bad_colors c = c -> Red = "red"
+
+/* ADT with fields — missing constructors */
+bad_shapes :: Shape : Num
+bad_shapes s = s -> Circle = s.radius
+
+/* Nested local pattern match missing cases */
+bad_nested :: Color : Result : Str
+bad_nested c r = result
+  cname = c -> Red = "red"; Green = "green"
+  rname = r -> Ok = "ok"
+  result = cname ++ " " ++ rname
+
+/* Result type missing Err */
+bad_result :: Result : Num
+bad_result r = r -> Ok = r.val
+
+/* Valid exhaustive patterns for comparison */
+good_color :: Color : Str
+good_color c = c -> Red = "red"; Green = "green"; Blue = "blue"
+
+good_shape :: Shape : Str
+good_shape s = s -> Circle = "circle"; Rect = "rect"; Triangle = "tri"
+
+good_result :: Result : Str
+good_result r = r -> Ok = "ok"; Err = r.msg
+
+main = 0
