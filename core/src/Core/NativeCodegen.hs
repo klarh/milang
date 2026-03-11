@@ -27,8 +27,11 @@ data NCGState = NCGState
   , ncgSelfNames :: Set.Set Text       -- self-recursive binding names (reconstruct from fn+env)
   , ncgKnownTypes :: Map.Map Text NType -- names with known types at compile time
   , ncgForwardDecls :: Set.Set Text    -- names that are forward-declared but not yet assigned
+  , ncgUnboxed    :: Set.Set Text      -- names stored as bare C primitives (int64_t/double), not MiVal
   , ncgEnvPatches :: IORef [(String, String, String)]  -- deferred env patches: (envTypeName, fieldName, valueExpr)
   , ncgTags     :: IORef (Set.Set String) -- interned record tag strings
+  , ncgFlatFns  :: IORef (Map.Map Text (String, Int))  -- milang name → (flatFnCName, arity)
+  , ncgCurrentFlatFn :: Maybe Text     -- name of function whose flat body we're compiling
   }
 
 newNCGState :: IO NCGState
@@ -38,6 +41,7 @@ newNCGState = do
   incs <- newIORef []
   patches <- newIORef []
   tags <- newIORef Set.empty
+  flatFns <- newIORef Map.empty
   pure NCGState
     { ncgNextId = nid
     , ncgTopDefs = defs
@@ -47,8 +51,11 @@ newNCGState = do
     , ncgSelfNames = Set.empty
     , ncgKnownTypes = Map.empty
     , ncgForwardDecls = Set.empty
+    , ncgUnboxed = Set.empty
     , ncgEnvPatches = patches
     , ncgTags = tags
+    , ncgFlatFns = flatFns
+    , ncgCurrentFlatFn = Nothing
     }
 
 freshId :: NCGState -> IO Int
@@ -198,7 +205,14 @@ nExprToC _ (StringLit s) = pure $ "mi_string(" ++ cStringLit (T.unpack s) ++ ")"
 
 nExprToC st (Name n) =
   case Map.lookup n (ncgScope st) of
-    Just cname -> pure cname
+    Just cname
+      -- Unboxed TCO variable: wrap back to MiVal
+      | Set.member n (ncgUnboxed st) ->
+        case Map.findWithDefault NUnknown n (ncgKnownTypes st) of
+          NFloat -> pure $ "mi_float(" ++ cname ++ ")"
+          NInt   -> pure $ "mi_int(" ++ cname ++ ")"
+          _      -> pure cname
+      | otherwise -> pure cname
     Nothing
       -- Auto-constructor for capitalized names (Just, Cons, etc.)
       | not (T.null n) && let c = T.head n in c >= 'A' && c <= 'Z' ->
@@ -218,6 +232,16 @@ nExprToC st (BinOp op l r)
         lc <- nExprToC st l
         rc <- nExprToC st r
         pure $ "mi_int((" ++ lc ++ ").as.i " ++ intCOp op ++ " (" ++ rc ++ ").as.i)"
+      -- At least one float operand, both numeric: direct float arithmetic/comparison
+      else if (lt == NFloat || rt == NFloat)
+              && lt `elem` [NFloat, NInt] && rt `elem` [NFloat, NInt]
+              && op `elem` ["+","-","*","/","==","/=","<",">","<=",">="]
+      then do
+        lc <- safeExprToFloat st l lt
+        rc <- safeExprToFloat st r rt
+        if op `elem` ["==","/=","<",">","<=",">="]
+          then pure $ "mi_int((" ++ lc ++ ") " ++ floatCOp op ++ " (" ++ rc ++ "))"
+          else pure $ "mi_float((" ++ lc ++ ") " ++ floatCOp op ++ " (" ++ rc ++ "))"
       else do
         lc <- nExprToC st l
         rc <- nExprToC st r
@@ -241,9 +265,24 @@ nExprToC st (App (Lam param body) x) = do
   pure $ "({ MiVal " ++ cvar ++ " = " ++ xc ++ "; " ++ bodyC ++ "; })"
 
 nExprToC st (App f x) = do
-  fc <- nExprToC st f
-  xc <- nExprToC st x
-  pure $ "mi_apply(" ++ fc ++ ", " ++ xc ++ ")"
+  -- Check for saturated call to a flat function
+  let fullExpr = App f x
+  flatFns <- readIORef (ncgFlatFns st)
+  case matchSaturatedCall fullExpr of
+    Just (name, args)
+      | Just (flatFnName, arity) <- Map.lookup name flatFns
+      , length args == arity -> do
+        argCs <- mapM (nExprToC st) args
+        let envExpr = if ncgCurrentFlatFn st == Just name
+              then "_env_raw"  -- self-call inside flat function
+              else case Map.lookup name (ncgScope st) of
+                Just scopeExpr -> scopeExpr ++ ".as.native.env"
+                Nothing -> "NULL"
+        pure $ flatFnName ++ "(" ++ intercalate ", " (argCs ++ [envExpr]) ++ ")"
+    _ -> do
+      fc <- nExprToC st f
+      xc <- nExprToC st x
+      pure $ "mi_apply(" ++ fc ++ ", " ++ xc ++ ")"
 
 nExprToC st (Lam param body) = do
   cid <- freshId st
@@ -383,9 +422,10 @@ nExprToC st (With body bindings)
         initCs <- mapM (nExprToC st) initArgs
         let intTypes = [(p, NInt) | p <- params]
             intScope = withKnownTypes bodyScope intTypes
+            unboxedScope = intScope { ncgUnboxed = Set.union paramSet (ncgUnboxed intScope) }
             initDecls = concat [ "int64_t " ++ pv ++ " = (" ++ ic ++ ").as.i; "
                                | (pv, ic) <- zip paramVars initCs ]
-        bodyC <- nTailBodyToIntC intScope loopName (length params) paramVars label loopBody
+        bodyC <- nTailBodyToIntC unboxedScope loopName (length params) paramVars label loopBody
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
                label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
                resultVar ++ "; })"
@@ -395,12 +435,15 @@ nExprToC st (With body bindings)
         initCs <- mapM (nExprToC st) initArgs
         let floatTypes = [(p, NFloat) | p <- params]
             floatScope = withKnownTypes bodyScope floatTypes
+            unboxedScope = floatScope { ncgUnboxed = Set.union paramSet (ncgUnboxed floatScope) }
             initDecl pv ic arg = case inferType st arg of
               NInt   -> "double " ++ pv ++ " = (double)(" ++ ic ++ ").as.i; "
-              _      -> "double " ++ pv ++ " = (" ++ ic ++ ").as.f; "
+              NFloat -> "double " ++ pv ++ " = (" ++ ic ++ ").as.f; "
+              -- Unknown type: check at runtime (int args need .as.i cast, not .as.f)
+              _      -> "double " ++ pv ++ " = (" ++ ic ++ ").type == MI_INT ? (double)(" ++ ic ++ ").as.i : (" ++ ic ++ ").as.f; "
             initDecls = concat [ initDecl pv ic arg
                                | (pv, ic, arg) <- zip3 paramVars initCs initArgs ]
-        bodyC <- nTailBodyToFloatC floatScope loopName (length params) paramVars label loopBody
+        bodyC <- nTailBodyToFloatC unboxedScope loopName (length params) paramVars label loopBody
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
                label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
                resultVar ++ "; })"
@@ -708,6 +751,89 @@ isNativeWHNF (Lam _ _) = True
 isNativeWHNF (BinOp _ _ _) = True
 isNativeWHNF _ = False
 
+-- ── Multi-arg Flat Function Optimization ──────────────────────────
+
+-- | Unwrap a chain of Lam constructors into (paramNames, innerBody).
+unwrapLams :: Expr -> ([Text], Expr)
+unwrapLams (Lam p body) = let (ps, b) = unwrapLams body in (lamParamName p : ps, b)
+unwrapLams body = ([], body)
+
+-- | Match a saturated call: App(App(Name f, a1), a2) → Just (f, [a1, a2]).
+-- Returns Nothing for non-Name bases or empty arg lists.
+matchSaturatedCall :: Expr -> Maybe (Text, [Expr])
+matchSaturatedCall expr = go expr []
+  where
+    go (App f x) args = go f (x : args)
+    go (Name n) args | not (null args) = Just (n, args)
+    go _ _ = Nothing
+
+-- | Generate a flat (multi-arg) C function for a multi-arg binding.
+-- The flat function takes all params as C function args instead of currying.
+-- Self-recursive tail calls become goto loops.
+emitFlatFn :: NCGState -> Text -> [Text] -> Expr -> IO ()
+emitFlatFn st name allParams innerBody = do
+  cid <- freshId st
+  let flatFnName = "_nfn_flat_" ++ show cid
+      label = flatFnName ++ "_top"
+      paramCVars = map cVarName allParams
+
+      -- Compute captures: free vars of innerBody that are not params,
+      -- are in scope, and are not effective globals
+      bodyFvs = exprFreeVars innerBody
+      paramSet = Set.fromList allParams
+      isEffectiveGlobal fv = Set.member fv (ncgGlobals st) &&
+        Map.lookup fv (ncgScope st) == Just (cVarName fv)
+      capturedNames = filter (\fv ->
+        not (Set.member fv paramSet) &&
+        Map.member fv (ncgScope st) &&
+        not (isEffectiveGlobal fv) &&
+        fv /= name) -- exclude self-reference
+        (Set.toList bodyFvs)
+
+  -- Register flat function BEFORE compiling body (for self-call detection)
+  modifyIORef (ncgFlatFns st) (Map.insert name (flatFnName, length allParams))
+
+  -- Build scope for body: params as local vars, captures from env
+  let paramScope = Map.fromList (zip allParams paramCVars)
+      captureScope = if null capturedNames then Map.empty
+                     else Map.fromList [(fv, "_env->" ++ sanitizeName fv) | fv <- capturedNames]
+      bodyScope = (withScope st (Map.union paramScope captureScope))
+        { ncgSelfNames = Set.empty  -- self-calls use flat fn, not mi_native_env
+        , ncgForwardDecls = Set.empty
+        , ncgCurrentFlatFn = Just name
+        }
+
+  -- Generate env type for captures (if any)
+  let envTypeName = flatFnName ++ "_env"
+  when (not (null capturedNames)) $
+    addTopDef st $ unlines
+      [ "typedef struct {"
+      , unlines ["  MiVal " ++ sanitizeName fv ++ ";" | fv <- capturedNames]
+      , "} " ++ envTypeName ++ ";"
+      , ""
+      ]
+
+  -- Check if body is self-recursive
+  let isSelfRec = Set.member name bodyFvs
+
+  -- Compile body with tail call support if self-recursive
+  bodyC <- if isSelfRec
+    then nTailBodyToC bodyScope name (length allParams) paramCVars label innerBody
+    else nExprToC bodyScope innerBody
+
+  -- Emit flat function
+  let paramDecls = intercalate ", " ["MiVal " ++ cv | cv <- paramCVars]
+      envSetup = if null capturedNames
+        then "  (void)_env_raw;\n"
+        else "  " ++ envTypeName ++ " *_env = (" ++ envTypeName ++ " *)_env_raw;\n"
+      labelDecl = if isSelfRec then "  " ++ label ++ ":;\n" else ""
+  addTopDef st $ unlines
+    [ "static MiVal " ++ flatFnName ++ "(" ++ paramDecls ++ ", void *_env_raw) {"
+    , envSetup ++ labelDecl ++ "  return " ++ bodyC ++ ";"
+    , "}"
+    , ""
+    ]
+
 -- ── Unboxed Integer Loop Optimization ──────────────────────────────
 
 -- | Check if an expression is guaranteed to produce an int value,
@@ -720,14 +846,23 @@ isKnownInt ints (BinOp op l r)
   = isKnownInt ints l && isKnownInt ints r
 isKnownInt _ _ = False
 
+-- | Check that an expression contains no float literals.
+-- Used to reject int-typed TCO loops when conditions compare against floats.
+noFloatLits :: Expr -> Bool
+noFloatLits (FloatLit _) = False
+noFloatLits (SizedFloat {}) = False
+noFloatLits (BinOp _ l r) = noFloatLits l && noFloatLits r
+noFloatLits (App f x) = noFloatLits f && noFloatLits x
+noFloatLits _ = True
+
 -- | Check if a TCO loop body only uses int operations — all base-case
 -- returns and tail-call arguments are int expressions on the given names.
 isIntBody :: Set.Set Text -> Text -> Int -> Expr -> Bool
 isIntBody ints funcName nparams = go
   where
     go (Case scrut alts)
-      | Just (_, thenBr, elseBr) <- matchTruthiness scrut alts
-      = go thenBr && go elseBr
+      | Just (cond, thenBr, elseBr) <- matchTruthiness scrut alts
+      = noFloatLits cond && go thenBr && go elseBr
     go (Case scrut alts)
       -- Non-truthiness case: scrutinee must be int, patterns must be int-compatible
       | isKnownInt ints scrut
@@ -805,22 +940,51 @@ isFloatBody floats funcName nparams = go
 nExprToFloat :: NCGState -> Expr -> IO String
 nExprToFloat _ (FloatLit f) = pure (show f)
 nExprToFloat _ (IntLit n)   = pure (show n ++ ".0")
-nExprToFloat st (Name n) = case Map.lookup n (ncgScope st) of
-  Just cname -> pure cname
-  Nothing    -> pure $ "/* unbound " ++ T.unpack n ++ " */ 0.0"
+nExprToFloat st (Name n)
+  | Set.member n (ncgUnboxed st) =
+    case Map.lookup n (ncgScope st) of
+      Just cname -> pure cname  -- bare double variable
+      Nothing    -> pure "0.0"
+  | otherwise = do
+    c <- nExprToC st (Name n)
+    pure $ miAsFloat c
 nExprToFloat st (BinOp op l r) = do
   lc <- nExprToFloat st l
   rc <- nExprToFloat st r
   pure $ "(" ++ lc ++ " " ++ floatCOp op ++ " " ++ rc ++ ")"
 nExprToFloat st expr = do
   c <- nExprToC st expr
-  pure $ "(" ++ c ++ ").as.f"
+  pure $ miAsFloat c
+
+-- | Safe MiVal-to-double conversion: handles both MI_INT and MI_FLOAT at runtime.
+miAsFloat :: String -> String
+miAsFloat c = "((" ++ c ++ ").type == MI_INT ? (double)(" ++ c ++ ").as.i : (" ++ c ++ ").as.f)"
 
 floatCOp :: Text -> String
 floatCOp "+" = "+"; floatCOp "-" = "-"; floatCOp "*" = "*"; floatCOp "/" = "/"
 floatCOp "==" = "=="; floatCOp "/=" = "!="; floatCOp "<" = "<"; floatCOp ">" = ">"
 floatCOp "<=" = "<="; floatCOp ">=" = ">="
 floatCOp op = error $ "floatCOp: unsupported " ++ T.unpack op
+
+-- | Emit expression as a bare double, handling both unboxed and MiVal variables correctly.
+safeExprToFloat :: NCGState -> Expr -> NType -> IO String
+safeExprToFloat _ (FloatLit f) _ = pure (show f)
+safeExprToFloat _ (IntLit n)   _ = pure (show n ++ ".0")
+safeExprToFloat st (Name n) NFloat
+  | Set.member n (ncgUnboxed st) =
+    case Map.lookup n (ncgScope st) of
+      Just cname -> pure cname  -- bare double variable
+      Nothing    -> pure "0.0"
+  | otherwise = do c <- nExprToC st (Name n); pure $ "(" ++ c ++ ").as.f"
+safeExprToFloat st expr NInt = do c <- nExprToC st expr; pure $ "(double)(" ++ c ++ ").as.i"
+safeExprToFloat st (BinOp op l r) _ = do
+  let lt = inferType st l
+      rt = inferType st r
+  lc <- safeExprToFloat st l lt
+  rc <- safeExprToFloat st r rt
+  pure $ "(" ++ lc ++ " " ++ floatCOp op ++ " " ++ rc ++ ")"
+safeExprToFloat st expr NUnknown = do c <- nExprToC st expr; pure $ miAsFloat c
+safeExprToFloat st expr _ = do c <- nExprToC st expr; pure $ "(" ++ c ++ ").as.f"
 
 -- | Compile TCO loop body with int64_t variables (fully unboxed).
 -- Tail calls update int64_t vars and goto; base cases re-box with mi_int().
@@ -1059,7 +1223,21 @@ emitBindings st bindings = do
                          else foldr Lam (bindBody b) (bindParams b)
         , Set.member (bindName b) (exprFreeVars bodyExpr)
         ]
-      -- Check for forward references: does any binding reference a later-defined name?
+  -- Pre-generate flat functions for multi-arg local bindings
+  -- (only for bindings that don't participate in mutual recursion)
+  let bindingNames = Set.fromList [bindName b | b <- bindings]
+  mapM_ (\b -> do
+    let bodyExpr = if null (bindParams b) then bindBody b
+                   else foldr Lam (bindBody b) (bindParams b)
+        (allParams, innerBody) = unwrapLams bodyExpr
+        -- Skip if mutual recursion (body references other bindings in this group)
+        bodyFvs = exprFreeVars bodyExpr
+        otherBindings = Set.delete (bindName b) bindingNames
+        hasMutualRefs = not (Set.null (Set.intersection bodyFvs otherBindings))
+    when (length allParams >= 2 && bindDomain b /= Lazy && not hasMutualRefs) $
+      emitFlatFn st (bindName b) allParams innerBody
+    ) bindings
+  let -- Check for forward references: does any binding reference a later-defined name?
       hasForwardRef = any (\(i, b) ->
         let bodyFvs = exprFreeVars (bindBody b)
             laterNames = Set.fromList [bindName b' | (j, b') <- zip [0::Int ..] bindings, j > i]
@@ -1325,6 +1503,14 @@ nativeNamespaceToC st hidden allBindings = do
 
   -- Emit user bindings (all assignments, no declarations)
   -- Track inferred types as we process each binding for type propagation
+  -- Pre-generate flat functions for multi-arg top-level bindings
+  mapM_ (\b -> do
+    let bodyExpr = if null (bindParams b) then bindBody b
+                   else foldr Lam (bindBody b) (bindParams b)
+        (allParams, _innerBody) = unwrapLams bodyExpr
+    when (length allParams >= 2 && bindDomain b /= Lazy) $
+      emitFlatFn st' (bindName b) allParams _innerBody
+    ) liveBs
   emit "  // User bindings\n"
   let emitBinding curSt b = do
         let name = bindName b

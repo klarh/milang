@@ -1,0 +1,9 @@
+go zr zi i max cx cy = if (i >= max) max (if (zr * zr + zi * zi > 4.0) i (go (zr * zr - zi * zi + cx) ((zr + zr) * zi + cy) (i + 1) max cx cy))
+
+floop start step count limit acc f = if (count >= limit) acc (floop (start + step) step (count + 1) limit (f acc start) f)
+
+row cy = floop (0.0 - 2.0) 0.15 0 20 0 (\a cx -> a + go 0.0 0.0 0 100 cx cy)
+
+compute = floop (0.0 - 1.5) 0.15 0 20 0 (\a cy -> a + row cy)
+
+main world = world.io.println (toString compute)

@@ -1,0 +1,51 @@
+-- Systematic tests for closures capturing float values
+-- Tests capture, nested closures, HOF with floats
+
+-- Simple closure capturing a float
+make_adder offset = \x -> x + offset
+add_half = make_adder 0.5
+add_third = make_adder 0.333
+
+-- Closure capturing multiple floats
+make_linear slope intercept = \x -> slope * x + intercept
+line1 = make_linear 2.0 1.0
+line2 = make_linear 0.5 (0.0 - 3.0)
+
+-- Nested closure: outer captures float, inner captures outer's result
+make_scaler base = \factor -> \x -> base * factor * x
+scale = make_scaler 10.0
+
+-- HOF returning float from callback
+apply_to_float f x = f x + 0.0
+transform xs f = map (\x -> apply_to_float f (x + 0.0)) xs
+
+-- Closure with TCO inside (function captures float, does TCO loop)
+make_counter threshold = go
+  go n = if (n + 0.0 >= threshold) n (go (n + 1))
+
+-- Weighted sum using fold with float accumulator
+weighted_sum ws vs = fold (\acc i -> acc + i * 0.1) 0.0 (map (\i -> i * i) vs)
+
+-- Deeply nested: 3 levels of closure, each capturing a float
+level3 a = \b -> \c -> \x -> a * x * x + b * x + c
+eval_quad = level3 1.0
+
+main world =
+  io = world.io
+  -- Simple float capture
+  io.println (toString (add_half 10.0))
+  io.println (toString (add_third 3.0))
+  -- Linear function closures
+  io.println (toString (line1 5.0))
+  io.println (toString (line2 10.0))
+  -- Nested closure
+  io.println (toString (scale 2.0 3.0))
+  -- HOF with float
+  io.println (toString (fold (\a x -> a + x) 0.0 (transform (range 1 4) (\x -> x * 2.0))))
+  -- Closure with TCO
+  counter = make_counter 50.0
+  io.println (toString (counter 0))
+  -- Weighted sum
+  io.println (toString (weighted_sum (range 1 4) (range 1 4)))
+  -- Deeply nested
+  io.println (toString (eval_quad (0.0 - 2.0) 1.0 3.0))

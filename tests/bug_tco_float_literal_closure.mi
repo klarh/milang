@@ -1,0 +1,11 @@
+-- Bug: Float literal in TCO recursive call args inside closure causes invalid C
+-- WORKS when called directly, FAILS when called from within a closure (e.g., fold lambda)
+-- Workaround: replace `2.0 * a` with `a + a`
+
+f a b i max cx cy = if (i >= max) max (if (a > 4.0) i (f a (2.0 * a + cy) (i + 1) max cx cy))
+
+-- Uncomment for direct call (works):
+-- main world = world.io.println (toString (f 0.0 0.0 0 50 0.1 0.5))
+
+-- Inside closure (fails with "C compilation failed" / "invalid initializer"):
+main world = world.io.println (toString (fold (\acc px -> acc + f 0.0 0.0 0 50 (px + 0.0) 0.5) 0 (range 0 3)))

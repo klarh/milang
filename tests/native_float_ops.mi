@@ -1,0 +1,49 @@
+-- Systematic tests for float operations in native codegen
+-- Tests: float arithmetic, int-float promotion, float in various contexts
+
+-- Basic float arithmetic
+add_f a b = a + b
+mul_f a b = a * b
+sub_f a b = a - b
+div_f a b = a / b
+
+-- Float comparison
+max_f a b = if (a > b) a b
+min_f a b = if (a < b) a b
+
+-- Int-to-float promotion in arithmetic
+promote_add n = n + 0.5
+promote_mul n = n * 1.5
+
+-- Float in fold (accumulator starts as float)
+sum_floats xs = fold (\acc x -> acc + x * 0.1) 0.0 xs
+
+-- Float in map then fold
+map_then_sum xs = fold (\a x -> a + x) 0.0 (map (\x -> x * 2.5) xs)
+
+-- Nested float operations
+quadratic a b c x = a * x * x + b * x + c
+
+main world =
+  io = world.io
+  -- Basic ops
+  r1 = add_f 1.5 2.5
+  r2 = mul_f 3.0 4.0
+  r3 = sub_f 10.0 3.5
+  r4 = div_f 9.0 2.0
+  io.println (toString r1)
+  io.println (toString r2)
+  io.println (toString r3)
+  io.println (toString r4)
+  -- Comparisons
+  io.println (toString (max_f 3.5 7.2))
+  io.println (toString (min_f 3.5 7.2))
+  -- Promotion
+  io.println (toString (promote_add 10))
+  io.println (toString (promote_mul 4))
+  -- Float fold
+  io.println (toString (sum_floats (range 1 6)))
+  -- Map then sum
+  io.println (toString (map_then_sum (range 1 4)))
+  -- Quadratic
+  io.println (toString (quadratic 1.0 (0.0 - 2.0) 1.0 3.0))

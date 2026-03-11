@@ -1,0 +1,46 @@
+-- Systematic tests for mutual recursion with floats
+-- Tests mutual TCO, float captures in mutual functions
+
+-- Mutual recursion with float accumulator
+is_even_f n acc = if (n == 0) acc (is_odd_f (n - 1) (acc + 0.5))
+is_odd_f n acc = if (n == 0) acc (is_even_f (n - 1) (acc + 0.25))
+
+-- Mutual recursion with float condition
+bounce x dx limit = go_up x dx
+  go_up x0 dx0 = if (x0 >= limit) (come_down x0 (0.0 - dx0)) (go_up (x0 + dx0) dx0)
+  come_down x0 dx0 = if (x0 <= 0.0) x0 (come_down (x0 + dx0) dx0)
+
+-- Non-tail recursion with floats
+fib_float n = if (n <= 1) (n + 0.0) (fib_float (n - 1) + fib_float (n - 2))
+
+-- Non-tail recursion returning float from deep nesting
+power base exp_ = if (exp_ == 0) 1.0 (base * power base (exp_ - 1))
+
+-- Fibonacci-like with floats (non-tail)
+float_fib n = if (n <= 0) 0.0 (if (n == 1) 1.0 (float_fib (n - 1) + float_fib (n - 2)))
+
+-- HOF chain with float results
+compose f g = \x -> f (g x)
+double x = x * 2.0
+inc_f x = x + 1.0
+double_then_inc = compose inc_f double
+
+-- Map of float function over list
+float_map_test = map (\x -> x * x * 0.1 + 0.0) (range 1 6)
+
+-- Float function in both direct and closure context
+scale x factor = x * factor
+test_both_contexts = toString direct + " " + toString from_closure
+  direct = scale 5.0 3.0
+  from_closure = fold (\acc x -> acc + scale (x + 0.0) 2.0) 0.0 (range 1 4)
+
+main world =
+  io = world.io
+  io.println (toString (is_even_f 10 0.0))
+  io.println (toString (bounce 0.0 1.5 10.0))
+  io.println (toString (fib_float 10))
+  io.println (toString (power 2.0 10))
+  io.println (toString (float_fib 10))
+  io.println (toString (double_then_inc 5.0))
+  io.println (toString float_map_test)
+  io.println (toString test_both_contexts)

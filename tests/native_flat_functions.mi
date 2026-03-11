@@ -1,0 +1,57 @@
+-- Systematic tests for multi-arg flat function optimization
+-- Tests saturated calls, partial application, self-recursion in flat fns
+
+-- 2-arg flat function
+add2 a b = a + b
+
+-- 3-arg flat function
+add3 a b c = a + b + c
+
+-- 4-arg with computation
+dot4 a1 a2 b1 b2 = a1 * b1 + a2 * b2
+
+-- Multi-arg with float
+lerp a b t = a + (b - a) * t
+
+-- Flat function called saturated
+test_saturated = add3 10 20 30
+
+-- Flat function called partially
+add10 = add2 10
+test_partial = add10 5
+
+-- Flat function called from map (closure context)
+test_map_flat = map (\x -> add3 x x x) (range 1 5)
+
+-- Flat function called from fold
+test_fold_flat = fold (\acc x -> add2 acc (x * x)) 0 (range 1 6)
+
+-- Self-recursive flat function (TCO inside flat fn)
+gcd_ a b = if (b == 0) a (gcd_ b (a % b))
+
+-- Self-recursive flat function with floats
+newton_sqrt x guess n = if (n >= 20) guess (newton_sqrt x ((guess + x / guess) / 2.0) (n + 1))
+
+-- Multi-arg function passed as value (not flat-called)
+apply_binary f a b = f a b
+test_as_value = apply_binary add2 100 200
+
+-- Flat function in nested context
+nested_flat = fold (\acc x -> acc + inner x (x + 1)) 0 (range 1 5)
+  inner a b = a * 10 + b
+
+-- Float flat function called from closure
+float_flat_from_closure = fold (\acc x -> acc + lerp 0.0 10.0 (x * 0.1 + 0.0)) 0.0 (range 0 10)
+
+main world =
+  io = world.io
+  io.println (toString test_saturated)
+  io.println (toString test_partial)
+  io.println (toString test_map_flat)
+  io.println (toString test_fold_flat)
+  io.println (toString (gcd_ 48 18))
+  io.println (toString (newton_sqrt 2.0 1.0 0))
+  io.println (toString test_as_value)
+  io.println (toString nested_flat)
+  io.println (toString (dot4 3.0 4.0 1.0 2.0))
+  io.println (toString float_flat_from_closure)

@@ -1,0 +1,34 @@
+-- Systematic tests for TCO with mixed int/float arguments
+-- Tests the isIntBody/isFloatBody classification and init code paths
+
+-- TCO with all-float args
+loop_float a b n = if (n >= 10) (a + b) (loop_float (a + 0.5) (b + 0.25) (n + 1))
+
+-- TCO with all-int args
+loop_int a b n = if (n >= 10) (a + b) (loop_int (a + 1) (b + 2) (n + 1))
+
+-- TCO with mixed: some float, some int (float literal in condition)
+-- This was the bug: isIntBody classified as int because conditions were skipped
+mixed_loop x total i limit = if (i >= limit) total (if (x * x > 4.0) total (mixed_loop (x + 0.1) (total + x) (i + 1) limit))
+
+-- TCO where only the accumulator is float but counter is int
+accum_float acc n = if (n >= 20) acc (accum_float (acc + 1.0 / (n + 1.0)) (n + 1))
+
+-- TCO with float comparison in condition but int return
+count_until_big x i = if (x > 100.0) i (count_until_big (x * 1.5) (i + 1))
+
+-- Call TCO functions from closures (triggers different codegen path)
+call_from_closure f = fold (\acc _ -> acc + f 0.0 0.0 0 5) 0 (range 0 3)
+
+-- Nested: TCO float function called from fold lambda
+nested_tco_float = fold (\acc n -> acc + loop_float (n * 0.1) 0.0 0) 0.0 (range 0 5)
+
+main world =
+  io = world.io
+  io.println (toString (loop_float 0.0 0.0 0))
+  io.println (toString (loop_int 0 0 0))
+  io.println (toString (mixed_loop 0.0 0.0 0 10))
+  io.println (toString (accum_float 0.0 0))
+  io.println (toString (count_until_big 1.0 0))
+  io.println (toString (call_from_closure mixed_loop))
+  io.println (toString nested_tco_float)

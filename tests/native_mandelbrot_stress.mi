@@ -1,0 +1,43 @@
+-- Stress test: Mandelbrot-like computation combining native codegen features
+-- Tests: float TCO, closures, flat functions, mixed types
+
+-- Core iteration: TCO with mixed int/float (6-arg flat function)
+mandel_iter zr zi cr ci i max_iter = if (i >= max_iter) max_iter (if (zr * zr + zi * zi > 4.0) i (mandel_iter (zr * zr - zi * zi + cr) ((zr + zr) * zi + ci) cr ci (i + 1) max_iter))
+
+-- Test: direct call to mandel_iter (origin diverges slowly)
+test_direct = mandel_iter 0.0 0.0 0.0 0.0 0 10
+
+-- Test: point that escapes quickly
+test_escape = mandel_iter 0.0 0.0 2.0 2.0 0 10
+
+-- Test: from closure (fold calls mandel_iter)
+test_closure = fold (\acc _ -> acc + mandel_iter 0.0 0.0 (0.0 - 0.5) 0.5 0 10) 0 (range 0 2)
+
+-- Test: partial application
+make_iterator cx cy = mandel_iter 0.0 0.0 cx cy 0
+test_partial = make_iterator (0.0 - 1.0) 0.0 10
+
+-- Test: multiple points computed via map
+test_map = map (\cx -> mandel_iter 0.0 0.0 (cx * 0.5 + 0.0) 0.0 0 10) (range 0 4)
+
+-- Test: record-based parameters
+compute_point params = mandel_iter 0.0 0.0 params.cx params.cy 0 params.max_iter
+test_record = compute_point ({cx = 0.0 - 0.5; cy = 0.5; max_iter = 10})
+
+main world =
+  io = world.io
+  io.println (toString test_direct)
+  io.println (toString test_escape)
+  io.println (toString test_closure)
+  io.println (toString test_partial)
+  io.println (toString test_map)
+  io.println (toString test_record)
+
+main world =
+  io = world.io
+  io.println (toString test_direct)
+  io.println (toString test_escape)
+  io.println (toString test_closure)
+  io.println (toString test_partial)
+  io.println (toString test_map)
+  io.println (toString test_record)
