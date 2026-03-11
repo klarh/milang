@@ -1,0 +1,60 @@
+-- Native codegen: field access on computed expressions
+-- Tests .field on if/case results, function returns, nested access
+
+-- Field access on if result
+pick_record cond = if cond ({x = 10; y = 20}) ({x = 30; y = 40})
+
+-- Field access on function result
+make_pair a b = {fst = a; snd = b}
+swap p = make_pair p.snd p.fst
+
+-- Chained field access on computed expression
+outer = {inner = {deep = {val = 42}}}
+
+-- Nested field access through function calls
+make_nested x = {data = {value = x * 2; label = "item"}}
+
+-- Field access in fold (computed record in each iteration)
+sum_fields records = fold (\acc r -> acc + r.value) 0 records
+
+-- Field access on case/pattern result
+Shape = {Circle r; Rect w h}
+get_primary shape = shape ->
+  Circle {r = r} = {value = r; name = "radius"}
+  Rect {w = w; h = h} = {value = w; name = "width"}
+
+-- Record returned from recursive function
+find_first pred xs = xs ->
+  Nil = {found = 0; value = 0}
+  Cons {head = h; tail = t} = if (pred h) ({found = 1; value = h}) (find_first pred t)
+
+main world =
+  io = world.io
+  -- If result field access
+  r1 = pick_record True
+  io.println (toString r1.x)
+  io.println (toString r1.y)
+  r2 = pick_record False
+  io.println (toString r2.x)
+  -- Swap via function result field access
+  p = make_pair 1 2
+  s = swap p
+  io.println (toString s.fst)
+  io.println (toString s.snd)
+  -- Deep nested access
+  io.println (toString outer.inner.deep.val)
+  -- Function result field access
+  n = make_nested 5
+  io.println (toString n.data.value)
+  io.println n.data.label
+  -- Fold with field access
+  records = map (\i -> {value = i * i}) (range 1 5)
+  io.println (toString (sum_fields records))
+  -- Case result field access
+  c = get_primary (Circle 7)
+  io.println (toString c.value)
+  io.println c.name
+  -- Recursive function returning record
+  result = find_first (\x -> x > 3) (range 1 6)
+  io.println (toString result.found)
+  io.println (toString result.value)

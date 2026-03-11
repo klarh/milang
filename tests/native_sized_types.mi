@@ -1,0 +1,41 @@
+-- Native codegen: sized integer and float types
+-- Tests SizedInt/SizedFloat creation, arithmetic, overflow
+
+-- 8-bit signed integer overflow
+test_i8_wrap = (Int' 8 100) + (Int' 8 50)
+test_i8_neg = Int' 8 (0 - 1)
+
+-- 16-bit integer arithmetic
+test_i16 = (Int' 16 1000) + (Int' 16 2000)
+
+-- 32-bit integer
+test_i32 = (Int' 32 100000) * (Int' 32 3)
+
+-- 8-bit unsigned overflow
+test_u8_wrap = (UInt' 8 200) + (UInt' 8 100)
+test_u8_max = UInt' 8 255
+
+-- 32-bit float
+test_f32 = (Float' 32 3.14) + (Float' 32 2.0)
+
+-- Mixed: sized in regular arithmetic context
+add_sized a b = (Int' 32 a) + (Int' 32 b)
+
+-- Sized types in fold
+sum_i8 xs = fold (\acc x -> acc + (Int' 8 x)) (Int' 8 0) xs
+
+-- Sized types through function calls
+double_i16 x = (Int' 16 x) * (Int' 16 2)
+
+main world =
+  io = world.io
+  io.println (toString test_i8_wrap)
+  io.println (toString test_i8_neg)
+  io.println (toString test_i16)
+  io.println (toString test_i32)
+  io.println (toString test_u8_wrap)
+  io.println (toString test_u8_max)
+  io.println (toString test_f32)
+  io.println (toString (add_sized 10 20))
+  io.println (toString (sum_i8 (range 1 4)))
+  io.println (toString (double_i16 100))

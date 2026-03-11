@@ -1,0 +1,37 @@
+-- Native codegen: string operations with unknown-type operands
+-- Tests string + concat, comparisons, and mixed string/int/float expressions
+
+-- String concat with function results (unknown type at compile time)
+greet name = "Hello, " + name + "!"
+make_label key val = key + ": " + toString val
+
+-- String comparison
+str_compare a b = if (a < b) "less" (if (a == b) "equal" "greater")
+
+-- String in fold (accumulator is string)
+number_list xs = fold (\acc x -> acc + " " + toString x) "" xs
+
+-- Mixed: toString on computed values used in string ops
+format_pair a b = "(" + toString (a + b) + ", " + toString (a * b) + ")"
+
+-- String result from case-like branching
+describe_sign x = if (x > 0) "positive" (if (x == 0) "zero" "negative")
+
+-- Nested string operations
+repeat_str s n = fold (\acc _ -> acc + s) "" (range 0 n)
+
+main world =
+  io = world.io
+  io.println (greet "world")
+  io.println (greet (toString 42))
+  io.println (make_label "count" 5)
+  io.println (make_label "pi" 3.14)
+  io.println (str_compare "abc" "def")
+  io.println (str_compare "xyz" "xyz")
+  io.println (str_compare "z" "a")
+  io.println (number_list (range 1 5))
+  io.println (format_pair 3 4)
+  io.println (describe_sign 5)
+  io.println (describe_sign 0)
+  io.println (describe_sign (0 - 3))
+  io.println (repeat_str "ab" 3)

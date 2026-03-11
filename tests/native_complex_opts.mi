@@ -1,0 +1,48 @@
+-- Native codegen: complex optimization interactions
+-- Tests combinations of flat fn + TCO + float + captures
+
+-- Flat function with float TCO inside (flat fn optimization + TCO + float)
+iterate_flat f x n = if (n <= 0) x (iterate_flat f (f x) (n - 1))
+
+-- Flat function called from closure that also does TCO
+apply_n_times f n x = if (n <= 0) x (apply_n_times f (n - 1) (f x))
+test_flat_tco = fold (\acc i -> acc + apply_n_times (\x -> x + 1.0) i 0.0) 0.0 (range 1 5)
+
+-- TCO loop where base case returns a flat function call result
+clamp lo hi x = if (x < lo) lo (if (x > hi) hi x)
+-- Bisect: find midpoint of [lo,hi] where f changes sign
+bisect_zero lo hi n = if (n <= 0) ((lo + hi) / 2.0) (bisect_zero lo ((lo + hi) / 2.0) (n - 1))
+
+-- Closure capturing flat function, used in fold
+make_transform a b = \x -> a * x + b
+test_closure_flat = fold (\acc x -> acc + (make_transform 2.0 1.0) (x + 0.0)) 0.0 (range 1 4)
+
+-- Flat function + float + record field access
+dot2 ax ay bx by = ax * bx + ay * by
+normalize_len ax ay = dot2 ax ay ax ay
+
+-- TCO with mixed int counter and float accumulator, inside closure
+make_summer = \xs -> fold (\acc x -> acc + x * x * 0.1 + 0.0) 0.0 xs
+
+-- Nested flat calls (flat fn calling another flat fn)
+mul3 a b c = a * b * c
+sum_of_products xs = fold (\acc x -> acc + mul3 (x + 0.0) (x + 1.0) (x + 2.0)) 0.0 xs
+
+main world =
+  io = world.io
+  -- iterate_flat: apply double 5 times to 1.0
+  io.println (toString (iterate_flat (\x -> x * 2.0) 1.0 5))
+  -- flat + TCO from closure
+  io.println (toString test_flat_tco)
+  -- bisect (10 halvings of [0,10] → 10/2^10 ≈ 0.00977)
+  io.println (toString (bisect_zero 0.0 10.0 10))
+  -- closure capturing flat fn
+  io.println (toString test_closure_flat)
+  -- dot product
+  io.println (toString (dot2 3.0 4.0 1.0 2.0))
+  io.println (toString (normalize_len 3.0 4.0))
+  -- summer closure
+  s = make_summer (range 1 5)
+  io.println (toString s)
+  -- nested flat calls
+  io.println (toString (sum_of_products (range 1 4)))

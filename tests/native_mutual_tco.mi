@@ -1,0 +1,41 @@
+-- Native codegen: mutual tail recursion
+-- Tests two functions tail-calling each other
+
+-- Classic isEven/isOdd mutual recursion
+isEven n = if (n == 0) 1 (isOdd (n - 1))
+isOdd n = if (n == 0) 0 (isEven (n - 1))
+
+-- Mutual recursion with float accumulator
+ping n acc = if (n <= 0) acc (pong (n - 1) (acc + 1.5))
+pong n acc = if (n <= 0) acc (ping (n - 1) (acc + 0.5))
+
+-- Mutual recursion with different return paths
+state_a x steps = if (steps <= 0) x (if (x > 100) (state_b (x - 50) (steps - 1)) (state_a (x * 2) (steps - 1)))
+state_b x steps = if (steps <= 0) x (if (x < 20) (state_a (x + 30) (steps - 1)) (state_b (x - 10) (steps - 1)))
+
+-- Three-way mutual recursion
+phase1 n = if (n <= 0) 1 (phase2 (n - 1))
+phase2 n = if (n <= 0) 2 (phase3 (n - 1))
+phase3 n = if (n <= 0) 3 (phase1 (n - 1))
+
+-- Mutual recursion in closure context
+make_alternator = fold (\acc i -> acc + if (isEven i == 1) (i + 0.0) (0.0 - i + 0.0)) 0.0
+
+main world =
+  io = world.io
+  io.println (toString (isEven 10))
+  io.println (toString (isOdd 10))
+  io.println (toString (isEven 7))
+  io.println (toString (isOdd 7))
+  -- Float accumulator mutual recursion
+  io.println (toString (ping 10 0.0))
+  io.println (toString (pong 10 0.0))
+  -- State machine mutual recursion
+  io.println (toString (state_a 1 20))
+  io.println (toString (state_b 200 15))
+  -- Three-way
+  io.println (toString (phase1 10))
+  io.println (toString (phase2 10))
+  io.println (toString (phase3 10))
+  -- Mutual recursion used from fold
+  io.println (toString (make_alternator (range 1 7)))

@@ -1,0 +1,51 @@
+-- Native codegen: deeply nested closures (3+ levels)
+-- Tests environment struct nesting and capture correctness
+
+-- 3-level closure: each level captures a different value
+make_adder3 a = \b -> \c -> \x -> a + b + c + x
+
+-- 3-level with mixed int/float captures
+make_poly a = \b -> \c -> \x -> a * x * x + b * x + c
+
+-- 4-level deep closure
+make_deep w = \x -> \y -> \z -> w * 1000 + x * 100 + y * 10 + z
+
+-- Closure capturing another closure (closure-of-closure)
+make_composed f g = \x -> f (g x)
+double x = x * 2
+inc x = x + 1
+
+-- Deep closure used in fold (3 levels captured, then used as fold callback)
+make_weighted_summer a b = \xs -> fold (\acc x -> acc + a * x + b) 0.0 xs
+
+-- Closure capturing a closure that captures a closure
+chain3 a = \b -> \c -> make_composed (make_adder3 a b c) (\x -> x * 2)
+
+-- Deep capture with float values at each level
+nest_floats a = \b -> \c -> fold (\acc x -> acc + a * (x + 0.0) * (x + 0.0) + b * (x + 0.0) + c) 0.0
+
+main world =
+  io = world.io
+  -- 3-level closure
+  f3 = make_adder3 10 20 30
+  io.println (toString (f3 40))
+  -- Polynomial closure
+  quad = make_poly 1.0 (0.0 - 2.0) 3.0
+  io.println (toString (quad 5.0))
+  -- 4-level deep
+  deep = make_deep 1
+  io.println (toString (deep 2 3 4))
+  -- Composed closures
+  double_then_inc = make_composed inc double
+  io.println (toString (double_then_inc 5))
+  inc_then_double = make_composed double inc
+  io.println (toString (inc_then_double 5))
+  -- Weighted summer
+  ws = make_weighted_summer 2.0 0.5
+  io.println (toString (ws (range 1 5)))
+  -- Chain of closures
+  chained = chain3 100 10 1
+  io.println (toString (chained 5))
+  -- Deep float captures in fold
+  compute = nest_floats 1.0 2.0 3.0
+  io.println (toString (compute (range 1 4)))
