@@ -1,0 +1,28 @@
+-- BUG: Inline lambda inside a recursive function body fails to capture
+-- the enclosing function's parameter in native codegen.
+--
+-- `\x -> x + n` inside `build_fns n acc = ...` gives
+-- "unbound variable: n" during C compilation.
+-- Both interpreter and native codegen fail with same error.
+--
+-- Simple case works: `make n = \x -> x + n` (top-level, non-recursive)
+-- Fails when lambda is nested in a recursive function body.
+--
+-- Workaround: extract the lambda into a separate named function:
+--   make_adder k = \x -> x + k
+-- then use `make_adder n` instead of `\x -> x + n`.
+--
+-- Expected: prints 15
+-- Actual: "unbound variable: n"
+
+-- This works fine:
+make_adder k = \x -> x + k
+
+-- This FAILS: inline lambda can't capture `n` from enclosing function
+build_fns n acc = if (n <= 0) acc \
+  (build_fns (n - 1) (push acc (\x -> x + n)))
+
+apply_all fns x = fold (\acc f -> f acc) x fns
+
+main world = world.io.println (toString \
+  (apply_all (build_fns 5 []) 0))

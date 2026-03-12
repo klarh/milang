@@ -1,0 +1,15 @@
+-- Regression test: lambda inside a non-lambda binding that captures
+-- a sibling variable in the same With block. Previously, native codegen's
+-- forward-declaration backpatching failed to initialize the closure env
+-- field, causing a segfault (NULL pointer dereference).
+
+my_apply f x = f x
+
+-- Use a function param so the value isn't known at compile time
+test_capture pr factor =
+  pr (toString (my_apply (\x -> x + factor) 5))
+  pr (toString (fold (\acc x -> acc + x * factor) 0 [1, 2, 3]))
+  0
+
+main world =
+  test_capture world.io.println 10

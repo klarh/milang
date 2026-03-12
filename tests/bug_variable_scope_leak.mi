@@ -1,0 +1,15 @@
+-- Regression: variable name collision between outer parameter and inner fold variable
+-- When a lambda parameter "x" shadows fold's internal "x", the type checker
+-- must keep them separate.
+
+str_repeat s n = fold (\acc x -> acc + s) "" (range 0 n)
+
+-- Previously failed with: "expected Str, got Cons {head = Int; tail = Nil {}}"
+test_bad x = str_repeat x 1 == x
+
+test_good str = str_repeat str 1 == str
+
+main world =
+  world.io.println (toString (test_bad "hello"))
+  world.io.println (toString (test_good "hello"))
+  0

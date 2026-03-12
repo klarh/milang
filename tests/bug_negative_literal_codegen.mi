@@ -1,0 +1,2 @@
+go zr zi i maxi cx cy = if (i >= maxi) maxi (if (zr * zr / 1024 + zi * zi / 1024 > 4096) i (go (zr * zr / 1024 - zi * zi / 1024 + cx) (2 * zr * zi / 1024 + cy) (i + 1) maxi cx cy))
+main world = world.io.println (toString (go 0 0 0 100 (0 - 512) 0))

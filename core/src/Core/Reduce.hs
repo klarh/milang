@@ -110,6 +110,11 @@ collectApp :: Expr -> (Expr, [Expr])
 collectApp (App f x) = let (h, args) = collectApp f in (h, args ++ [x])
 collectApp e         = (e, [])
 
+-- | Unwrap a chain of Lam constructors into param names and inner body.
+collectLams :: Expr -> ([Text], Expr)
+collectLams (Lam p body) = let (ps, b) = collectLams body in (p:ps, b)
+collectLams e            = ([], e)
+
 -- | True if the expression is a CFunction applied to at least one argument
 -- (i.e., an actual C function call, not just a reference to the function).
 isCFunctionCall :: Expr -> Bool
@@ -175,15 +180,14 @@ reduceD _ _ e@(SizedFloat {}) = e
 reduceD _ _ e@(StringLit _)   = e
 reduceD _ _ e@(Error _)       = e
 
-reduceD d env (Name n)
-  | d <= 0    = Name n
-  | otherwise =
+reduceD d env (Name n) =
     case envLookup n env of
       Just (Name m) | m == n -> Name n  -- self-reference; don't recurse
+      Just (Name m) | d <= 0 -> Name m  -- depth limit: substitute but don't recurse
       Just (Name m) -> reduceD (d - 1) env (Name m)  -- follow name aliases
       Just val@(Lam _ _) -> val
       Just val@(Namespace _) -> val  -- Namespace is a value, don't re-reduce
-      Just val | isConcrete val -> reduceD (d - 1) env val
+      Just val | isConcrete val -> if d <= 0 then val else reduceD (d - 1) env val
       -- Non-concrete value from a With/let binding: keep as Name so the
       -- runtime evaluates it once (prevents duplicating FFI side effects).
       Just _ | n `Set.member` envLetBound env -> Name n
@@ -191,6 +195,7 @@ reduceD d env (Name n)
       -- side-effectful C function calls (even from lambda parameters).
       -- Functions annotated :~ [pure] are exempt and may be freely inlined.
       Just val | isCFunctionCall val, not (isPureTrait n env) -> Name n
+      Just val | d <= 0 -> val  -- depth limit: return value without further reduction
       Just val -> reduceD (d - 1) env val
       Nothing
         | isOperatorName n -> Lam "_a" (Lam "_b" (BinOp n (Name "_a") (Name "_b")))
@@ -224,7 +229,39 @@ reduceD d env (App f x) =
         let args' = map (reduceD d env) args
         in if all isConcrete args' && d >= minRecDepth
            then case envLookup n env of
-                  Just fn -> foldl (reduceApp d env) fn args'
+                  Just fn ->
+                    -- Apply all args at once by inserting into env, then reduce
+                    -- the innermost body once.  This avoids intermediate Lam-body
+                    -- reductions that would double-unfold mutual recursion.
+                    let (params, body) = collectLams fn
+                        nApply = min (length params) (length args')
+                        applyParams = take nApply params
+                        applyArgs = take nApply args'
+                        -- Alpha-rename params that would capture free vars in args
+                        argFVsUnion = Set.unions (map exprFreeVars applyArgs)
+                        capturedSet = Set.intersection argFVsUnion
+                                        (Set.fromList applyParams)
+                        allNames = Set.unions [ argFVsUnion, exprFreeVars body
+                                             , Map.keysSet (envMap env) ]
+                        (applyParams', body') = if Set.null capturedSet
+                          then (applyParams, body)
+                          else foldr (\p (ps, b) ->
+                            if p `Set.member` capturedSet
+                              then let fresh = freshName p (Set.unions
+                                         [allNames, Set.fromList ps])
+                                   in (fresh:ps, substExpr p (Name fresh) b)
+                              else (p:ps, b)) ([], body) applyParams
+                        env' = foldl (\e (p, a) -> envInsert p a e) env
+                                     (zip applyParams' applyArgs)
+                        d' = d - nApply
+                    in if nApply < length args'
+                       -- More args than params: apply leftover via reduceApp
+                       then let base = reduceD d' env' body'
+                            in foldl (reduceApp d' env) base (drop nApply args')
+                       else let base = reduceD d' env' body'
+                                -- Re-wrap with any unapplied params
+                                remaining = drop nApply params
+                            in foldr Lam base remaining
                   Nothing -> foldl App (Name n) args'
            else foldl App (Name n) args'
       _ ->
@@ -232,7 +269,13 @@ reduceD d env (App f x) =
         in case f' of
           -- Call-by-name for lambda application: don't evaluate arg until needed.
           -- This prevents divergence in recursive branches (e.g., if cond t e).
-          Lam _ _ -> reduceApp d env f' x
+          -- Exception: syntactic lambdas are always safe to reduce (they can't
+          -- diverge), and must be reduced so their free variables are resolved
+          -- before being captured in closures.
+          Lam _ _ -> let x' = case x of
+                           Lam _ _ -> reduceD d env x
+                           _       -> x
+                     in reduceApp d env f' x'
           _       -> let x' = reduceD d env x
                      in reduceApp d env f' x'
 
@@ -519,8 +562,14 @@ reduceApp d env (Lam p body) arg =
       -- When the arg is a CFunction call, bind it via With so the Name handler's
       -- isCFunctionCall guard doesn't produce a dangling Name reference.
       needsLetBind = isCFunctionCall arg && not (isPureTrait p env)
-  in if p `Set.member` argFVs
-     -- Param name appears free in arg — alpha-rename to avoid capture
+      -- Check if overwriting p in env would capture vars in env-stored lambdas
+      bodyFVs = exprFreeVars body
+      envCapturesP = any (\fv -> case envLookup fv env of
+        Just v  -> p `Set.member` exprFreeVars v
+        Nothing -> False) (Set.toList bodyFVs)
+      needsRename = p `Set.member` argFVs || envCapturesP
+  in if needsRename
+     -- Param name collides — alpha-rename to avoid capture
      then let allNames = Set.unions [argFVs, exprFreeVars body, Map.keysSet (envMap env)]
               fresh = freshName p allNames
               body' = substExpr p (Name fresh) body
@@ -1743,7 +1792,9 @@ inferParamFromBody tenv body param = findConstraint body
           TFun argTy _ | argTy /= TAny -> argTy
           _ -> findConstraint f
       | otherwise = merge (findConstraint f) (findConstraint x)
-    findConstraint (Lam _ e) = findConstraint e
+    findConstraint (Lam lp e)
+      | lp == param = TAny  -- nested lambda shadows the param
+      | otherwise = findConstraint e
     findConstraint (Case _ alts) =
       foldl (\acc (Alt _ _ b) -> merge acc (findConstraint b)) TAny alts
     findConstraint (With e bs) =
@@ -1871,7 +1922,7 @@ inferExprE tenv (Lam p body) =
   -- Infer param type from body usage (e.g., 2*x → x :: Int)
   let inferred = inferParamFromBody tenv body p
       paramTy = if inferred /= TAny then inferred
-                else Map.findWithDefault TAny p tenv
+                else TAny  -- lambda params are locally scoped, don't inherit from outer env
       tenv' = Map.insert p paramTy tenv
   in TFun paramTy (inferExprE tenv' body)
 inferExprE tenv (Record tag fields) =

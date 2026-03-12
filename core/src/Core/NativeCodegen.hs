@@ -470,6 +470,12 @@ nExprToC st (With body bindings) = do
       bodyC <- nExprToC bodyScope body
       pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
 
+nExprToC st (Case (Name n) alts)
+  | not (Map.member n (ncgScope st))
+  , not (Set.member n (ncgGlobals st))
+  , not (T.null n), let c = T.head n, c >= 'a' && c <= 'z' =
+    -- Case with free scrutinee variable acts as a lambda
+    nExprToC st (Lam n (Case (Name n) alts))
 nExprToC st (Case scrut alts) = do
   -- Detect the truthiness check pattern and emit efficient code
   case matchTruthiness scrut alts of
@@ -1327,7 +1333,10 @@ emitBindings st bindings = do
           nextSt = if inferredType /= NUnknown
                    then withKnownType curSt name inferredType
                    else curSt
-      goAssign nextSt (assign : accDecls) (Map.insert name cvar accScope) (resolvedPatches ++ accPatches) selfRec bs
+      -- Remove this binding from forward-decls so later bindings capture it directly
+      -- (prevents deferred patches on non-closure bindings that contain inner lambdas)
+      let nextSt' = nextSt { ncgForwardDecls = Set.delete name (ncgForwardDecls nextSt) }
+      goAssign nextSt' (assign : accDecls) (Map.insert name cvar accScope) (resolvedPatches ++ accPatches) selfRec bs
 
 -- ── Helpers ────────────────────────────────────────────────────────
 

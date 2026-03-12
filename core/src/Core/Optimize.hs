@@ -342,12 +342,10 @@ applyMutualGroups groups bs = foldr applyGroup (bs, []) groups
     applyGroup grp (curBs, handled) =
       let -- Get the bindings for this group, preserving order
           grpBs = [b | b <- curBs, bindName b `elem` grp]
-          -- All must have the same number of params
+          -- All must have at least 1 param
           paramCounts = [(bindName b, length (fst (unwrapLams' (bindBody b)))) | b <- grpBs]
-          allSameParams = case map snd paramCounts of
-            [] -> False
-            (n:ns) -> all (== n) ns && n > 0
-      in if not allSameParams || length grpBs < 2
+          allHaveParams = all ((> 0) . snd) paramCounts
+      in if not allHaveParams || length grpBs < 2
          then (curBs, handled)
          else let newBs = wrapMutualGroup grpBs curBs
               in (newBs, handled ++ map bindName grpBs)
@@ -369,23 +367,29 @@ wrapMutualGroup grpBs allBs =
       loopName = "_" <> T.intercalate "_" names <> "_loop"
       tagParam = "_mtag"
 
-      -- Use params from first function (all have same count)
-      (params, _) = unwrapLams' (bindBody (head grpBs))
+      -- Compute max arity; use params from the binding with most params
+      arityOf b = length (fst (unwrapLams' (bindBody b)))
+      maxArity = maximum (map arityOf grpBs)
+      maxArityBinding = head [b | b <- grpBs, arityOf b == maxArity]
+      (params, _) = unwrapLams' (bindBody maxArityBinding)
       paramNames = map bindName params
 
       -- Build tag->index mapping
       nameToTag = zip names [0::Int ..]
 
-      -- Rename all mutual calls in each body to use the loop function with tag
+      -- Rename all mutual calls in each body to use the loop function with tag.
+      -- Calls to functions with fewer args than maxArity are padded with IntLit 0.
       renameMutualCalls body =
-        foldr (\(name, tag) b -> renameToTagged name loopName tag b) body nameToTag
+        foldr (\(name, tag) b -> renameToTagged name loopName tag maxArity b) body nameToTag
 
       -- Build Case alts: one per function in the group
       tagAlts = [Alt (PLit (IntLit (fromIntegral tag)))
                      Nothing
                      (let (bParams, innerBody) = unwrapLams' (bindBody b)
                           bParamNames = map bindName bParams
-                          -- Rename this function's params to canonical param names
+                          -- Rename this function's params to canonical param names.
+                          -- zip naturally truncates to the shorter list, so functions
+                          -- with fewer params only substitute the ones they have.
                           renamed = foldr (\(from, to) e ->
                             if from /= to then substExpr from (Name to) e else e)
                             innerBody (zip bParamNames paramNames)
@@ -405,16 +409,24 @@ wrapMutualGroup grpBs allBs =
         , bindPos = Nothing
         }
 
-      -- Wrapper for each original function: \p1 -> ... -> _loop tag p1 ...
-      mkWrapper name tag = Binding
-        { bindName = name
-        , bindParams = []
-        , bindBody = wrapLams params
-            (With (foldl App (Name loopName) (IntLit (fromIntegral tag) : map Name paramNames))
-                  [loopBinding])
-        , bindDomain = Value
-        , bindPos = Nothing
-        }
+      -- Wrapper for each original function: uses the function's own arity
+      -- for lambda params, pads with dummy args (IntLit 0) to reach max arity
+      mkWrapper name tag =
+        let funcBinding = head [b | b <- grpBs, bindName b == name]
+            (funcParams, _) = unwrapLams' (bindBody funcBinding)
+            funcArity = length funcParams
+            callArgs = IntLit (fromIntegral tag) :
+                       map (Name . bindName) funcParams ++
+                       replicate (maxArity - funcArity) (IntLit 0)
+        in Binding
+          { bindName = name
+          , bindParams = []
+          , bindBody = wrapLams funcParams
+              (With (foldl App (Name loopName) callArgs)
+                    [loopBinding])
+          , bindDomain = Value
+          , bindPos = Nothing
+          }
 
       wrappers = [mkWrapper name tag | (name, tag) <- nameToTag]
 
@@ -425,13 +437,15 @@ wrapMutualGroup grpBs allBs =
   in map replaceBinding allBs
 
 -- | Rename calls to a function name into calls to a tagged loop function.
--- e.g. renameToTagged "isOdd" "_loop" 1 (App (Name "isOdd") x)
---   => App (App (Name "_loop") (IntLit 1)) x
-renameToTagged :: T.Text -> T.Text -> Int -> Expr -> Expr
-renameToTagged oldName loopName tag = go
+-- Pads calls with IntLit 0 when the call has fewer args than maxArity.
+-- e.g. renameToTagged "isOdd" "_loop" 1 2 (App (Name "isOdd") x)
+--   => App (App (App (Name "_loop") (IntLit 1)) x) (IntLit 0)
+renameToTagged :: T.Text -> T.Text -> Int -> Int -> Expr -> Expr
+renameToTagged oldName loopName tag maxArity = go
   where
     go e | Just args <- matchCall oldName e =
-      foldl App (Name loopName) (IntLit (fromIntegral tag) : map go args)
+      let paddedArgs = map go args ++ replicate (maxArity - length args) (IntLit 0)
+      in foldl App (Name loopName) (IntLit (fromIntegral tag) : paddedArgs)
     go (App fn arg) = App (go fn) (go arg)
     go (BinOp op l r) = BinOp op (go l) (go r)
     go (Lam p body) = Lam p (go body)

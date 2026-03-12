@@ -1,0 +1,8 @@
+-- The builtin for length is `len`, not `length`.
+-- `len` works for both strings and lists.
+--
+-- Expected: prints 5 then 3
+
+main world =
+  world.io.println (toString (len "hello"))
+  world.io.println (toString (len [1, 2, 3]))

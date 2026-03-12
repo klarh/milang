@@ -1,0 +1,20 @@
+-- BUG: Mutual tail recursion between functions with DIFFERENT arities
+-- causes stack overflow (segfault) because TCO only applies to
+-- same-arity mutual recursion (goto). Different-arity falls back
+-- to mi_apply which doesn't do TCO → unbounded stack growth.
+--
+-- Same-arity mutual recursion works fine (uses goto).
+-- This reproducer hangs/segfaults on both native codegen and interpreter.
+--
+-- Expected: prints "done 0"
+-- Actual: hangs then segfaults (stack overflow)
+
+-- 1-arg function calls 2-arg function
+ping n = pong n 0
+
+-- 2-arg function (different arity) calls 1-arg function
+pong n acc = if (n <= 0) acc (ping (n - 1))
+
+main world =
+  world.io.println (toString (ping 100000))
+  world.io.println "done"
