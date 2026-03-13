@@ -1,0 +1,16 @@
+-- Test: record pattern field ordering is name-based, not positional
+-- Uses named fields in different order than constructor definition
+
+Shape = {Color r g b}
+
+-- Pattern fields in different order than constructor: b first, then r
+-- This tests name-based (not positional) field matching in codegen
+get_blue_and_red c = c ->
+  Color {b = blue; r = red} = blue + red
+  _ = 0
+
+main world =
+  c = Color 10 20 30
+  result = get_blue_and_red c
+  -- Should be 30 + 10 = 40, NOT 10 + 20 (which positional would give)
+  world.io.println (toString result)

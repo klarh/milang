@@ -7,6 +7,7 @@ import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
 import Data.List (intercalate, nub, partition)
+import Text.Read (readMaybe)
 import Control.Monad (when, unless, forM, foldM_)
 import Core.Syntax
 import Core.Codegen (emitPreamble, CGState(..), cfunctionToC, cRetTypeName)
@@ -638,10 +639,14 @@ patternToC _ scrutVar (PLit _) = pure ("0 /* unsupported literal pattern */", []
 patternToC st scrutVar (PRec tag fieldPats) = do
   tagVar <- internTag st (T.unpack tag)
   let tagCond = tagMatchCond scrutVar tagVar
-  results <- mapM (\((_name, subPat), idx) ->
-      let fieldExpr = scrutVar ++ ".as.rec.fields[" ++ show idx ++ "]"
+  results <- mapM (\(name, subPat) ->
+      -- Positional fields (_0, _1, ...) use index-based access;
+      -- named fields use mi_struct_field for order-independent matching
+      let fieldExpr = case T.stripPrefix "_" name >>= (readMaybe . T.unpack :: T.Text -> Maybe Int) of
+            Just idx -> scrutVar ++ ".as.rec.fields[" ++ show idx ++ "]"
+            Nothing -> "mi_struct_field(" ++ scrutVar ++ ", " ++ cStringLit (T.unpack name) ++ ")"
       in patternToC st fieldExpr subPat
-    ) (zip fieldPats [0::Int ..])
+    ) fieldPats
   let (fieldConds, fieldBinds) = unzip results
       allCond = if null fieldConds
         then tagCond

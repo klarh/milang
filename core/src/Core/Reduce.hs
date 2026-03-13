@@ -219,7 +219,7 @@ reduceD d env (BinOp op l r) =
   in case result of
     BinOp op' _ _ | op' == op ->
       case envLookup op env of
-        Just fn -> reduceD d env (App (App fn l') r)
+        Just fn -> reduceD d env (App (App fn l') r')
         Nothing -> result
     _ -> result
 

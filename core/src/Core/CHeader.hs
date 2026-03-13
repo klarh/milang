@@ -723,7 +723,7 @@ parseDefineConstants output =
     evalConstExpr :: Map String Int -> Map String ([String], String) -> String -> Maybe Int
     evalConstExpr env macros = go 8  -- max 8 levels of macro expansion
       where
-        go 0 s = error $ "macro expansion depth exceeded (possible circular #define): " ++ take 80 s
+        go 0 _ = Nothing  -- circular or deeply nested macro; skip
         go depth s = case parseOr depth (dropWhile isSpace s) of
           Just (n, rest) | all isSpace rest -> Just n
           _ -> Nothing
