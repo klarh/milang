@@ -328,12 +328,13 @@ pInfixRest ml minPrec left = do
   mBacktick <- optional (try $ lookAhead pBacktickOp)
   case mBacktick of
     Just name -> do
-      let (bPrec, _) = opInfoWith tbl name
+      let (bPrec, bAssoc) = opInfoWith tbl name
       if bPrec < minPrec then pure left
       else do
         _ <- pBacktickOp
         if ml then scn else sc
-        right <- pPrec ml (bPrec + 1)
+        let nextPrec = if bAssoc == RightAssoc then bPrec else bPrec + 1
+        right <- pPrec ml nextPrec
         pInfixRest ml minPrec (App (App (Name name) left) right)
     Nothing -> do
       mop <- optional (try $ lookAhead pOperator)
