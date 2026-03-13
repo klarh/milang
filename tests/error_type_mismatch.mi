@@ -1,0 +1,7 @@
+-- Test error handling: type errors, missing patterns, trait violations
+
+-- This file tests that the compiler correctly rejects bad code
+-- Each function should produce an error
+
+-- Type error: adding string to int
+bad_add = 1 + "hello"

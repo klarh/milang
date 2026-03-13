@@ -1,0 +1,28 @@
+-- Test unfold: generate list from seed
+-- unfold f seed applies f to seed; if Nothing, stop; if Just {fst, snd}, emit fst, continue with snd
+
+-- Count down from 5
+countdown = unfold (\n -> if (n <= 0) Nothing (Just ({fst = n; snd = n - 1}))) 5
+
+-- Generate range via unfold
+gen_range = unfold (\n -> if (n > 4) Nothing (Just ({fst = n * 10; snd = n + 1}))) 1
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  assert "countdown len" 5 (len countdown)
+  assert "countdown head" 5 (default 0 (head countdown))
+  assert "countdown last" 1 (default 0 (last countdown))
+
+  assert "gen_range len" 4 (len gen_range)
+  assert "gen_range head" 10 (default 0 (head gen_range))
+  assert "gen_range at 1" 20 (default 0 (at gen_range 1))
+  assert "gen_range last" 40 (default 0 (last gen_range))
+
+  -- unfold empty
+  empty = unfold (\n -> Nothing) 42
+  assert "empty len" 0 (len empty)
+
+  io.println "prelude_unfold: all passed"
+  0

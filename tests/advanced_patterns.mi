@@ -1,0 +1,50 @@
+-- Test advanced pattern matching: nested patterns, guards, wildcards
+
+-- Nested record matching
+process_shape shape = shape ->
+  Circle {r} = 3 * r * r
+  Rect {w; h} = w * h
+
+-- List pattern matching via head/tail
+describe lst = lst ->
+  Nil = "empty"
+  Cons h t = if (null t) "singleton" "multiple"
+
+-- Maybe chaining via default
+safe_head_sum a b = default 0 (head a) + default 0 (head b)
+
+-- Pattern match with numeric literals
+fizzbuzz n =
+  m3 = n % 3
+  m5 = n % 5
+  if (m3 == 0 && m5 == 0) "fizzbuzz"
+    (if (m3 == 0) "fizz"
+      (if (m5 == 0) "buzz"
+        (toString n)))
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- Shape matching
+  assert "circle" 75 (process_shape (Circle {r = 5}))
+  assert "rect" 20 (process_shape (Rect {w = 4; h = 5}))
+
+  -- List describe
+  assert "empty" "empty" (describe [])
+  assert "singleton" "singleton" (describe [1])
+  assert "multiple" "multiple" (describe [1, 2])
+
+  -- Safe head sum (using default for Maybe unwrapping)
+  assert "both" 7 (safe_head_sum [3] [4])
+  assert "one" 3 (safe_head_sum [3] [])
+  assert "none" 0 (safe_head_sum [] [4])
+
+  -- FizzBuzz
+  assert "fizz" "fizz" (fizzbuzz 9)
+  assert "buzz" "buzz" (fizzbuzz 10)
+  assert "fizzbuzz" "fizzbuzz" (fizzbuzz 15)
+  assert "plain" "7" (fizzbuzz 7)
+
+  io.println "advanced_patterns: all passed"
+  0

@@ -1,0 +1,23 @@
+-- Test scanLeft: running accumulator over a list
+-- scanLeft (+) 0 [1,2,3] = [0, 1, 3, 6]
+
+sums = scanLeft (\acc x -> acc + x) 0 [1, 2, 3, 4]
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  assert "scanLeft length" 5 (len sums)
+  assert "scanLeft head" 0 (default 0 (head sums))
+  assert "scanLeft last" 10 (default 0 (last sums))
+  assert "scanLeft at 1" 1 (default 0 (at sums 1))
+  assert "scanLeft at 2" 3 (default 0 (at sums 2))
+  assert "scanLeft at 3" 6 (default 0 (at sums 3))
+
+  -- scanLeft on empty list
+  empty_scan = scanLeft (\acc x -> acc + x) 42 []
+  assert "scanLeft empty" 1 (len empty_scan)
+  assert "scanLeft empty val" 42 (default 0 (head empty_scan))
+
+  io.println "prelude_scanLeft: all passed"
+  0

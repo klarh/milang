@@ -1,0 +1,52 @@
+-- Test record operations: creation, field access, nested records, record update
+
+point = {x = 10; y = 20}
+
+-- Nested records
+person = {name = "Alice"; address = {city = "NYC"; zip = 10001}}
+
+-- Record update with <-
+moved = point <- {x = 30}
+
+-- Function returning record
+make_pair a b = {fst = a; snd = b}
+
+-- Record with computed fields
+make_stats lst = {
+  total = sum lst
+  count = len lst
+  first = default 0 (head lst)
+  last_val = default 0 (last lst)
+}
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- Basic field access
+  assert "x" 10 point.x
+  assert "y" 20 point.y
+
+  -- Nested field access
+  assert "name" "Alice" person.name
+  assert "city" "NYC" person.address.city
+  assert "zip" 10001 person.address.zip
+
+  -- Record update
+  assert "moved x" 30 moved.x
+  assert "moved y" 20 moved.y
+
+  -- Record from function
+  p = make_pair 3 4
+  assert "fst" 3 p.fst
+  assert "snd" 4 p.snd
+
+  -- Computed record
+  s = make_stats [10, 20, 30]
+  assert "total" 60 s.total
+  assert "count" 3 s.count
+  assert "first" 10 s.first
+  assert "last" 30 s.last_val
+
+  io.println "record_ops: all passed"
+  0

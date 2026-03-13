@@ -1,0 +1,46 @@
+-- Test higher-order prelude functions: curry, uncurry, on, fst, snd, flip, const, id
+
+add_pair p = p.fst + p.snd
+curried_add = curry add_pair
+
+double x = x * 2
+inc x = x + 1
+composed = double >> inc
+composed2 = inc << double
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- curry / uncurry
+  assert "curry" 7 (curried_add 3 4)
+  assert "uncurry" 7 (uncurry (\a b -> a + b) ({fst = 3; snd = 4}))
+
+  -- fst / snd
+  pair = {fst = 10; snd = 20}
+  assert "fst" 10 (fst pair)
+  assert "snd" 20 (snd pair)
+
+  -- on: compare by projection
+  compare_by_abs = on (\a b -> if (a < b) (0 - 1) (if (a == b) 0 1)) abs
+  assert "on neg" (0 - 1) (compare_by_abs 2 (0 - 5))
+
+  -- flip
+  assert "flip" 2 (flip (\a b -> a - b) 3 5)
+
+  -- const
+  assert "const" 42 (const 42 99)
+
+  -- id
+  assert "id" 7 (id 7)
+
+  -- compose (>>)
+  assert "compose >>" 11 (composed 5)
+  -- compose (<<)
+  assert "compose <<" 11 (composed2 5)
+
+  -- pipe (|>)
+  assert "pipe" 30 (5 |> double |> (\x -> x + 20))
+
+  io.println "prelude_higher_order: all passed"
+  0

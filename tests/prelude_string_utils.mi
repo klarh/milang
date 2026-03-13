@@ -1,0 +1,31 @@
+-- Test string utility functions: startsWith, endsWith, words, lines, unwords, unlines
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- startsWith / endsWith
+  assert "startsWith yes" 1 (startsWith "hello world" "hello")
+  assert "startsWith no" 0 (startsWith "hello world" "world")
+  assert "endsWith yes" 1 (endsWith "hello world" "world")
+  assert "endsWith no" 0 (endsWith "hello world" "hello")
+  assert "startsWith empty" 1 (startsWith "hello" "")
+  assert "endsWith empty" 1 (endsWith "hello" "")
+
+  -- words / unwords
+  ws = words "hello brave world"
+  assert "words len" 3 (len ws)
+  assert "words 0" "hello" (default "" (at ws 0))
+  assert "words 1" "brave" (default "" (at ws 1))
+  assert "words 2" "world" (default "" (at ws 2))
+  assert "unwords" "hello brave world" (unwords ws)
+
+  -- lines / unlines
+  ls = lines "a\nb\nc"
+  assert "lines len" 3 (len ls)
+  assert "lines 0" "a" (default "" (at ls 0))
+  assert "lines 1" "b" (default "" (at ls 1))
+  assert "unlines" "a\nb\nc" (unlines ls)
+
+  io.println "prelude_string_utils: all passed"
+  0

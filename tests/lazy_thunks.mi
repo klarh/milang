@@ -1,0 +1,25 @@
+-- Test lazy evaluation with thunks (~expr)
+
+-- Thunk prevents evaluation of unused branch
+safe_div a b = if (b == 0) ~0 ~(a / b)
+
+-- Lazy field in record
+lazy_record = {eager = 1 + 2; lazy_val = ~(10 * 10)}
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- Safe division
+  assert "safe_div normal" 5 (safe_div 10 2)
+  assert "safe_div zero" 0 (safe_div 10 0)
+
+  -- Eager field
+  assert "eager" 3 lazy_record.eager
+
+  -- Thunks in if branches
+  assert "thunk true" 42 (if 1 ~42 ~99)
+  assert "thunk false" 99 (if 0 ~42 ~99)
+
+  io.println "lazy_thunks: all passed"
+  0

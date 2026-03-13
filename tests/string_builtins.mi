@@ -1,0 +1,35 @@
+-- Test string builtins: slice, split, trim, toUpper, toLower, toInt, toFloat
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- slice
+  assert "slice mid" "llo" (slice "hello" 2 5)
+  assert "slice start" "he" (slice "hello" 0 2)
+  assert "slice end" "lo" (slice "hello" 3 5)
+  assert "slice empty" "" (slice "hello" 2 2)
+
+  -- split
+  parts = split "a,b,c" ","
+  assert "split len" 3 (len parts)
+  assert "split 0" "a" (default "" (at parts 0))
+  assert "split 1" "b" (default "" (at parts 1))
+  assert "split 2" "c" (default "" (at parts 2))
+
+  -- trim
+  assert "trim" "hello" (trim "  hello  ")
+  assert "trim none" "hello" (trim "hello")
+
+  -- toUpper / toLower
+  assert "toUpper" "HELLO" (toUpper "hello")
+  assert "toLower" "hello" (toLower "HELLO")
+  assert "mixed" "HELLO WORLD" (toUpper "Hello World")
+
+  -- toInt / toFloat
+  assert "toInt" 42 (toInt "42")
+  assert "toInt neg" (0 - 7) (toInt "-7")
+  assert "toFloat" 3.14 (toFloat "3.14")
+
+  io.println "string_builtins: all passed"
+  0

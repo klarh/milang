@@ -1,0 +1,30 @@
+-- Test partition: split list by predicate
+
+parts = partition (\x -> x > 3) [1, 5, 2, 4, 3, 6]
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- partition returns {yes, no}
+  assert "yes len" 3 (len parts.yes)
+  assert "no len" 3 (len parts.no)
+  assert "yes contains 5" 1 (contains parts.yes 5)
+  assert "yes contains 4" 1 (contains parts.yes 4)
+  assert "yes contains 6" 1 (contains parts.yes 6)
+  assert "no contains 1" 1 (contains parts.no 1)
+  assert "no contains 2" 1 (contains parts.no 2)
+  assert "no contains 3" 1 (contains parts.no 3)
+
+  -- partition empty list
+  empty = partition (\x -> x > 0) []
+  assert "empty yes" 0 (len empty.yes)
+  assert "empty no" 0 (len empty.no)
+
+  -- all pass predicate
+  allyes = partition (\x -> x > 0) [1, 2, 3]
+  assert "all yes" 3 (len allyes.yes)
+  assert "all no" 0 (len allyes.no)
+
+  io.println "prelude_partition: all passed"
+  0

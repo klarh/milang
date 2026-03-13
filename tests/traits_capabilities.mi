@@ -1,0 +1,38 @@
+-- Test trait/capability annotations (:~)
+
+-- Functions that require console
+greet :~ [console]
+greet io name = io.println ("Hello, " + name)
+
+-- Functions that require process
+get_exit :~ [process]
+get_exit proc = proc.exit 0
+
+-- Composing capabilities
+greet_and_exit :~ [console, process]
+greet_and_exit world =
+  world.io.println "goodbye"
+  world.process.exit 0
+
+-- Pure function — no traits needed
+double x = x * 2
+triple x = x * 3
+
+-- Trait on binding used inside another function
+printer :~ [console]
+printer io val = io.println (toString val)
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- Pure functions work without any capability
+  assert "double" 10 (double 5)
+  assert "triple" 15 (triple 5)
+
+  -- Functions with console trait
+  greet io "world"
+  printer io 42
+
+  io.println "traits_capabilities: all passed"
+  0

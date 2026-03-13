@@ -1,0 +1,37 @@
+-- Test boolean operators and short-circuit evaluation
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- Basic boolean ops
+  assert "and tt" 1 (1 && 1)
+  assert "and tf" 0 (1 && 0)
+  assert "and ft" 0 (0 && 1)
+  assert "and ff" 0 (0 && 0)
+
+  assert "or tt" 1 (1 || 1)
+  assert "or tf" 1 (1 || 0)
+  assert "or ft" 1 (0 || 1)
+  assert "or ff" 0 (0 || 0)
+
+  assert "not t" 0 (not 1)
+  assert "not f" 1 (not 0)
+
+  -- Truthiness
+  assert "truthy str" 1 (truthy "hello")
+  assert "truthy empty" 0 (truthy "")
+  assert "truthy list" 1 (truthy [1])
+  assert "truthy nil" 0 (truthy [])
+  assert "truthy just" 1 (truthy (Just 5))
+  assert "truthy nothing" 0 (truthy Nothing)
+  assert "truthy nonzero" 1 (truthy 42)
+  assert "truthy zero" 0 (truthy 0)
+
+  -- Compound boolean
+  assert "compound" 1 ((3 > 2) && (4 > 3))
+  assert "compound2" 0 ((3 > 2) && (4 < 3))
+  assert "compound3" 1 ((3 < 2) || (4 > 3))
+
+  io.println "boolean_ops: all passed"
+  0

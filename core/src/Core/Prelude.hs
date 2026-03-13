@@ -156,7 +156,7 @@ preludeSrc = T.unlines
   , "partition_step pred acc x = if (pred x) (partition_yes acc x) (partition_no acc x)"
   , "partition_yes acc x = {yes = Cons x acc.yes; no = acc.no}"
   , "partition_no acc x = {yes = acc.yes; no = Cons x acc.no}"
-  , "partition pred lst = fold (partition_step pred) {yes = []; no = []} lst"
+  , "partition pred lst = fold (partition_step pred) ({yes = []; no = []}) lst"
   , "iterate f x = Cons x ~(iterate f (f x))"
   , "curry f a b = f {fst = a; snd = b}"
   , "uncurry f pair = f pair.fst pair.snd"

@@ -1,0 +1,25 @@
+-- Test nubBy and nub: remove duplicates
+
+deduped = nub [3, 1, 2, 3, 1, 4, 2]
+
+-- nubBy with custom equality
+same_mod3 = nubBy (\a b -> a % 3 == b % 3) [1, 4, 2, 5, 3, 6, 7]
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  assert "nub len" 4 (len deduped)
+  assert "nub head" 3 (default 0 (head deduped))
+  assert "nub contains 1" 1 (contains deduped 1)
+  assert "nub contains 2" 1 (contains deduped 2)
+  assert "nub contains 4" 1 (contains deduped 4)
+
+  -- nubBy keeps first of each equivalence class
+  assert "nubBy len" 3 (len same_mod3)
+
+  -- nub empty
+  assert "nub empty" 0 (len (nub []))
+
+  io.println "prelude_nubBy: all passed"
+  0

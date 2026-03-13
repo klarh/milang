@@ -1,0 +1,48 @@
+-- Test multi-level closures: closures capturing closures capturing variables
+
+make_adder x = \y -> x + y
+make_double_adder x = \y -> \z -> x + y + z
+
+-- Closure returning closure via lambda
+outer a = \b -> a + b
+
+-- Three levels of nesting via lambdas
+level1 x = \y -> \z -> x + y + z
+
+-- Closure over record field
+make_point_shifter dx dy = \p -> ({x = p.x + dx; y = p.y + dy})
+
+-- Closure over closure: adder factory
+make_offset_adder base = \offset -> \x -> base + offset + x
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- Basic closure
+  add5 = make_adder 5
+  assert "adder" 15 (add5 10)
+
+  -- Double nested
+  add3_4 = make_double_adder 3 4
+  assert "double adder" 12 (add3_4 5)
+
+  -- Closure returning closure
+  add10 = outer 10
+  assert "outer" 15 (add10 5)
+
+  -- Three levels
+  assert "three levels" 123 (level1 100 20 3)
+
+  -- Record closure
+  shift = make_point_shifter 10 20
+  shifted = shift ({x = 5; y = 7})
+  assert "shift x" 15 shifted.x
+  assert "shift y" 27 shifted.y
+
+  -- Closure over closure
+  add100_10 = make_offset_adder 100 10
+  assert "offset adder" 115 (add100_10 5)
+
+  io.println "multi_level_closures: all passed"
+  0

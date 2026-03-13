@@ -1,0 +1,34 @@
+-- Test foldRight and flatMap
+
+-- foldRight: right-associative fold
+-- foldRight (\x acc -> x - acc) 0 [1,2,3] = 1 - (2 - (3 - 0)) = 2
+right_result = foldRight (\x acc -> x - acc) 0 [1, 2, 3]
+
+-- foldRight for building a list (preserves order)
+right_list = foldRight (\x acc -> Cons (x * 10) acc) [] [1, 2, 3]
+
+-- flatMap
+nested = flatMap (\x -> [x, x * 10]) [1, 2, 3]
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  assert "foldRight" 2 right_result
+  assert "foldRight list len" 3 (len right_list)
+  assert "foldRight list 0" 10 (default 0 (at right_list 0))
+  assert "foldRight list 1" 20 (default 0 (at right_list 1))
+  assert "foldRight list 2" 30 (default 0 (at right_list 2))
+
+  -- flatMap
+  assert "flatMap len" 6 (len nested)
+  assert "flatMap 0" 1 (default 0 (at nested 0))
+  assert "flatMap 1" 10 (default 0 (at nested 1))
+  assert "flatMap 2" 2 (default 0 (at nested 2))
+  assert "flatMap 5" 30 (default 0 (at nested 5))
+
+  -- flatMap on empty
+  assert "flatMap empty" 0 (len (flatMap (\x -> [x]) []))
+
+  io.println "prelude_foldRight_flatMap: all passed"
+  0

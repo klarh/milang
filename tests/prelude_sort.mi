@@ -1,0 +1,35 @@
+-- Test sort and sortBy
+
+sorted = sort [3, 1, 4, 1, 5, 9, 2, 6]
+
+-- Sort strings
+str_sorted = sort ["banana", "apple", "cherry"]
+
+-- sortBy with custom comparator (reverse order)
+rev_sorted = sortBy (\a b -> if (a > b) (0 - 1) (if (a == b) 0 1)) [3, 1, 4, 1, 5]
+
+main world =
+  io = world.io
+  assert msg expected actual = if (expected == actual) 0 (io.println ("FAIL: " + msg + " expected " + (toString expected) + " got " + (toString actual)))
+
+  -- sort integers
+  assert "sort len" 8 (len sorted)
+  assert "sort 0" 1 (default 0 (at sorted 0))
+  assert "sort 1" 1 (default 0 (at sorted 1))
+  assert "sort 2" 2 (default 0 (at sorted 2))
+  assert "sort last" 9 (default 0 (last sorted))
+
+  -- sort strings
+  assert "str sort 0" "apple" (default "" (at str_sorted 0))
+  assert "str sort 1" "banana" (default "" (at str_sorted 1))
+  assert "str sort 2" "cherry" (default "" (at str_sorted 2))
+
+  -- sortBy reverse
+  assert "rev sort 0" 5 (default 0 (at rev_sorted 0))
+  assert "rev sort last" 1 (default 0 (last rev_sorted))
+
+  -- sort empty
+  assert "sort empty" 0 (len (sort []))
+
+  io.println "prelude_sort: all passed"
+  0
