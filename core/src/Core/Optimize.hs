@@ -36,6 +36,7 @@ everywhere f = f . go
 -- | Stream fusion rewrites:
 --   fold f acc (map g xs)    → fold (\a x -> f a (g x)) acc xs
 --   fold f acc (filter p xs) → fold (\a x -> if (p x) (f a x) a) acc xs
+--   fold f acc (range s e)   → _foldRange f acc s e
 fuseFoldMap :: Expr -> Expr
 fuseFoldMap
   -- fold f acc (map g xs) → fold (\a x -> f a (g x)) acc xs
@@ -50,6 +51,19 @@ fuseFoldMap
        (App (App (Name "filter") p) xs))
   = fuseFoldMap $
     App (App (App (Name "fold") (fusedFilterBody f p)) acc) xs
+
+fuseFoldMap
+  -- fold f acc (range start end) → _foldRange f acc start end
+  -- After reduction, range is expanded to range_helper start end Nil
+  (App (App (App (Name "fold") f) acc)
+       (App (App (App (Name "range_helper") start) end) (Record "Nil" [])))
+  = App (App (App (App (Name "_foldRange") f) acc) start) end
+
+fuseFoldMap
+  -- Also match unexpanded form in case range survives reduction
+  (App (App (App (Name "fold") f) acc)
+       (App (App (Name "range") start) end))
+  = App (App (App (App (Name "_foldRange") f) acc) start) end
 
 fuseFoldMap e = e
 

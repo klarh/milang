@@ -1,0 +1,21 @@
+-- Test: fold-range fusion optimization
+-- fold f acc (range start end) should be optimized to _foldRange f acc start end
+-- eliminating intermediate list allocation
+
+-- Sum 1..10 via fold over range
+sum10 = fold (\acc i -> acc + i) 0 (range 1 11)
+
+-- Sum of squares 1..5
+sumSq5 = fold (\acc i -> acc + i * i) 0 (range 1 6)
+
+-- Chained: fold over map over range should also work
+-- (map fusion fires first, then range fusion)
+sumDoubled = fold (\acc x -> acc + x) 0 (map (\x -> x * 2) (range 1 6))
+
+main world =
+  assert "sum 1..10" 55 sum10
+  assert "sum of squares 1..5" 55 sumSq5
+  assert "sum doubled 1..5" 30 sumDoubled
+  world.io.println "ok"
+
+assert label expected actual = if (expected == actual) 0 (error (label ++ ": expected " ++ (toString expected) ++ " got " ++ (toString actual)))
