@@ -215,6 +215,7 @@ subst _ _ e = e  -- IntLit, FloatLit, StringLit, etc.
 bindsName :: T.Text -> Pat -> Bool
 bindsName n (PVar v) = n == v
 bindsName n (PRec _ bs) = any (\(_, p) -> bindsName n p) bs
+bindsName n (PList ps mr) = any (bindsName n) ps || maybe False (== n) mr
 bindsName _ _ = False
 
 -- | Build: \a x -> f a (g x)
