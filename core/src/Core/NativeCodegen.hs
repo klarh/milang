@@ -752,10 +752,14 @@ nativeBinop op lc rc = case op of
 isNativeWHNF :: Expr -> Bool
 isNativeWHNF (IntLit _) = True
 isNativeWHNF (FloatLit _) = True
+isNativeWHNF (SizedInt {}) = True
+isNativeWHNF (SizedFloat {}) = True
 isNativeWHNF (StringLit _) = True
 isNativeWHNF (Record _ _) = True
 isNativeWHNF (Lam _ _) = True
 isNativeWHNF (BinOp _ _ _) = True
+isNativeWHNF (CFunction {}) = True
+isNativeWHNF (Error _) = True
 isNativeWHNF _ = False
 
 -- ── Multi-arg Flat Function Optimization ──────────────────────────

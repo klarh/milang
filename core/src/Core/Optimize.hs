@@ -276,6 +276,8 @@ wrapTailRecBindings = go
     go (FieldAccess e f) = FieldAccess (go e) f
     go (Thunk e) = Thunk (go e)
     go (ListLit es) = ListLit (map go es)
+    go (Quote e) = Quote (go e)
+    go (Splice e) = Splice (go e)
     go e = e
 
     goAlt (Alt pat guard body) = Alt pat (fmap go guard) (go body)
@@ -359,6 +361,13 @@ allTailOnly name = tailGo
     tailGo (BinOp _ l r) = not (containsName name l) && not (containsName name r)
     tailGo (Lam _ body) = not (containsName name body)
     tailGo (Name n) = n /= name
+    tailGo (Quote e) = not (containsName name e)
+    tailGo (Splice e) = not (containsName name e)
+    tailGo (ListLit es) = all (not . containsName name) es
+    tailGo (FieldAccess e _) = not (containsName name e)
+    tailGo (Namespace bs) = all (\b -> not (containsName name (bindBody b))) bs
+    tailGo (Record _ bs) = all (\b -> not (containsName name (bindBody b))) bs
+    tailGo (Thunk e) = not (containsName name e)
     tailGo _ = True
 
     isSelfApp (Name n) = n == name
