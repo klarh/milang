@@ -6,6 +6,7 @@ module Core.Optimize (optimize) where
 import Core.Syntax
 import Core.Reduce (substExpr)
 import qualified Data.Text as T
+import qualified Data.Set as Set
 import Data.List (nub)
 
 -- | Apply all optimization passes to the top-level expression.
@@ -78,24 +79,27 @@ fuseFoldMap e = e
 specializeKnownCalls :: Expr -> Expr
 
 -- fold (\a x -> body) init xs →
---   let _sfold acc lst = case lst of
+--   let _sfoldN acc lst = case lst of
 --         Nil → acc
---         Cons{head=h, tail=t} → _sfold body[a:=acc, x:=h] t
---   in _sfold init xs
+--         Cons{head=h, tail=t} → _sfoldN body[a:=acc, x:=h] t
+--         Nothing → acc
+--         Just{val=v} → body[a:=acc, x:=v]
+--         _ → fold (\a x -> body) acc _   (wildcard fallback)
+--   in _sfoldN init xs
 specializeKnownCalls
   (App (App (App (Name "fold") (Lam a (Lam x body))) initE) xs)
   = With (App (App (Name specName) initE) xs) [specBinding]
   where
-    specName = "_sfold"
-    aP = "_sfa"
-    lstP = "_sfl"
-    hP = "_sfh"
-    tP = "_sft"
+    specName = freshPrefix "_sfold" (body, initE, xs)
+    aP = specName <> "_a"
+    lstP = specName <> "_l"
+    hP = specName <> "_h"
+    tP = specName <> "_t"
     body' = subst a (Name aP) (subst x (Name hP) body)
     -- fold is polymorphic: handles List (Nil/Cons) AND Maybe (Nothing/Just).
     -- Wildcard fallback delegates to the original fold for any other ADT.
-    valP = "_sfv"
-    fallbackP = "_sff"
+    valP = specName <> "_v"
+    fallbackP = specName <> "_f"
     bodyJust = subst a (Name aP) (subst x (Name valP) body)
     origLam = Lam a (Lam x body)
     fallback = App (App (App (Name "fold") origLam) (Name aP)) (Name fallbackP)
@@ -116,16 +120,16 @@ specializeKnownCalls
       }
 
 -- _foldRange (\a x -> body) init start end →
---   let _sfr acc i end' = if (i >= end') acc (_sfr body[a:=acc, x:=i] (i+1) end')
---   in _sfr init start end
+--   let _sfrN acc i end' = if (i >= end') acc (_sfrN body[a:=acc, x:=i] (i+1) end')
+--   in _sfrN init start end
 specializeKnownCalls
   (App (App (App (App (Name "_foldRange") (Lam a (Lam x body))) initE) startE) endE)
   = With (App (App (App (Name specName) initE) startE) endE) [specBinding]
   where
-    specName = "_sfr"
-    aP = "_sfra"
-    iP = "_sfri"
-    eP = "_sfre"
+    specName = freshPrefix "_sfr" (body, initE, startE)
+    aP = specName <> "_a"
+    iP = specName <> "_i"
+    eP = specName <> "_e"
     body' = subst a (Name aP) (subst x (Name iP) body)
     specBinding = Binding
       { bindName = specName
@@ -147,6 +151,37 @@ specializeKnownCalls
 -- These are handled by fusion into fold, which IS specialized above.
 
 specializeKnownCalls e = e
+
+-- | Generate a unique specialization name by scanning sub-expressions for
+-- existing names with the same prefix. Prevents name collisions when
+-- the same optimization fires on nested expressions (e.g., fold inside fold).
+freshPrefix :: T.Text -> (Expr, Expr, Expr) -> T.Text
+freshPrefix base (e1, e2, e3) =
+  let existing = Set.unions [collectNames e1, collectNames e2, collectNames e3]
+      candidates = base : [base <> T.pack (show i) | i <- [(2::Int)..]]
+  in head [c | c <- candidates, c `Set.notMember` existing]
+
+-- | Collect all names (variable references and binding names) in an expression.
+collectNames :: Expr -> Set.Set T.Text
+collectNames = go
+  where
+    go (Name n)          = Set.singleton n
+    go (App f x)         = Set.union (go f) (go x)
+    go (Lam p body)      = Set.insert p (go body)
+    go (BinOp _ l r)     = Set.union (go l) (go r)
+    go (Case scrut alts) = Set.union (go scrut)
+                             (Set.unions [Set.union (maybe Set.empty go g) (go b)
+                                         | Alt _ g b <- alts])
+    go (With body bs)    = Set.union (go body) (Set.unions (map goB bs))
+    go (Record _ bs)     = Set.unions (map goB bs)
+    go (FieldAccess e _) = go e
+    go (Thunk body)      = go body
+    go (ListLit es)      = Set.unions (map go es)
+    go (Quote e)         = go e
+    go (Splice e)        = go e
+    go (Namespace bs)    = Set.unions (map goB bs)
+    go _                 = Set.empty
+    goB b = Set.insert (bindName b) (go (bindBody b))
 
 -- | Beta-reduce: App (Lam x body) arg → body[x := arg]
 betaReduce :: Expr -> Expr

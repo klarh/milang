@@ -1,0 +1,28 @@
+-- Test: fold specialization guardrails
+-- 1. fold with known lambda over Maybe (Nothing/Just alternatives)
+-- 2. init builtin (uses fold on Maybe internally)
+-- 3. nested fold (inner fold inside outer fold's lambda)
+
+-- fold over Maybe (Nothing = base, Just v = f acc v)
+test_fold_maybe world =
+  r1 = fold (\acc x -> acc + x) 10 (Just 5)
+  world.io.println (toString r1)
+  r2 = fold (\acc x -> acc + x) 10 Nothing
+  world.io.println (toString r2)
+
+-- init uses fold on Maybe internally — this was the original crash
+test_init_in_closure world =
+  apply f x = f x
+  r = apply (\s -> init [s, 42, 99]) 1
+  world.io.println (toString r)
+
+-- nested fold: inner fold inside outer fold's lambda
+test_nested_fold world =
+  inner x = fold (\acc j -> acc + x * j) 0 [1, 2, 3]
+  r = fold (\acc x -> acc + inner x) 0 [1, 2, 3]
+  world.io.println (toString r)
+
+main world =
+  test_fold_maybe world
+  test_init_in_closure world
+  test_nested_fold world

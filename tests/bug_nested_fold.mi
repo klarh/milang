@@ -1,0 +1,11 @@
+-- Regression test: nested fold must produce correct results.
+-- Previously, the fold specialization used a fixed name (_sfold) for all
+-- specializations. Nested folds (fold inside fold's lambda) would collide,
+-- causing the inner fold's self-reference to bind to the outer fold.
+
+inner x n = fold (\acc j -> acc + x * j) 0 (range 1 (n + 1))
+compute n = fold (\acc x -> acc + inner x n) 0 (range 1 (n + 1))
+
+main world =
+  -- compute 30 = sum(x*j for x in 1..30 for j in 1..30) = 216225
+  world.io.println (toString (compute 30))

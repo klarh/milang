@@ -665,7 +665,7 @@ patternToC st scrutVar (PList pats mRest) = do
 
 -- | Build a ternary chain from condition/body pairs
 buildTernaryChain :: [(String, String)] -> String
-buildTernaryChain [] = "mi_int(0) /* no matching case */"
+buildTernaryChain [] = "(fprintf(stderr, \"runtime error: no matching pattern\\n\"), exit(1), mi_int(0))"
 buildTernaryChain [(_, body)] = body  -- last alt (should be wildcard)
 buildTernaryChain ((cond, body) : rest) =
   "(" ++ cond ++ ") ? " ++ body ++ " : " ++ buildTernaryChain rest

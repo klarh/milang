@@ -74,6 +74,9 @@ envInsertTrait n t env = env { envTraits = Map.insert n t (envTraits env) }
 
 -- ── Core properties ───────────────────────────────────────────────
 
+-- | Maximum reduction depth. Limits the number of name lookups and
+-- beta reductions per reduction chain. Prevents infinite recursion
+-- during partial evaluation.
 maxDepth :: Int
 maxDepth = 128
 
