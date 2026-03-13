@@ -783,6 +783,10 @@ allTailCalls funcName nparams body = tailCheck body
     tailCheck (Record _ bs) = all (noRef . bindBody) bs
     tailCheck (FieldAccess e _) = noRef e
     tailCheck (Thunk b) = noRef b
+    tailCheck (Namespace bs) = all (noRef . bindBody) bs
+    tailCheck (ListLit es) = all noRef es
+    tailCheck (Quote e) = noRef e
+    tailCheck (Splice e) = noRef e
     tailCheck _ = True
 
     -- No reference to funcName at all
@@ -797,6 +801,8 @@ allTailCalls funcName nparams body = tailCheck body
     noRef (Thunk b) = noRef b
     noRef (Namespace bs) = all (noRef . bindBody) bs
     noRef (ListLit es) = all noRef es
+    noRef (Quote e) = noRef e
+    noRef (Splice e) = noRef e
     noRef _ = True
 
 -- | Like exprToC but emits mi_expr_tail_call for tail calls to funcName.
