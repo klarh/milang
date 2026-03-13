@@ -347,6 +347,7 @@ nExprToC st (Lam param body) = do
       addTopDef st $ unlines
         [ "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env_raw) {"
         , "  " ++ envTypeName ++ " *_env = (" ++ envTypeName ++ " *)_env_raw;"
+        , if null selfFvs then "" else selfBindings
         , "  return " ++ bodyC ++ ";"
         , "}"
         , ""

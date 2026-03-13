@@ -1,0 +1,20 @@
+-- Regression test: init builtin in closure/fold contexts
+-- init internally uses fold on a Maybe value (init returns Maybe).
+-- The fold specialization must handle Maybe (Nothing/Just), not just List (Nil/Cons).
+
+outer f acc _ = inner f acc
+  inner f acc = acc + 1
+    d = f acc
+
+main world =
+  -- init called through closure inside fold
+  result = fold (outer (\s -> init [s, 0])) 0 [0, 1, 2]
+  world.io.println (toString result)
+
+  -- init on multi-element list directly
+  r2 = init [10, 20, 30]
+  world.io.println (toString r2)
+
+  -- fold over the list inside init's result
+  r3 = fold (\acc x -> acc + x) 0 (default [] (init [5, 10, 15]))
+  world.io.println (toString r3)

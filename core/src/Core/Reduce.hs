@@ -1372,7 +1372,8 @@ exprFreeVars (Namespace bs)  = bindingsFreeVars bs
 exprFreeVars (Case s alts)   = Set.union (exprFreeVars s) (Set.unions (map altFreeVars alts))
 exprFreeVars (Thunk e)       = exprFreeVars e
 exprFreeVars (ListLit es)    = Set.unions (map exprFreeVars es)
-exprFreeVars (With e bs)     = Set.union (bindingsFreeVars bs) (exprFreeVars e)
+exprFreeVars (With e bs)     = let defined = Set.fromList (map bindName bs)
+                               in Set.union (bindingsFreeVars bs) (Set.difference (exprFreeVars e) defined)
 exprFreeVars (Import _)      = Set.empty
 exprFreeVars (Quote e)       = exprFreeVars e
 exprFreeVars (Splice e)      = exprFreeVars e

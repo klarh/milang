@@ -10,7 +10,10 @@ import Data.List (nub)
 
 -- | Apply all optimization passes to the top-level expression.
 optimize :: Expr -> Expr
-optimize = wrapTailRecBindings . everywhere betaReduce . everywhere fuseFoldMap
+optimize = wrapTailRecBindings
+         . everywhere specializeKnownCalls
+         . everywhere betaReduce
+         . everywhere fuseFoldMap
 
 -- | Apply a transformation to every sub-expression (bottom-up).
 everywhere :: (Expr -> Expr) -> Expr -> Expr
@@ -66,6 +69,84 @@ fuseFoldMap
   = App (App (App (App (Name "_foldRange") f) acc) start) end
 
 fuseFoldMap e = e
+
+-- | Defunctionalization: when fold/_foldRange/map/filter are called with a
+-- known lambda, create a specialized version that inlines the lambda body.
+-- This eliminates mi_apply dispatch overhead (2 calls + 1 alloc per iteration).
+-- The specialized functions are self-recursive, so wrapTailRecBindings
+-- will automatically add TCO (goto loops).
+specializeKnownCalls :: Expr -> Expr
+
+-- fold (\a x -> body) init xs →
+--   let _sfold acc lst = case lst of
+--         Nil → acc
+--         Cons{head=h, tail=t} → _sfold body[a:=acc, x:=h] t
+--   in _sfold init xs
+specializeKnownCalls
+  (App (App (App (Name "fold") (Lam a (Lam x body))) initE) xs)
+  = With (App (App (Name specName) initE) xs) [specBinding]
+  where
+    specName = "_sfold"
+    aP = "_sfa"
+    lstP = "_sfl"
+    hP = "_sfh"
+    tP = "_sft"
+    body' = subst a (Name aP) (subst x (Name hP) body)
+    -- fold is polymorphic: handles List (Nil/Cons) AND Maybe (Nothing/Just).
+    -- Wildcard fallback delegates to the original fold for any other ADT.
+    valP = "_sfv"
+    fallbackP = "_sff"
+    bodyJust = subst a (Name aP) (subst x (Name valP) body)
+    origLam = Lam a (Lam x body)
+    fallback = App (App (App (Name "fold") origLam) (Name aP)) (Name fallbackP)
+    specBinding = Binding
+      { bindName = specName
+      , bindParams = []
+      , bindBody = Lam aP (Lam lstP
+          (Case (Name lstP)
+            [ Alt (PRec "Nil" []) Nothing (Name aP)
+            , Alt (PRec "Cons" [("head", PVar hP), ("tail", PVar tP)]) Nothing
+                (App (App (Name specName) body') (Name tP))
+            , Alt (PRec "Nothing" []) Nothing (Name aP)
+            , Alt (PRec "Just" [("val", PVar valP)]) Nothing bodyJust
+            , Alt (PVar fallbackP) Nothing fallback
+            ]))
+      , bindDomain = Value
+      , bindPos = Nothing
+      }
+
+-- _foldRange (\a x -> body) init start end →
+--   let _sfr acc i end' = if (i >= end') acc (_sfr body[a:=acc, x:=i] (i+1) end')
+--   in _sfr init start end
+specializeKnownCalls
+  (App (App (App (App (Name "_foldRange") (Lam a (Lam x body))) initE) startE) endE)
+  = With (App (App (App (Name specName) initE) startE) endE) [specBinding]
+  where
+    specName = "_sfr"
+    aP = "_sfra"
+    iP = "_sfri"
+    eP = "_sfre"
+    body' = subst a (Name aP) (subst x (Name iP) body)
+    specBinding = Binding
+      { bindName = specName
+      , bindParams = []
+      , bindBody = Lam aP (Lam iP (Lam eP
+          (ifExpr (BinOp ">=" (Name iP) (Name eP))
+                  (Name aP)
+                  (App (App (App (Name specName) body')
+                            (BinOp "+" (Name iP) (IntLit 1)))
+                       (Name eP)))))
+      , bindDomain = Value
+      , bindPos = Nothing
+      }
+
+-- map (\x -> body) xs — not specialized because:
+-- 1. map is usually fused into fold by fuseFoldMap (fold f acc (map g xs))
+-- 2. Standalone recursive map is not tail-recursive, would blow stack on large lists
+-- 3. Same for filter
+-- These are handled by fusion into fold, which IS specialized above.
+
+specializeKnownCalls e = e
 
 -- | Beta-reduce: App (Lam x body) arg → body[x := arg]
 betaReduce :: Expr -> Expr
