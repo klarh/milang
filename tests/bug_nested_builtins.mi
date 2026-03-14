@@ -1,0 +1,40 @@
+-- BUG: reverse(map f xs) produces wrong results when f uses map internally
+--
+-- When the result of builtin map is passed directly to builtin reverse
+-- (without binding to a variable), and the map's lambda calls a function
+-- that itself uses map, the results are corrupted.
+--
+-- Binding the map result to a variable first works correctly.
+-- Using filter, len, head instead of reverse also works correctly.
+-- Using a function that doesn't internally call map also works correctly.
+
+-- chars_of uses map internally
+chars_of s = map (\i -> slice s i (i + 1)) (range 0 (strlen s))
+-- rev_via_chars: reverses string using fold over chars_of (uses map)
+rev_via_chars s = fold (\acc c -> c + acc) "" (chars_of s)
+-- rev_via_indices: reverses string using fold over range (no map)
+rev_via_indices s = fold (\acc i -> slice s i (i + 1) + acc) "" (range 0 (strlen s))
+
+mn a b = if (a < b) a b
+range_s st sp step = if (st >= sp) ([]) (concat [st] (range_s (st + step) sp step))
+
+main world =
+  s = "abcdefghij"
+  mk_chunks rev_fn = map (\i -> rev_fn (slice s i (mn (i + 5) (strlen s)))) (range_s 0 (strlen s) 5)
+
+  -- Binding to variable first: WORKS
+  mapped = mk_chunks rev_via_chars
+  world.io.println ("reverse(var):         " + toString (reverse mapped))
+
+  -- Passing directly to reverse with rev_via_indices (no inner map): WORKS
+  world.io.println ("reverse(inline,idx):  " + toString (reverse (mk_chunks rev_via_indices)))
+
+  -- Passing directly to reverse with rev_via_chars (inner map): BROKEN
+  world.io.println ("reverse(inline,chars):" + toString (reverse (mk_chunks rev_via_chars)))
+
+  -- Other builtins work fine with inline map:
+  world.io.println ("filter(inline,chars): " + toString (filter (\x -> strlen x > 0) (mk_chunks rev_via_chars)))
+  world.io.println ("head(inline,chars):   " + toString (head (mk_chunks rev_via_chars)))
+
+  -- Verify all results match expected
+  world.io.println ("expected for reverse: [jihgf, edcba]")

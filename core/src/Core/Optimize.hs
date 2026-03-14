@@ -4,7 +4,7 @@
 module Core.Optimize (optimize) where
 
 import Core.Syntax
-import Core.Reduce (substExpr)
+import Core.Reduce (substExpr, exprFreeVars)
 import qualified Data.Text as T
 import qualified Data.Set as Set
 import Data.List (nub)
@@ -188,28 +188,93 @@ betaReduce :: Expr -> Expr
 betaReduce (App (Lam x body) arg) = betaReduce (subst x arg body)
 betaReduce e = e
 
--- | Substitute all free occurrences of a variable with an expression.
+-- | Capture-avoiding substitution: replace all free occurrences of a variable
+-- with an expression, alpha-renaming binders as needed to avoid capture.
 subst :: T.Text -> Expr -> Expr -> Expr
-subst x r (Name n) | n == x = r
-subst _ _ e@(Name _) = e
-subst x r (App fn arg) = App (subst x r fn) (subst x r arg)
-subst x _ e@(Lam p _) | p == x = e  -- shadowed
-subst x r (Lam p body) = Lam p (subst x r body)
-subst x r (BinOp op l r2) = BinOp op (subst x r l) (subst x r r2)
-subst x r (Case scrut alts) = Case (subst x r scrut) (map goA alts)
+subst x r = go
+  where
+    rFVs = exprFreeVars r
+    go (Name n) | n == x = r
+    go e@(Name _) = e
+    go (App fn arg) = App (go fn) (go arg)
+    go e@(Lam p _) | p == x = e  -- shadowed
+    go (Lam p body)
+      | p `Set.member` rFVs =
+          -- p would capture a free var in r — alpha-rename p
+          let p' = freshName p (Set.union rFVs (collectNames body))
+          in Lam p' (go (substSimple p (Name p') body))
+      | otherwise = Lam p (go body)
+    go (BinOp op l r2) = BinOp op (go l) (go r2)
+    go (Case scrut alts) = Case (go scrut) (map goA alts)
+      where goA (Alt pat guard body)
+              | bindsName x pat = Alt pat guard body  -- shadowed by pattern
+              | otherwise =
+                  let capVars = patVarNames pat `Set.intersection` rFVs
+                  in if Set.null capVars
+                     then Alt pat (fmap go guard) (go body)
+                     else -- rename captured pattern vars
+                       let allNames = Set.unions [rFVs, collectNames body,
+                                                  maybe Set.empty collectNames guard]
+                           renames = [(v, freshName v allNames)
+                                     | v <- Set.toList capVars]
+                           pat' = foldr (\(old, new) p -> renamePat old new p) pat renames
+                           renBody = foldr (\(old, new) b -> substSimple old (Name new) b) body renames
+                           renGuard = fmap (\g -> foldr (\(old, new) b -> substSimple old (Name new) b) g renames) guard
+                       in Alt pat' (fmap go renGuard) (go renBody)
+    go (With body bs) = With (go body) (map goB bs)
+      where goB b | bindName b == x = b  -- shadowed
+                  | otherwise = b { bindBody = go (bindBody b) }
+    go (Record tag bs) = Record tag (map (\b -> b { bindBody = go (bindBody b) }) bs)
+    go (FieldAccess e fld) = FieldAccess (go e) fld
+    go (Thunk body) = Thunk (go body)
+    go (ListLit es) = ListLit (map go es)
+    go (Quote e) = Quote (go e)
+    go (Splice e) = Splice (go e)
+    go e = e  -- IntLit, FloatLit, StringLit, etc.
+
+-- | Simple substitution (no capture avoidance needed — for renaming only).
+substSimple :: T.Text -> Expr -> Expr -> Expr
+substSimple v rep (Name n) | n == v = rep
+substSimple _ _ e@(Name _) = e
+substSimple v rep (App fn arg) = App (substSimple v rep fn) (substSimple v rep arg)
+substSimple v _ e@(Lam p _) | p == v = e
+substSimple v rep (Lam p body) = Lam p (substSimple v rep body)
+substSimple v rep (BinOp op l r) = BinOp op (substSimple v rep l) (substSimple v rep r)
+substSimple v rep (Case scrut alts) = Case (substSimple v rep scrut) (map goA alts)
   where goA (Alt pat guard body)
-          | bindsName x pat = Alt pat guard body  -- shadowed by pattern
-          | otherwise = Alt pat (fmap (subst x r) guard) (subst x r body)
-subst x r (With body bs) = With (subst x r body) (map goB bs)
-  where goB b | bindName b == x = b  -- shadowed
-              | otherwise = b { bindBody = subst x r (bindBody b) }
-subst x r (Record tag bs) = Record tag (map (\b -> b { bindBody = subst x r (bindBody b) }) bs)
-subst x r (FieldAccess e fld) = FieldAccess (subst x r e) fld
-subst x r (Thunk body) = Thunk (subst x r body)
-subst x r (ListLit es) = ListLit (map (subst x r) es)
-subst x r (Quote e) = Quote (subst x r e)
-subst x r (Splice e) = Splice (subst x r e)
-subst _ _ e = e  -- IntLit, FloatLit, StringLit, etc.
+          | bindsName v pat = Alt pat guard body
+          | otherwise = Alt pat (fmap (substSimple v rep) guard) (substSimple v rep body)
+substSimple v rep (With body bs) = With (substSimple v rep body) (map goB bs)
+  where goB b | bindName b == v = b
+              | otherwise = b { bindBody = substSimple v rep (bindBody b) }
+substSimple v rep (Record tag bs) = Record tag (map (\b -> b { bindBody = substSimple v rep (bindBody b) }) bs)
+substSimple v rep (FieldAccess e fld) = FieldAccess (substSimple v rep e) fld
+substSimple v rep (Thunk body) = Thunk (substSimple v rep body)
+substSimple v rep (ListLit es) = ListLit (map (substSimple v rep) es)
+substSimple v rep (Quote e) = Quote (substSimple v rep e)
+substSimple v rep (Splice e) = Splice (substSimple v rep e)
+substSimple _ _ e = e
+
+-- | Generate a fresh variable name by appending primes until unique.
+freshName :: T.Text -> Set.Set T.Text -> T.Text
+freshName base existing = head [n | n <- candidates, not (n `Set.member` existing)]
+  where candidates = [base <> T.replicate i "'" | i <- [1..]]
+
+-- | Get all variable names bound in a pattern.
+patVarNames :: Pat -> Set.Set T.Text
+patVarNames (PVar v) = Set.singleton v
+patVarNames (PRec _ ps) = Set.unions [patVarNames p | (_, p) <- ps]
+patVarNames (PList ps mr) = Set.unions (map patVarNames ps) <>
+                            maybe Set.empty Set.singleton mr
+patVarNames _ = Set.empty
+
+-- | Rename a variable in a pattern.
+renamePat :: T.Text -> T.Text -> Pat -> Pat
+renamePat old new (PVar v) | v == old = PVar new
+renamePat old new (PRec tag ps) = PRec tag [(f, renamePat old new p) | (f, p) <- ps]
+renamePat old new (PList ps mr) = PList (map (renamePat old new) ps)
+                                        (fmap (\v -> if v == old then new else v) mr)
+renamePat _ _ p = p
 
 -- | Check if a pattern binds a given variable name.
 bindsName :: T.Text -> Pat -> Bool
