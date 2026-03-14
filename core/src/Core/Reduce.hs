@@ -332,7 +332,23 @@ reduceD d env (FieldAccess e field) =
        _        -> result
 
 reduceD d env (Namespace bindings) =
-  let expanded = concatMap expandUnion bindings
+  let expanded0 = concatMap expandUnion bindings
+      (valueBs0, _) = partitionBindings expanded0
+      mergedValues0 = mergeOpenDefs valueBs0
+      -- Protect builtin references: when a module binding shadows a native
+      -- builtin name (e.g., defines "trim"), other bindings that reference
+      -- the builtin get renamed to "__b_name" so the codegen maps them to
+      -- the C builtin function, not the module's overriding variable.
+      moduleNames = Set.fromList [bindName b | b <- mergedValues0]
+      shadowedNative = Set.intersection moduleNames nativeBuiltinNames
+      builtinRenameMap = Map.fromList
+        [(n, "__b_" <> n) | n <- Set.toList shadowedNative]
+      renameBinding b
+        | bindName b `Set.member` shadowedNative = b
+        | Map.null builtinRenameMap = b
+        | otherwise = b { bindBody = renameOverrides builtinRenameMap
+                            (Set.fromList (bindParams b)) (bindBody b) }
+      expanded = map renameBinding expanded0
       (valueBs, annotBs) = partitionBindings expanded
       mergedValues = mergeOpenDefs valueBs
       letNames = Set.fromList [bindName b | b <- expanded]
@@ -447,12 +463,20 @@ evalBindings d env bindings =
       env1 = foldl (evalAnnotation d) env annotBs
       -- Merge open definitions for value bindings
       merged = mergeOpenDefs valueBs
-      -- SCC analysis for value bindings
       bindNames = Set.fromList [bindName b | b <- merged]
-      nodes = [ (b, bindName b,
-                 Set.toList $ Set.intersection bindNames
-                   (exprFreeVars (wrapLambda (bindParams b) (bindBody b))))
-               | b <- merged ]
+      parentNames = Map.keysSet (envMap env)
+      -- SCC analysis for value bindings
+      outerNames = Set.union parentNames builtinNames
+      newOnlyNames = Set.difference bindNames outerNames
+      depsOf b =
+        let name = bindName b
+            refs = exprFreeVars (wrapLambda (bindParams b) (bindBody b))
+            -- Self-references: always include (for self-recursion)
+            selfRef = if name `Set.member` refs then Set.singleton name else Set.empty
+            -- Cross-references: only to names NOT in parent scope or builtins
+            crossRefs = Set.intersection newOnlyNames (Set.delete name refs)
+        in Set.toList (Set.union selfRef crossRefs)
+      nodes = [ (b, bindName b, depsOf b) | b <- merged ]
       sccs = stronglyConnComp nodes
       env2 = foldl (evalSCC d) env1 sccs
       -- Type and trait checking integrated into the unified reducer
@@ -702,6 +726,30 @@ reduceApp d env (App (Name "__ffi_apply") annotateExpr) ns@(Namespace _) =
       descriptors = reduceApp d env annotateWithFfi ns
   in ffiApply descriptors ns
 reduceApp _ _ f x = App f x
+
+-- | Names that are handled as builtins (pattern-matched in tryBuiltin1 or
+-- reduceApp).  Used by evalBindings to exclude false SCC dependency edges
+-- when a module binding references a name that is also a builtin.
+builtinNames :: Set.Set Text
+builtinNames = Set.fromList
+  [ "len", "trim", "toUpper", "toLower", "toString", "toInt", "toFloat"
+  , "abs", "float", "round", "floor", "ceil"
+  , "tag", "fields", "fieldNames", "getField", "setField"
+  , "replace", "slice", "indexOf", "charAt", "split", "join"
+  , "concat"
+  ]
+
+-- | Subset of builtins that have native C implementations (in NativeCodegen's
+-- builtinEntries).  Only these names get __b_ renaming when shadowed, because
+-- names like "concat" and "join" are prelude-defined without a C builtin.
+nativeBuiltinNames :: Set.Set Text
+nativeBuiltinNames = Set.fromList
+  [ "len", "trim", "toUpper", "toLower", "toString", "toInt", "toFloat"
+  , "float", "round", "floor", "ceil"
+  , "tag", "fields", "fieldNames", "getField", "setField"
+  , "replace", "slice", "indexOf", "charAt", "split"
+  , "strlen", "if", "truthy", "gc_manage"
+  ]
 
 -- Builtins that should fire before env lookup (by original name)
 tryBuiltin1 :: Int -> Env -> Text -> Expr -> Maybe Expr

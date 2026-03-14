@@ -1,4 +1,4 @@
-m = import "bug_shadow_module.mi"
+m = import "lib/bug_shadow_module.mi"
 main world =
   -- Test 2: helper bi_trim intended to capture builtin trim
   world.io.println (m.build (m.trim (m.from "  hello  ")))

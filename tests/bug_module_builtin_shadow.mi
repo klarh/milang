@@ -12,7 +12,7 @@
 -- Root cause: module letrec scoping resolves ALL references to 'trim'
 -- (including in bi_trim) to the module's definition, not the builtin.
 
-m = import "bug_shadow_module.mi"
+m = import "lib/bug_shadow_module.mi"
 
 main world =
   result = m.build (m.trim (m.from "  hello  "))
