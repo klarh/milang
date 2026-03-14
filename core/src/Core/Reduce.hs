@@ -16,7 +16,7 @@ import qualified Data.Set as Set
 import Data.Graph (stronglyConnComp, SCC(..))
 import Data.List (isPrefixOf, foldl')
 import Text.Read (readMaybe)
-import Data.Char (isUpper, ord)
+import Data.Char (isDigit, isUpper, ord)
 import Data.Bits (xor)
 
 
@@ -109,6 +109,9 @@ isConcrete (SizedInt {})   = True
 isConcrete (SizedFloat {}) = True
 isConcrete (StringLit _)   = True
 isConcrete (Lam _ _)       = True
+-- isConcrete: Builtin is intentionally NOT concrete to prevent the Name
+-- handler from inlining it in all contexts. Builtins are handled via
+-- tryBuiltin1 and normBuiltinApp in reduceApp instead.
 isConcrete (Record _ bs)   = all (isConcrete . bindBody) bs
 isConcrete (Namespace bs)  = all (isConcrete . bindBody) bs
 isConcrete (CFunction {})  = True
@@ -134,6 +137,17 @@ isCFunctionCall :: Expr -> Bool
 isCFunctionCall e = case collectApp e of
   (CFunction {}, _:_) -> True
   _ -> False
+
+-- | Strip the shadow-protection prefix (_S<hash>_) from a name, if present.
+-- This allows builtins (tryBuiltin1) to fire for shadow-protected names.
+stripShadowPrefix :: Text -> Text
+stripShadowPrefix n
+  | Just rest <- T.stripPrefix "_S" n
+  , (digits, withUnderscore) <- T.span isDigit rest
+  , not (T.null digits)
+  , Just stripped <- T.stripPrefix "_" withUnderscore
+  = stripped
+  | otherwise = n
 
 -- | True if a name has a :~ [pure] trait annotation, allowing inlining
 -- of its value even when it's a CFunction call.
@@ -202,7 +216,12 @@ reduceD d env (Name n) =
       Just (Name m) | d <= 0 -> Name m  -- depth limit: substitute but don't recurse
       Just (Name m) -> reduceD (d - 1) env (Name m)  -- follow name aliases
       Just val@(Lam _ _) -> val
-      Just val@(Namespace _) -> val  -- Namespace is a value, don't re-reduce
+      -- With-wrapped Lam: safe to inline — functions are values, not
+      -- side-effectful computations, so duplicating them is harmless.
+      -- This enables applying functions extracted from namespaces via
+      -- FieldAccess (e.g. p.len from import "prelude").
+      Just val@(With (Lam _ _) _) -> val
+      Just val@(Namespace _) -> val
       Just val | isConcrete val -> if d <= 0 then val else reduceD (d - 1) env val
       -- Non-concrete value from a With/let binding: keep as Name so the
       -- runtime evaluates it once (prevents duplicating FFI side effects).
@@ -239,8 +258,10 @@ reduceD d env (BinOp op l r) =
 reduceD d env (App f x) =
   -- Check for single-arg builtins by name before env lookup (e.g. len on strings)
   case f of
-    Name n    | Just r <- tryBuiltin1 d env n x -> r
+    Name n    | Just r <- tryBuiltin1 d env (stripShadowPrefix n) x -> r
     Builtin n | Just r <- tryBuiltin1 d env n x -> r
+    -- FieldAccess on builtins (e.g. p.len "hello" via import "prelude")
+    FieldAccess _ n | Just r <- tryBuiltin1 d env n x -> r
     _ -> case collectApp (App f x) of
       (Name n, args) | envIsRec n env ->
         let args' = map (reduceD d env) args
@@ -373,7 +394,8 @@ reduceD d env (Namespace bindings) =
       env' = evalBindings d envWithLet expanded
       valBs' = map (reduceBind d env') mergedValues
       annBs' = map (reduceBind d env') annotBs
-  in Namespace (valBs' ++ annBs')
+      allOut = valBs' ++ annBs'
+  in Namespace allOut
 
 reduceD d env (Case scrut alts) =
   let scrut' = forceThunk d env (reduceD d env scrut)
@@ -483,7 +505,10 @@ evalBindings d env bindings =
       bindNames = Set.fromList [bindName b | b <- merged]
       parentNames = Map.keysSet (envMap env)
       -- SCC analysis for value bindings
-      outerNames = Set.union parentNames builtinNames
+      -- Local bindings that shadow builtins must still participate in
+      -- cross-dependency tracking, otherwise SCC ordering may process
+      -- dependents before the shadowing binding's CyclicSCC is installed.
+      outerNames = Set.difference (Set.union parentNames builtinNames) bindNames
       newOnlyNames = Set.difference bindNames outerNames
       depsOf b =
         let name = bindName b
@@ -557,9 +582,16 @@ evalSCC d env (AcyclicSCC b) =
       env2 = case val of
         Error msg -> envAddWarning (GeneralWarning (bindPos b) (name <> ": " <> msg)) env1
         _         -> env1
+      -- When a binding is a Name alias pointing to an envRec name,
+      -- propagate envRec status so the alias is also treated as recursive.
+      -- This prevents the App handler from inlining the recursive body
+      -- when the alias name is used (e.g. shadow-renamed builtins).
+      env3 = case body of
+        Name m | Set.member m (envRec env2) -> env2 { envRec = Set.insert name (envRec env2) }
+        _      -> env2
   in case val of
-       Error _ -> env2  -- don't insert error nodes (type mismatches, etc.)
-       _       -> envInsert name val env2
+       Error _ -> env3  -- don't insert error nodes (type mismatches, etc.)
+       _       -> envInsert name val env3
 
 evalSCC _ env (CyclicSCC bs) =
   let recNames = Set.fromList (map bindName bs)
@@ -604,6 +636,8 @@ reduceApp d env (Lam p body) arg
     let realName = lamParamName p
         d' = d - 1
         argFV = exprFreeVars arg
+        bodyFV = exprFreeVars body
+        bodyUsesParam = realName `Set.member` bodyFV
     in if realName `Set.member` argFV
        then -- Alpha-rename to avoid capture
          let allNames = Set.unions [argFV, exprFreeVars body, Map.keysSet (envMap env)]
@@ -784,7 +818,9 @@ nativeBuiltinNames = Set.fromList
 
 -- Builtins that should fire before env lookup (by original name)
 tryBuiltin1 :: Int -> Env -> Text -> Expr -> Maybe Expr
-tryBuiltin1 d env "len" x = case reduceD d env x of
+tryBuiltin1 d env "len" x = 
+  let rx = reduceD d env x
+  in case rx of
   StringLit s -> Just $ IntLit (fromIntegral (T.length s))
   _           -> Nothing  -- fall through to prelude len for lists
 tryBuiltin1 d env "trim" x = case reduceD d env x of
@@ -802,6 +838,8 @@ tryBuiltin1 d env "toString" x = case reduceD d env x of
   SizedInt n _ _ -> Just $ StringLit (T.pack (show n))
   SizedFloat f _ -> Just $ StringLit (T.pack (show f))
   StringLit s   -> Just $ StringLit s
+  Record "Nil" [] -> Just $ StringLit "[]"
+  Record tag [] -> Just $ StringLit tag
   _             -> Nothing
 tryBuiltin1 d env "toInt" x = case reduceD d env x of
   StringLit s -> case reads (T.unpack s) of
@@ -960,17 +998,16 @@ reduceFieldAccess (Record _ bs) field =
       [(n, "")] -> Just n
       _ -> Nothing
 reduceFieldAccess (Namespace bs) field =
-  case [bindBody b | b <- bs, bindName b == field] of
+  let valueBs = [b | b <- bs, bindDomain b == Value || bindDomain b == Lazy]
+  in case [(wrapLambda (bindParams b) (bindBody b)) | b <- valueBs, bindName b == field] of
     (v:_) ->
       let fvs = exprFreeVars v
-          nsNames = Set.fromList [bindName b | b <- bs,
-                                  bindDomain b == Value || bindDomain b == Lazy]
+          nsNames = Set.fromList (map bindName valueBs)
           directDeps = Set.intersection fvs nsNames
-          -- Compute transitive closure of namespace dependencies
-          allDeps = closureNsDeps bs directDeps nsNames
+          allDeps = closureNsDeps valueBs directDeps nsNames
       in if Set.null allDeps
          then v
-         else With v [b | b <- bs, bindName b `Set.member` allDeps]
+         else With v [b | b <- valueBs, bindName b `Set.member` allDeps]
     []    -> FieldAccess (Namespace bs) field
 reduceFieldAccess e field = FieldAccess e field
 
@@ -1024,7 +1061,9 @@ reduceRecordUpdate l r = BinOp "<-" l r
 -- ── Case/pattern matching ─────────────────────────────────────────
 
 reduceCase :: Int -> Env -> Expr -> [Alt] -> Expr
-reduceCase _ _ scrut [] = Error $ "non-exhaustive pattern match on: " <> T.pack (prettyExpr 0 scrut)
+reduceCase _ _ scrut [] = 
+  let msg = "non-exhaustive pattern match on: " <> T.pack (prettyExpr 0 scrut)
+  in Error msg
 reduceCase d env scrut (Alt pat mGuard body : rest) =
   case matchPat pat scrut of
     Nothing -> reduceCase d env scrut rest
@@ -1433,27 +1472,37 @@ expandUnion b = case bindBody b of
 mergeOpenDefs :: [Binding] -> [Binding]
 mergeOpenDefs [] = []
 mergeOpenDefs bindings =
-  let (_, result) = foldl merge (Map.empty, []) bindings
+  let -- Map from names to bodies for resolving aliases
+      bodyMap = Map.fromList [(bindName b, wrapLambda (bindParams b) (bindBody b))
+                             | b <- bindings]
+      (_, result) = foldl (merge bodyMap) (Map.empty, []) bindings
   in reverse result
   where
-    merge (seen, acc) b =
+    merge bodyMap (seen, acc) b =
       let name = bindName b
       in case Map.lookup name seen of
         Nothing -> (Map.insert name b seen, b : acc)
         Just old ->
-          let oldBody = wrapLambda (bindParams old) (bindBody old)
+          let oldBody = resolveAlias bodyMap (wrapLambda (bindParams old) (bindBody old))
               newBody = wrapLambda (bindParams b) (bindBody b)
               merged = case chainBodies newBody oldBody of
                 Just body' -> b { bindBody = body', bindParams = [] }
                 Nothing    -> b
           in (Map.insert name merged seen,
               map (\x -> if bindName x == name then merged else x) acc)
+    -- Follow Name aliases to find the real body (for open function chaining)
+    resolveAlias bodyMap (Name n) = case Map.lookup n bodyMap of
+      Just body -> resolveAlias bodyMap body
+      Nothing   -> Name n
+    resolveAlias _ e = e
 
 chainBodies :: Expr -> Expr -> Maybe Expr
 chainBodies new old = case (new, old) of
   (Lam p1 inner1, Lam p2 inner2)
     | p1 == p2  -> Lam p1 <$> chainBodies inner1 inner2
     | otherwise -> Lam p1 <$> chainBodies inner1 (substExpr p2 (Name p1) inner2)
+  -- Old is not a Lam (e.g. Builtin alias) — recurse treating old as a function
+  (Lam p1 inner1, _) -> Lam p1 <$> chainBodies inner1 old
   (Case scrut newAlts, Case _ oldAlts)
     | not (hasWildcard newAlts) ->
       Just $ Case scrut (newAlts ++ oldAlts)
@@ -1506,7 +1555,11 @@ bindingFreeVars b =
 bindingsFreeVars :: [Binding] -> Set.Set Text
 bindingsFreeVars bs =
   let defined = Set.fromList (map bindName bs)
-      allFvs = Set.unions (map bindingFreeVars bs)
+      -- Only value/lazy bindings contribute runtime free variables.
+      -- Type/trait annotations use type variables (a, b, c) that are
+      -- not runtime dependencies and must not pollute the free-var set.
+      runtimeBs = [b | b <- bs, bindDomain b `elem` [Value, Lazy]]
+      allFvs = Set.unions (map bindingFreeVars runtimeBs)
   in Set.difference allFvs defined
 
 altFreeVars :: Alt -> Set.Set Text

@@ -1,4 +1,5 @@
--- Test: module uses import "prelude" to access fold despite user shadow.
+-- Test: user shadow of fold doesn't affect imported module.
+-- Module has its own prelude via import "prelude", so user's fold is irrelevant.
 fold x = x
 
 m = import "lib/double_sum.mi"

@@ -1,3 +1,6 @@
+-- Functions that wrap prelude functions of the same name need import "prelude"
+-- to avoid self-recursion. Shadow protection handles cross-function references
+-- but not same-name wrapping.
 p = import "prelude"
 _rev xs = fold (\acc x -> concat [x] acc) [] xs
 from str = [str]

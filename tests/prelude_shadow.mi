@@ -1,17 +1,18 @@
--- Test: user can override prelude functions; import "prelude" provides originals.
-p = import "prelude"
+-- Test: user can override prelude functions without breaking prelude internals.
+-- Shadow protection via unique naming ensures push/sortBy still use the
+-- original concat internally, even though the user redefines it.
 concat a b = len a + len b
 
 main world =
   -- User's concat works for user code
   assert "user concat" (concat "hi" "world" == 7)
 
-  -- Prelude's push still works via qualified access
-  items = p.push [1, 2, 3] 4
+  -- Prelude's push still works (uses internal concat, not user's)
+  items = push [1, 2, 3] 4
   assert "push works" (len items == 4)
 
-  -- Prelude's sortBy still works via qualified access
-  sorted = p.sortBy (\a b -> a - b) [3, 1, 2]
+  -- Prelude's sortBy still works
+  sorted = sortBy (\a b -> a - b) [3, 1, 2]
   assert "sortBy works" (len sorted == 3)
 
   0

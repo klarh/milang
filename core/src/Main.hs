@@ -24,7 +24,7 @@ import Options.Applicative
 import Core.Syntax
 import Core.Parser (parseProgram, parseExpr)
 import Text.Megaparsec (errorBundlePretty)
-import Core.Reduce (reduce, reduceWithEnv, emptyEnv, builtinEnv, Env, Warning(..), envMap, nativeBuiltinNames)
+import Core.Reduce (reduce, reduceWithEnv, emptyEnv, builtinEnv, Env, Warning(..), envMap, nativeBuiltinNames, exprFreeVars)
 import Core.Codegen (codegen)
 import Core.Optimize (optimize)
 import Core.NativeCodegen (nativeCodegen)
@@ -264,10 +264,12 @@ buildBinding = mkBind "build" $ Record ""
 -- | Special import "prelude": all prelude bindings + C builtin wrappers
 specialPrelude :: Expr
 specialPrelude =
-  let builtinBs = [mkBind n (Builtin n)
+  let preludeDefNames = Set.fromList [bindName b | b <- preludeBindings]
+      builtinBs = [mkBind n (Builtin n)
                     | n <- Set.toList nativeBuiltinNames
                     , n /= "if", n /= "truthy"
-                    , n /= "__sized_int", n /= "__sized_uint" ]
+                    , n /= "__sized_int", n /= "__sized_uint"
+                    , not (n `Set.member` preludeDefNames) ]
   in Namespace (preludeBindings ++ builtinBs)
 
 -- | Special import "ast": metaprogramming AST constructors
@@ -542,9 +544,31 @@ resolveLocalImport ctx dir pathStr _expectedHash standardImport funFilter = do
                       Right ast -> do
                         modifyIORef (rcInProgress ctx) (Set.insert relPath)
                         resolved <- resolveExpr ctx (takeDirectory relPath) ast
-                        modifyIORef (rcCache ctx) (Map.insert relPath resolved)
+                        -- Pre-reduce module with its own prelude, then strip
+                        -- prelude bindings. This gives modules automatic access
+                        -- to prelude functions without leaking them into exports.
+                        -- Keep prelude bindings that are still referenced by module
+                        -- bodies (residual references), otherwise they'd resolve
+                        -- to the importer's scope and could be shadowed.
+                        let moduleNames = case resolved of
+                              Namespace bs -> Set.fromList [bindName b | b <- bs]
+                              _ -> Set.empty
+                            withPrelude = injectPrelude True resolved
+                            (reduced, _) = reduce builtinEnv withPrelude
+                            stripped = case reduced of
+                              Namespace bs ->
+                                let modBs = [b | b <- bs, bindName b `Set.member` moduleNames]
+                                    modFVs = Set.unions [exprFreeVars (bindBody b) | b <- modBs]
+                                    allNames = Set.fromList [bindName b | b <- bs]
+                                    neededPrelude = Set.intersection modFVs
+                                      (Set.difference allNames moduleNames)
+                                    preBs = [b | b <- bs
+                                            , bindName b `Set.member` neededPrelude]
+                                in Namespace (preBs ++ modBs)
+                              _ -> reduced
+                        modifyIORef (rcCache ctx) (Map.insert relPath stripped)
                         modifyIORef (rcInProgress ctx) (Set.delete relPath)
-                        pure resolved
+                        pure stripped
 
 -- | Resolve a URL import with Merkle hash computation
 resolveURLImport :: ResCtx -> String -> Maybe String -> Bool -> IO Expr

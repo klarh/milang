@@ -1,2 +1,2 @@
-p = import "prelude"
-double_sum xs = p.fold (\acc x -> acc + x + x) 0 xs
+-- Module that uses prelude's fold (auto-injected)
+double_sum xs = fold (\acc x -> acc + x + x) 0 xs

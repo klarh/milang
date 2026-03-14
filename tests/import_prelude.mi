@@ -15,4 +15,5 @@ main world =
   world.io.println result1
   world.io.println (toString result2)
   world.io.println (toString (p.len result3))
+  0
 
