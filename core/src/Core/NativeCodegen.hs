@@ -1429,10 +1429,12 @@ builtinEntries =
         , ("__sized_int", "mi_native(mi_builtin_sized_int)")
         , ("__sized_uint","mi_native(mi_builtin_sized_uint)")
         ]
-      -- __b_ prefixed aliases: when a module shadows a builtin name, the
-      -- reducer renames other bindings' references to __b_<name> so the
-      -- codegen maps them to the C builtin, not the module's variable.
+      -- __b_ and __p_ prefixed aliases: when a module shadows a builtin name,
+      -- the reducer renames references to __b_<name> (user body self-refs)
+      -- or __p_<name> (prelude internal cross-refs) so the codegen maps them
+      -- to the C builtin, not the module's variable.
       protected = [("__b_" ++ name, code) | (name, code) <- base]
+                ++ [("__p_" ++ name, code) | (name, code) <- base]
   in base ++ protected
 
 -- | Generate a complete C program using native code generation.

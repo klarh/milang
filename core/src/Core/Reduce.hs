@@ -6,6 +6,9 @@ module Core.Reduce
   , envInsert, envMap, envLookup
   , protectPrelude
   , substExpr
+  , nativeBuiltinNames
+  , builtinNames
+  , renameOverrides
   ) where
 
 import Data.Text (Text)
@@ -280,7 +283,14 @@ reduceD d env (App f x) =
                 env' = foldl (\e b -> envInsert (bindName b) (bindBody b) e) env bs
                 env'' = env' { envLetBound = Set.union letNames (envLetBound env')
                              , envRec = Set.union recNames (envRec env') }
-            in reduceD d env'' (App inner x)
+                result = reduceD d env'' (App inner x)
+                -- Re-wrap: if result still references With-bound names (e.g.
+                -- recursive self-refs after partial application), carry the
+                -- bindings forward so they aren't lost to outer-scope shadows.
+                resultFvs = exprFreeVars result
+                neededBs = [b | b <- bs, bindDomain b == Value || bindDomain b == Lazy,
+                            bindName b `Set.member` resultFvs]
+            in if null neededBs then result else With result neededBs
           -- Call-by-name for lambda application: don't evaluate arg until needed.
           -- This prevents divergence in recursive branches (e.g., if cond t e).
           -- Exception: syntactic lambdas are always safe to reduce (they can't
@@ -818,6 +828,9 @@ tryBuiltin1 d env "floor" x = case reduceD d env x of
 tryBuiltin1 d env "ceil" x = case reduceD d env x of
   FloatLit f -> Just $ IntLit (Prelude.ceiling f)
   _          -> Nothing
+tryBuiltin1 d env n x
+  | Just n' <- T.stripPrefix "__b_" n = tryBuiltin1 d env n' x
+  | Just n' <- T.stripPrefix "__p_" n = tryBuiltin1 d env n' x
 tryBuiltin1 _ _ _ _ = Nothing
 
 -- ── Binary operator reduction ─────────────────────────────────────
@@ -1351,7 +1364,7 @@ chainBodies new old = case (new, old) of
 -- cross-references so they use the protected name.  Open-function
 -- extensions (chainBodies succeeds) are left alone.
 
-protectPrelude :: [Binding] -> [Binding] -> [Binding]
+protectPrelude :: [Binding] -> [Binding] -> ([Binding], [Binding])
 protectPrelude preludeBs userBs =
   let preludeValueNames = Set.fromList
         [bindName b | b <- preludeBs, bindDomain b `elem` [Value, Lazy]]
@@ -1359,7 +1372,7 @@ protectPrelude preludeBs userBs =
         [bindName b | b <- userBs, bindDomain b `elem` [Value, Lazy]]
       conflicts = Set.intersection preludeValueNames userValueNames
   in if Set.null conflicts
-     then preludeBs
+     then (preludeBs, userBs)
      else
        let preludeMap = Map.fromList
              [(bindName b, b) | b <- preludeBs, bindDomain b `elem` [Value, Lazy]]
@@ -1373,7 +1386,7 @@ protectPrelude preludeBs userBs =
              _ -> False
            overrides = Set.filter isOverride conflicts
        in if Set.null overrides
-          then preludeBs
+          then (preludeBs, userBs)
           else
             let renameMap = Map.fromList
                   [(n, "__p_" <> n) | n <- Set.toList overrides]
@@ -1386,7 +1399,19 @@ protectPrelude preludeBs userBs =
                 internals = [ (modifyB (preludeMap Map.! n))
                                 { bindName = "__p_" <> n }
                             | n <- Set.toList overrides ]
-            in modified ++ internals
+                -- Rename inside user bindings: overriding bodies and
+                -- Namespace bodies (imported modules) use __p_ versions
+                -- so they resolve to the prelude definition, not the shadow
+                modifyUserB b
+                  | Map.member (bindName b) renameMap =
+                    b { bindBody = renameOverrides renameMap
+                          (Set.fromList (bindParams b)) (bindBody b) }
+                  | otherwise = case bindBody b of
+                      Namespace _ ->
+                        b { bindBody = renameOverrides renameMap Set.empty (bindBody b) }
+                      _ -> b
+                modifiedUser = map modifyUserB userBs
+            in (modified ++ internals, modifiedUser)
 
 -- | Rename references to overridden prelude names, respecting scoping.
 renameOverrides :: Map.Map Text Text -> Set.Set Text -> Expr -> Expr

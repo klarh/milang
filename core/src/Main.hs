@@ -24,7 +24,7 @@ import Options.Applicative
 import Core.Syntax
 import Core.Parser (parseProgram, parseExpr)
 import Text.Megaparsec (errorBundlePretty)
-import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap, protectPrelude)
+import Core.Reduce (reduce, reduceWithEnv, emptyEnv, Env, Warning(..), envMap, protectPrelude, nativeBuiltinNames, builtinNames, renameOverrides, exprFreeVars)
 import Core.Codegen (codegen)
 import Core.Optimize (optimize)
 import Core.NativeCodegen (nativeCodegen)
@@ -244,13 +244,120 @@ loadAndParse file = do
 -- | Inject prelude bindings before user bindings
 injectPrelude :: Bool -> Expr -> Expr
 injectPrelude True (Namespace bs) =
-  let protected = protectPrelude preludeBindings bs
-  in Namespace (protected ++ [buildBinding] ++ bs)
+  let (protected, bs') = protectPrelude preludeBindings bs
+      preludeNames = Set.fromList
+        [bindName b | b <- preludeBindings, bindDomain b `elem` [Value, Lazy]]
+      -- Create __p_ bindings for prelude names shadowed inside Namespaces
+      -- but not already handled by protectPrelude (top-level conflicts)
+      existingP = Set.fromList
+        [T.drop 4 (bindName b) | b <- protected, "__p_" `T.isPrefixOf` bindName b]
+      nsShadows = Set.difference (collectNsShadows preludeNames builtinNames bs') existingP
+      preludeMap = Map.fromList
+        [(bindName b, b) | b <- preludeBindings, bindDomain b `elem` [Value, Lazy]]
+      extraP = [b { bindName = "__p_" <> bindName b }
+               | n <- Set.toList nsShadows, Just b <- [Map.lookup n preludeMap]]
+      -- Rename prelude-internal references for NS-only shadows so that
+      -- e.g. prelude's `words` calls `__p_split` instead of module's `split`
+      nsRenameMap = Map.fromList
+        [(n, "__p_" <> n) | n <- Set.toList nsShadows]
+      renamePreludeB b
+        | bindDomain b `elem` [Value, Lazy] =
+          b { bindBody = renameOverrides nsRenameMap
+                (Set.fromList (bindParams b)) (bindBody b) }
+        | otherwise = b
+      protected' = if Map.null nsRenameMap then protected
+                   else map renamePreludeB protected
+      extraP' = map renamePreludeB extraP
+      bs'' = map (desugarShadow preludeNames) bs'
+  in Namespace (protected' ++ extraP' ++ [buildBinding] ++ bs'')
 injectPrelude True e =
   let bs = [mkBind "_main" e]
-      protected = protectPrelude preludeBindings bs
-  in Namespace (protected ++ [buildBinding] ++ bs)
+      (protected, bs') = protectPrelude preludeBindings bs
+      preludeNames = Set.fromList
+        [bindName b | b <- preludeBindings, bindDomain b `elem` [Value, Lazy]]
+      existingP = Set.fromList
+        [T.drop 4 (bindName b) | b <- protected, "__p_" `T.isPrefixOf` bindName b]
+      nsShadows = Set.difference (collectNsShadows preludeNames builtinNames bs') existingP
+      preludeMap = Map.fromList
+        [(bindName b, b) | b <- preludeBindings, bindDomain b `elem` [Value, Lazy]]
+      extraP = [b { bindName = "__p_" <> bindName b }
+               | n <- Set.toList nsShadows, Just b <- [Map.lookup n preludeMap]]
+      nsRenameMap = Map.fromList
+        [(n, "__p_" <> n) | n <- Set.toList nsShadows]
+      renamePreludeB b
+        | bindDomain b `elem` [Value, Lazy] =
+          b { bindBody = renameOverrides nsRenameMap
+                (Set.fromList (bindParams b)) (bindBody b) }
+        | otherwise = b
+      protected' = if Map.null nsRenameMap then protected
+                   else map renamePreludeB protected
+      extraP' = map renamePreludeB extraP
+      bs'' = map (desugarShadow preludeNames) bs'
+  in Namespace (protected' ++ extraP' ++ [buildBinding] ++ bs'')
 injectPrelude False e = e
+
+-- | Collect names (prelude or builtin) that are shadowed inside Namespace
+-- bodies and have self-references (i.e., the body calls itself by name).
+-- These need __p_ protection so prelude-internal cross-references resolve
+-- to the original definition, not the module's shadow.
+collectNsShadows :: Set.Set T.Text -> Set.Set T.Text -> [Binding] -> Set.Set T.Text
+collectNsShadows preludeNames builtinNms = foldMap go
+  where
+    allProtected = Set.union preludeNames builtinNms
+    go b = case bindBody b of
+      Namespace inner ->
+        Set.union
+          (Set.fromList [bindName b' | b' <- inner,
+                         bindName b' `Set.member` allProtected,
+                         hasSelfRef b'])
+          (foldMap go inner)
+      _ -> Set.empty
+
+hasSelfRef :: Binding -> Bool
+hasSelfRef b =
+  let fvs = Set.difference (exprFreeVars (bindBody b))
+                            (Set.fromList (bindParams b))
+  in bindName b `Set.member` fvs
+
+-- | Resolve shadow bindings: when a user binding shadows a builtin or
+-- prelude name, rename body self-references so they dispatch to the
+-- original definition instead of recursing.
+--
+-- For builtins: renames to __b_ prefix (tryBuiltin1 strips prefix).
+-- For prelude names inside Namespaces: renames to __p_ prefix
+-- (resolved via __p_ bindings created by protectPrelude/injectPrelude).
+desugarShadow :: Set.Set T.Text -> Binding -> Binding
+desugarShadow preludeNames b
+  -- Top-level binding that shadows a builtin and self-references it
+  | bindName b `Set.member` builtinNames
+  , hasSelfRef b =
+    renameBodySelfRef "__b_" b
+  -- Imported module: recursively desugar Namespace bindings
+  | Namespace inner <- bindBody b =
+    b { bindBody = Namespace (map (desugarInner preludeNames) inner) }
+  | otherwise = b
+
+-- | Handle shadows inside imported module Namespaces.
+-- Checks for both builtin and prelude shadows.
+desugarInner :: Set.Set T.Text -> Binding -> Binding
+desugarInner preludeNames b
+  -- Builtin shadow inside module
+  | bindName b `Set.member` builtinNames
+  , hasSelfRef b =
+    renameBodySelfRef "__b_" b
+  -- Prelude shadow inside module
+  | bindName b `Set.member` preludeNames
+  , hasSelfRef b =
+    renameBodySelfRef "__p_" b
+  -- Nested Namespace: recurse
+  | Namespace inner <- bindBody b =
+    b { bindBody = Namespace (map (desugarInner preludeNames) inner) }
+  | otherwise = b
+
+renameBodySelfRef :: T.Text -> Binding -> Binding
+renameBodySelfRef prefix b =
+  let rn = Map.singleton (bindName b) (prefix <> bindName b)
+  in b { bindBody = renameOverrides rn (Set.fromList (bindParams b)) (bindBody b) }
 
 -- | Compile-time build info record (target, os, arch)
 buildBinding :: Binding
@@ -258,6 +365,26 @@ buildBinding = mkBind "build" $ Record ""
   [ mkBind "target" (StringLit "c")
   , mkBind "os"     (StringLit (T.pack os))
   , mkBind "arch"   (StringLit (T.pack arch))
+  ]
+
+-- | Special import "prelude": all prelude bindings + C builtin wrappers
+specialPrelude :: Expr
+specialPrelude =
+  let builtinBs = [mkBind n (Name ("__b_" <> n))
+                    | n <- Set.toList nativeBuiltinNames
+                    , n /= "if", n /= "truthy"  -- these are already in prelude
+                    , n /= "__sized_int", n /= "__sized_uint" ]
+  in Namespace (preludeBindings ++ builtinBs)
+
+-- | Special import "ast": metaprogramming AST constructors
+specialAst :: Expr
+specialAst = Namespace
+  [ mkBind "App" $ Lam "fn" (Lam "arg" (Record "App"
+      [ mkBind "fn" (Name "fn"), mkBind "arg" (Name "arg") ]))
+  , mkBind "Var" $ Lam "name" (Record "Var"
+      [ mkBind "name" (Name "name") ])
+  , mkBind "Lam" $ Lam "param" (Lam "body" (Record "Lam"
+      [ mkBind "param" (Name "param"), mkBind "body" (Name "body") ]))
   ]
 
 -- | Load, parse, inject prelude, and reduce
@@ -481,6 +608,10 @@ resolveImport ctx dir pathStr expectedHash standardImport funFilter
 
 -- | Resolve a local file import
 resolveLocalImport :: ResCtx -> String -> String -> Maybe String -> Bool -> Maybe [T.Text] -> IO Expr
+resolveLocalImport _ctx _dir pathStr _expectedHash _standardImport _funFilter
+  | pathStr == "prelude" = pure specialPrelude
+  | pathStr == "build"   = pure (bindBody buildBinding)
+  | pathStr == "ast"     = pure specialAst
 resolveLocalImport ctx dir pathStr _expectedHash standardImport funFilter = do
   let relPath = dir </> pathStr
   cached <- readIORef (rcCache ctx)

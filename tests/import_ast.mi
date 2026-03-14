@@ -1,0 +1,10 @@
+-- Test: import "ast" gives AST node constructors for metaprogramming
+ast = import "ast"
+
+main world =
+  node = ast.App (ast.Var "f") (ast.Lam "x" (ast.Var "x"))
+  world.io.println (tag node)
+  world.io.println (tag node.fn)
+  world.io.println node.fn.name
+  world.io.println (tag node.arg)
+  world.io.println node.arg.param

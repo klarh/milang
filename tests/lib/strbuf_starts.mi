@@ -1,0 +1,8 @@
+_rev xs = fold (\acc x -> concat [x] acc) [] xs
+from str = [str]
+build buf = join "" (_rev buf)
+startsWith buf x = startsWith (build buf) x
+endsWith buf x = endsWith (build buf) x
+split buf sep = split (build buf) sep
+to_words buf = words (build buf)
+to_lines buf = lines (build buf)

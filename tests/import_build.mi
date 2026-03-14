@@ -1,0 +1,7 @@
+-- Test: import "build" gives compile-time build info
+b = import "build"
+
+main world =
+  world.io.println b.target
+  world.io.println b.os
+  world.io.println b.arch

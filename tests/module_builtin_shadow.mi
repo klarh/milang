@@ -1,0 +1,6 @@
+fold x = x
+
+m = import "lib/double_sum.mi"
+
+main world =
+  world.process.exit (m.double_sum [1, 2, 3] - 12)

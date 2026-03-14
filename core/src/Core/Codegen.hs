@@ -149,6 +149,18 @@ captureIO st hidden expr = do
         emit "  mi_env_set(_env, \"__b_getField\", mi_native(mi_builtin_getField));\n"
         emit "  mi_env_set(_env, \"__b_setField\", mi_native(mi_builtin_setField));\n"
         emit "  mi_env_set(_env, \"__b_gc_manage\", mi_native(mi_builtin_gc_manage));\n"
+        -- __p_ aliases: prelude-internal cross-references renamed to avoid
+        -- being captured by module-level shadows
+        emit "  mi_env_set(_env, \"__p_len\", mi_native(mi_builtin_len));\n"
+        emit "  mi_env_set(_env, \"__p_slice\", mi_native(mi_builtin_slice));\n"
+        emit "  mi_env_set(_env, \"__p_indexOf\", mi_native(mi_builtin_indexOf));\n"
+        emit "  mi_env_set(_env, \"__p_split\", mi_native(mi_builtin_split));\n"
+        emit "  mi_env_set(_env, \"__p_trim\", mi_native(mi_builtin_trim));\n"
+        emit "  mi_env_set(_env, \"__p_toUpper\", mi_native(mi_builtin_toUpper));\n"
+        emit "  mi_env_set(_env, \"__p_toLower\", mi_native(mi_builtin_toLower));\n"
+        emit "  mi_env_set(_env, \"__p_replace\", mi_native(mi_builtin_replace));\n"
+        emit "  mi_env_set(_env, \"__p_toString\", mi_native(mi_builtin_toString));\n"
+        emit "  mi_env_set(_env, \"__p_charAt\", mi_native(mi_builtin_charAt));\n"
         emit "\n"
   case expr of
     Namespace bs -> do

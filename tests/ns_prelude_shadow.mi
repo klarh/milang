@@ -1,0 +1,14 @@
+sb = import "lib/strbuf_starts.mi"
+
+main world =
+  result1 = sb.startsWith (sb.from "hello") "he"
+  result2 = sb.startsWith (sb.from "hello") "lo"
+  result3 = sb.endsWith (sb.from "hello") "lo"
+  result4 = sb.endsWith (sb.from "hello") "he"
+  world.io.println (toString result1)
+  world.io.println (toString result2)
+  world.io.println (toString result3)
+  world.io.println (toString result4)
+  world.io.println (toString (sb.split (sb.from "a,b,c") ","))
+  world.io.println (toString (sb.to_words (sb.from "hello world")))
+  world.io.println (toString (sb.to_lines (sb.from "one\ntwo")))

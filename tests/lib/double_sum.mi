@@ -1,0 +1,1 @@
+double_sum xs = fold (\acc x -> acc + x + x) 0 xs
