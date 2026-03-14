@@ -244,9 +244,13 @@ loadAndParse file = do
 -- | Inject prelude bindings before user bindings
 injectPrelude :: Bool -> Expr -> Expr
 injectPrelude True (Namespace bs) =
-  Namespace (preludeBindings ++ [buildBinding] ++ bs)
+  let preludeBind = mkBind "_prelude" specialPrelude
+      spreadBind = Binding Value "..." [] (Name "_prelude") Nothing
+  in Namespace ([preludeBind, spreadBind] ++ [buildBinding] ++ bs)
 injectPrelude True e =
-  Namespace (preludeBindings ++ [buildBinding] ++ [mkBind "_main" e])
+  let preludeBind = mkBind "_prelude" specialPrelude
+      spreadBind = Binding Value "..." [] (Name "_prelude") Nothing
+  in Namespace ([preludeBind, spreadBind] ++ [buildBinding] ++ [mkBind "_main" e])
 injectPrelude False e = e
 
 -- | Compile-time build info record (target, os, arch)

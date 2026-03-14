@@ -14,9 +14,10 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Graph (stronglyConnComp, SCC(..))
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, foldl')
 import Text.Read (readMaybe)
-import Data.Char (isUpper)
+import Data.Char (isUpper, ord)
+import Data.Bits (xor)
 
 
 import Core.Syntax
@@ -151,10 +152,11 @@ isOperatorName t = not (T.null t) && T.all (`elem` ("+-*/^<>=!&|@%?:" :: String)
 reduce :: Env -> Expr -> (Expr, [Warning])
 reduce env e = case e of
   Namespace _ ->
-    let letNames = Set.fromList [bindName b | b <- nsBindings e]
+    let allBs = expandSpreads (nsBindings e)
+        letNames = Set.fromList [bindName b | b <- allBs]
         envWithLet = env { envLetBound = Set.union letNames (envLetBound env) }
-        env' = evalBindings maxDepth envWithLet (nsBindings e)
-        expanded = concatMap expandUnion (nsBindings e)
+        env' = evalBindings maxDepth envWithLet allBs
+        expanded = concatMap expandUnion allBs
         (valueBs, annotBs) = partitionBindings expanded
         mergedValues = mergeOpenDefs valueBs
         valBs' = map (reduceBind maxDepth env') mergedValues
@@ -170,10 +172,11 @@ reduce env e = case e of
 reduceWithEnv :: Env -> Expr -> (Env, Expr, [Warning])
 reduceWithEnv env e = case e of
   Namespace _ ->
-    let letNames = Set.fromList [bindName b | b <- nsBindings e]
+    let allBs = expandSpreads (nsBindings e)
+        letNames = Set.fromList [bindName b | b <- allBs]
         envWithLet = env { envLetBound = Set.union letNames (envLetBound env) }
-        env' = evalBindings maxDepth envWithLet (nsBindings e)
-        expanded = concatMap expandUnion (nsBindings e)
+        env' = evalBindings maxDepth envWithLet allBs
+        expanded = concatMap expandUnion allBs
         (valueBs, annotBs) = partitionBindings expanded
         mergedValues = mergeOpenDefs valueBs
         valBs' = map (reduceBind maxDepth env') mergedValues
@@ -361,7 +364,8 @@ reduceD d env (FieldAccess e field) =
        _        -> result
 
 reduceD d env (Namespace bindings) =
-  let expanded = concatMap expandUnion bindings
+  let allBs = expandSpreads bindings
+      expanded = concatMap expandUnion allBs
       (valueBs, annotBs) = partitionBindings expanded
       mergedValues = mergeOpenDefs valueBs
       letNames = Set.fromList [bindName b | b <- expanded]
@@ -1312,6 +1316,110 @@ ffiOpaqueBindings defaultHdr (typeName, incl, accessors) =
       let accName = typeName <> "_" <> T.replace "." "_" fieldPath
           cName = "__acc:" <> typeName <> ":" <> fieldPath
       in mkBind accName (CFunction accHdr cName ctype [CPtr typeName] isStd)
+
+-- | Expand spread bindings ({...} = expr).
+-- A spread binding has bindName "..." and body is the source expression.
+-- If the body is a Namespace or Record, each field becomes its own binding.
+-- Internal cross-references get unique prefixed names so that user definitions
+-- with the same name don't shadow the internal implementation.
+expandSpreads :: [Binding] -> [Binding]
+expandSpreads bs = concatMap expand bs
+  where
+    -- Map from binding name to body, for resolving Name references
+    nameMap = Map.fromList [(bindName b, bindBody b) | b <- bs]
+
+    expand b
+      | bindName b == "..." = spreadFields (bindBody b)
+      | otherwise = [b]
+
+    spreadFields expr = case resolveNS expr of
+      Just ns ->
+        let -- Only rename lowercase/operator names — uppercase names are
+            -- types/constructors and must keep their original names for
+            -- type checking and pattern matching.
+            shouldRename n = not (T.null n) && not (isUpper (T.head n))
+            -- Names eligible for shadow-protection renaming
+            nsNames = Set.fromList [bindName d | d <- ns, shouldRename (bindName d)]
+            -- Unique prefix based on hash of all binding names
+            prefix = "_S" <> T.pack (show (nsHash ns)) <> "_"
+            -- Rename function: only renames names in the rename set
+            ren n = if n `Set.member` nsNames then prefix <> n else n
+            -- Internal bindings with unique prefixed names (only for renameable)
+            internalBs = concatMap (mkInternal ren nsNames) ns
+            -- Alias bindings: concat = Name "_S123_concat"
+            aliasBs = [Binding (bindDomain d) (bindName d) []
+                         (Name (prefix <> bindName d)) (bindPos d)
+                      | d <- ns
+                      , bindDomain d `elem` [Value, Lazy]
+                      , shouldRename (bindName d)]
+            -- Bindings that are NOT renamed: types/constructors + non-value
+            passThroughBs = [d | d <- ns
+                            , bindDomain d `notElem` [Value, Lazy]
+                              || not (shouldRename (bindName d))]
+        in internalBs ++ aliasBs ++ passThroughBs
+      Nothing -> []
+
+    resolveNS (Namespace ns) = Just ns
+    resolveNS (Record _ rs)  = Just rs
+    resolveNS (Name n)       = case Map.lookup n nameMap of
+      Just (Namespace ns) -> Just ns
+      Just (Record _ rs)  -> Just rs
+      _ -> Nothing
+    resolveNS _ = Nothing
+
+    mkInternal ren nsNames d
+      | bindDomain d `elem` [Value, Lazy]
+      , n <- bindName d
+      , not (T.null n), not (isUpper (T.head n)) =
+          let body = wrapLambda (bindParams d) (bindBody d)
+              body' = renameNsRefs ren nsNames body
+          in [Binding (bindDomain d) (ren n) [] body' (bindPos d)]
+      | otherwise = []
+
+    -- Simple hash of namespace binding names for unique prefix
+    nsHash ns = abs $ foldl' (\h b -> h `xor` textHash (bindName b)) 0 ns
+    textHash t = T.foldl' (\h c -> h * 31 + ord c) 0 t
+
+-- | Rename namespace-internal Name references in an expression.
+-- Only renames Name nodes where the name is in nsNames.
+-- Respects lambda parameter shadowing.
+renameNsRefs :: (Text -> Text) -> Set.Set Text -> Expr -> Expr
+renameNsRefs ren nsNames = go
+  where
+    go (Name n)
+      | n `Set.member` nsNames = Name (ren n)
+      | otherwise = Name n
+    go (App f x) = App (go f) (go x)
+    go (BinOp op l r) =
+      -- Don't rename BinOp operators — they must match reduceBinOp/codegen
+      BinOp op (go l) (go r)
+    go (Lam p b) =
+      -- If param shadows a namespace name, don't rename in the body
+      let pn = lamParamName p
+          nsNames' = Set.delete pn nsNames
+      in if Set.null nsNames' then Lam p b  -- nothing left to rename
+         else Lam p (renameNsRefs ren nsNames' b)
+    go (Record tag bs) = Record tag (map goB bs)
+    go (Namespace bs) = Namespace (map goB bs)
+    go (FieldAccess e f) = FieldAccess (go e) f
+    go (Case s alts) = Case (go s) (map goAlt alts)
+    go (With e bs) = With (go e) (map goB bs)
+    go (Thunk e) = Thunk (go e)
+    go (ListLit es) = ListLit (map go es)
+    go (Quote e) = Quote (go e)
+    go (Splice e) = Splice (go e)
+    go e = e  -- IntLit, FloatLit, SizedInt, SizedFloat, StringLit, Builtin, CFunction, Import, Error
+
+    goB b = b { bindBody = go (bindBody b)
+              , bindParams = bindParams b }
+
+    goAlt (Alt p g body) =
+      -- Remove pattern-bound variables from rename set
+      let pvs = patVars p
+          nsNames' = Set.difference nsNames pvs
+      in if Set.null nsNames' then Alt p g body
+         else Alt p (fmap (renameNsRefs ren nsNames') g)
+                     (renameNsRefs ren nsNames' body)
 
 -- | Expand union declarations
 expandUnion :: Binding -> [Binding]

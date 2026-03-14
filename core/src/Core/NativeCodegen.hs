@@ -839,14 +839,18 @@ emitFlatFn st name allParams innerBody = do
   -- Check if body is self-recursive
   let isSelfRec = Set.member name bodyFvs
 
+  -- Emit forward declaration so thunks generated during body compilation
+  -- can reference this flat function (they're emitted before the definition)
+  let paramDecls = intercalate ", " ["MiVal " ++ cv | cv <- paramCVars]
+  addTopDef st $ "static MiVal " ++ flatFnName ++ "(" ++ paramDecls ++ ", void *_env_raw);\n"
+
   -- Compile body with tail call support if self-recursive
   bodyC <- if isSelfRec
     then nTailBodyToC bodyScope name (length allParams) paramCVars label innerBody
     else nExprToC bodyScope innerBody
 
   -- Emit flat function
-  let paramDecls = intercalate ", " ["MiVal " ++ cv | cv <- paramCVars]
-      envSetup = if null capturedNames
+  let envSetup = if null capturedNames
         then "  (void)_env_raw;\n"
         else "  " ++ envTypeName ++ " *_env = (" ++ envTypeName ++ " *)_env_raw;\n"
       labelDecl = if isSelfRec then "  " ++ label ++ ":;\n" else ""
