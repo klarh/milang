@@ -1,0 +1,24 @@
+-- BUG/PERF: Function arguments are re-evaluated (call-by-name, not call-by-need)
+--
+-- When an expensive expression is passed as a function argument,
+-- it is re-evaluated every time the parameter is referenced.
+-- Binding to a let-variable memoizes it correctly.
+--
+-- This creates a severe performance cliff for functions that
+-- reference their parameter multiple times.
+
+build n acc = if (n <= 0) acc (build (n - 1) (acc + "abcdefghij"))
+
+-- This function references s multiple times (in strlen and fold lambda)
+use_s s = fold (\acc i -> acc + strlen s) 0 (range 0 10)
+
+main world =
+  -- FAST: let-bound argument (evaluated once)
+  s = build 1000 ""
+  world.io.println ("let-bound: " + toString (use_s s))
+
+  -- SLOW/HANGS: inline argument (re-evaluated on every reference to s)
+  -- Uncomment to observe:
+  -- world.io.println ("inline: " + toString (use_s (build 1000 "")))
+
+  world.io.println ("workaround: always bind expensive expressions to variables")

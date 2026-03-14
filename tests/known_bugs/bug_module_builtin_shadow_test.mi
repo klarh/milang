@@ -1,0 +1,6 @@
+m = import "bug_shadow_module.mi"
+main world =
+  -- Test 2: helper bi_trim intended to capture builtin trim
+  world.io.println (m.build (m.trim (m.from "  hello  ")))
+  -- Expected: "hello"
+  -- Actual: "match: no matching pattern" (bi_trim calls module trim, not builtin)
