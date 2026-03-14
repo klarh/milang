@@ -1,14 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Core.Reduce
-  ( reduce, reduceWithEnv, Env, emptyEnv
+  ( reduce, reduceWithEnv, Env, emptyEnv, builtinEnv
   , Warning(..), warnings
   , exprFreeVars
   , envInsert, envMap, envLookup
-  , protectPrelude
   , substExpr
   , nativeBuiltinNames
   , builtinNames
-  , renameOverrides
   ) where
 
 import Data.Text (Text)
@@ -19,7 +17,7 @@ import Data.Graph (stronglyConnComp, SCC(..))
 import Data.List (isPrefixOf)
 import Text.Read (readMaybe)
 import Data.Char (isUpper)
-import Data.Maybe (isNothing)
+
 
 import Core.Syntax
 import Core.Prelude (ffiNamespace)
@@ -44,6 +42,13 @@ data Warning
 
 emptyEnv :: Env
 emptyEnv = Env Map.empty Set.empty Set.empty Set.empty Map.empty Map.empty []
+
+-- | Initial env with Builtin entries for all builtin names.
+-- When the prelude is evaluated, its definitions override these entries.
+-- Prelude bodies that reference builtins before they're overridden get
+-- unshadowable Builtin nodes baked in.
+builtinEnv :: Env
+builtinEnv = foldl (\e n -> envInsert n (Builtin n) e) emptyEnv (Set.toList builtinNames)
 
 warnings :: Env -> [Warning]
 warnings = envWarns
@@ -92,6 +97,7 @@ isResidual (FloatLit _)    = False
 isResidual (SizedInt {})   = False
 isResidual (SizedFloat {}) = False
 isResidual (StringLit _)   = False
+isResidual (Builtin _)     = False
 isResidual (Record _ bs)   = any (isResidual . bindBody) bs
 isResidual _               = True
 
@@ -184,6 +190,7 @@ reduceD _ _ e@(FloatLit _)    = e
 reduceD _ _ e@(SizedInt {})   = e
 reduceD _ _ e@(SizedFloat {}) = e
 reduceD _ _ e@(StringLit _)   = e
+reduceD _ _ e@(Builtin _)    = e
 reduceD _ _ e@(Error _)       = e
 
 reduceD d env (Name n) =
@@ -229,7 +236,8 @@ reduceD d env (BinOp op l r) =
 reduceD d env (App f x) =
   -- Check for single-arg builtins by name before env lookup (e.g. len on strings)
   case f of
-    Name n | Just r <- tryBuiltin1 d env n x -> r
+    Name n    | Just r <- tryBuiltin1 d env n x -> r
+    Builtin n | Just r <- tryBuiltin1 d env n x -> r
     _ -> case collectApp (App f x) of
       (Name n, args) | envIsRec n env ->
         let args' = map (reduceD d env) args
@@ -353,23 +361,7 @@ reduceD d env (FieldAccess e field) =
        _        -> result
 
 reduceD d env (Namespace bindings) =
-  let expanded0 = concatMap expandUnion bindings
-      (valueBs0, _) = partitionBindings expanded0
-      mergedValues0 = mergeOpenDefs valueBs0
-      -- Protect builtin references: when a module binding shadows a native
-      -- builtin name (e.g., defines "trim"), other bindings that reference
-      -- the builtin get renamed to "__b_name" so the codegen maps them to
-      -- the C builtin function, not the module's overriding variable.
-      moduleNames = Set.fromList [bindName b | b <- mergedValues0]
-      shadowedNative = Set.intersection moduleNames nativeBuiltinNames
-      builtinRenameMap = Map.fromList
-        [(n, "__b_" <> n) | n <- Set.toList shadowedNative]
-      renameBinding b
-        | bindName b `Set.member` shadowedNative = b
-        | Map.null builtinRenameMap = b
-        | otherwise = b { bindBody = renameOverrides builtinRenameMap
-                            (Set.fromList (bindParams b)) (bindBody b) }
-      expanded = map renameBinding expanded0
+  let expanded = concatMap expandUnion bindings
       (valueBs, annotBs) = partitionBindings expanded
       mergedValues = mergeOpenDefs valueBs
       letNames = Set.fromList [bindName b | b <- expanded]
@@ -587,6 +579,21 @@ reduceBind d env b = case bindDomain b of
 -- ── Application reduction ─────────────────────────────────────────
 
 reduceApp :: Int -> Env -> Expr -> Expr -> Expr
+-- Builtin normalization: convert Builtin to Name for pattern dispatch.
+-- If the result is residual (App), restore Builtin markers so codegen
+-- knows this is a builtin, not a user-defined name.
+reduceApp d env f x
+  | Just f' <- normBuiltinApp f =
+    let result = reduceApp d env f' x
+    in case result of
+         App _ _ -> App f x   -- residual: keep original Builtin markers
+         _       -> result    -- concrete: use reduced result
+  where
+    normBuiltinApp (Builtin n) = Just (Name n)
+    normBuiltinApp (App inner y) = case normBuiltinApp inner of
+      Just inner' -> Just (App inner' y)
+      Nothing     -> Nothing
+    normBuiltinApp _ = Nothing
 -- Quoted parameter: auto-quote the argument (don't evaluate it)
 reduceApp d env (Lam p body) arg
   | isQuotedParam p =
@@ -761,8 +768,7 @@ builtinNames = Set.fromList
   ]
 
 -- | Subset of builtins that have native C implementations (in NativeCodegen's
--- builtinEntries).  Only these names get __b_ renaming when shadowed, because
--- names like "concat" and "join" are prelude-defined without a C builtin.
+-- builtinEntries).
 nativeBuiltinNames :: Set.Set Text
 nativeBuiltinNames = Set.fromList
   [ "len", "trim", "toUpper", "toLower", "toString", "toInt", "toFloat"
@@ -828,9 +834,6 @@ tryBuiltin1 d env "floor" x = case reduceD d env x of
 tryBuiltin1 d env "ceil" x = case reduceD d env x of
   FloatLit f -> Just $ IntLit (Prelude.ceiling f)
   _          -> Nothing
-tryBuiltin1 d env n x
-  | Just n' <- T.stripPrefix "__b_" n = tryBuiltin1 d env n' x
-  | Just n' <- T.stripPrefix "__p_" n = tryBuiltin1 d env n' x
 tryBuiltin1 _ _ _ _ = Nothing
 
 -- ── Binary operator reduction ─────────────────────────────────────
@@ -1357,90 +1360,6 @@ chainBodies new old = case (new, old) of
       PVar _ -> True
       _      -> False
 
--- ── Prelude protection ────────────────────────────────────────────
--- When a user fully overrides a prelude function (chainBodies fails),
--- other prelude functions that reference it would break.  We preserve
--- the prelude version under __p_<name> and rewrite prelude-internal
--- cross-references so they use the protected name.  Open-function
--- extensions (chainBodies succeeds) are left alone.
-
-protectPrelude :: [Binding] -> [Binding] -> ([Binding], [Binding])
-protectPrelude preludeBs userBs =
-  let preludeValueNames = Set.fromList
-        [bindName b | b <- preludeBs, bindDomain b `elem` [Value, Lazy]]
-      userValueNames = Set.fromList
-        [bindName b | b <- userBs, bindDomain b `elem` [Value, Lazy]]
-      conflicts = Set.intersection preludeValueNames userValueNames
-  in if Set.null conflicts
-     then (preludeBs, userBs)
-     else
-       let preludeMap = Map.fromList
-             [(bindName b, b) | b <- preludeBs, bindDomain b `elem` [Value, Lazy]]
-           userMap = Map.fromList
-             [(bindName b, b) | b <- userBs, bindDomain b `elem` [Value, Lazy]]
-           isOverride name = case (Map.lookup name preludeMap, Map.lookup name userMap) of
-             (Just pb, Just ub) ->
-               isNothing (chainBodies
-                 (wrapLambda (bindParams ub) (bindBody ub))
-                 (wrapLambda (bindParams pb) (bindBody pb)))
-             _ -> False
-           overrides = Set.filter isOverride conflicts
-       in if Set.null overrides
-          then (preludeBs, userBs)
-          else
-            let renameMap = Map.fromList
-                  [(n, "__p_" <> n) | n <- Set.toList overrides]
-                modifyB b
-                  | bindDomain b `elem` [Value, Lazy] =
-                    b { bindBody = renameOverrides renameMap
-                          (Set.fromList (bindParams b)) (bindBody b) }
-                  | otherwise = b
-                modified = map modifyB preludeBs
-                internals = [ (modifyB (preludeMap Map.! n))
-                                { bindName = "__p_" <> n }
-                            | n <- Set.toList overrides ]
-                -- Rename inside user bindings: overriding bodies and
-                -- Namespace bodies (imported modules) use __p_ versions
-                -- so they resolve to the prelude definition, not the shadow
-                modifyUserB b
-                  | Map.member (bindName b) renameMap =
-                    b { bindBody = renameOverrides renameMap
-                          (Set.fromList (bindParams b)) (bindBody b) }
-                  | otherwise = case bindBody b of
-                      Namespace _ ->
-                        b { bindBody = renameOverrides renameMap Set.empty (bindBody b) }
-                      _ -> b
-                modifiedUser = map modifyUserB userBs
-            in (modified ++ internals, modifiedUser)
-
--- | Rename references to overridden prelude names, respecting scoping.
-renameOverrides :: Map.Map Text Text -> Set.Set Text -> Expr -> Expr
-renameOverrides renames = go
-  where
-    rename bound n
-      | Set.member n bound = n
-      | otherwise = Map.findWithDefault n n renames
-    go bound (Name n)          = Name (rename bound n)
-    go bound (App f x)         = App (go bound f) (go bound x)
-    go bound (BinOp op l r)    = BinOp op (go bound l) (go bound r)
-    go bound (Lam p body)      = Lam p (go (Set.insert (lamParamName p) bound) body)
-    go bound (Case scrut alts) = Case (go bound scrut) (map (goAlt bound) alts)
-    go bound (Record tag bs)   = Record tag (map (goBind bound) bs)
-    go bound (FieldAccess e f) = FieldAccess (go bound e) f
-    go bound (Namespace bs)    = Namespace (map (goBind bound) bs)
-    go bound (With ns bs)      = With (go bound ns) (map (goBind bound) bs)
-    go bound (ListLit es)      = ListLit (map (go bound) es)
-    go bound (Quote e)         = Quote (go bound e)
-    go bound (Splice e)        = Splice (go bound e)
-    go bound (Thunk e)         = Thunk (go bound e)
-    go _     e                 = e
-    goAlt bound (Alt pat guard body) =
-      let bound' = Set.union bound (patVars pat)
-      in Alt pat (fmap (go bound') guard) (go bound' body)
-    goBind bound b =
-      let bound' = Set.union bound (Set.fromList (bindParams b))
-      in b { bindBody = go bound' (bindBody b) }
-
 -- ── Free variables ────────────────────────────────────────────────
 
 exprFreeVars :: Expr -> Set.Set Text
@@ -1465,6 +1384,7 @@ exprFreeVars (Import _)      = Set.empty
 exprFreeVars (Quote e)       = exprFreeVars e
 exprFreeVars (Splice e)      = exprFreeVars e
 exprFreeVars (CFunction {})  = Set.empty
+exprFreeVars (Builtin n)     = Set.singleton n
 exprFreeVars (Error _)       = Set.empty
 
 bindingFreeVars :: Binding -> Set.Set Text
@@ -1532,6 +1452,7 @@ substExpr var replacement = go
     go (Quote e)       = Quote (go e)
     go (Splice e)      = Splice (go e)
     go e@(CFunction {}) = e
+    go e@(Builtin _)    = e
     go e@(Error _)     = e
 
     goBind b = b { bindBody = go (bindBody b) }
@@ -1592,6 +1513,7 @@ quoteExpr (Namespace bs) = Record "Let"
 quoteExpr (Quote e)      = Record "Quote" [mkBind "body" (quoteExpr e)]
 quoteExpr (Splice e)     = Record "Splice" [mkBind "body" (quoteExpr e)]
 quoteExpr (CFunction {}) = Record "CFunc" []
+quoteExpr (Builtin name) = Record "Builtin" [mkBind "name" (StringLit name)]
 quoteExpr (Error msg)    = Record "Error" [mkBind "msg" (StringLit msg)]
 quoteExpr e              = Record "Unknown" [mkBind "val" e]
 

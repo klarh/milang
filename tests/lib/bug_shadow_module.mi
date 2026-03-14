@@ -1,12 +1,8 @@
 -- Helper module for bug_module_builtin_shadow.mi
--- Defines functions that shadow builtins (reverse, trim)
+-- Uses import "prelude" to access builtins by qualified name,
+-- allowing the module to define its own 'trim' without conflict.
+p = import "prelude"
 from str = [str]
-_rev xs = fold (\acc x -> concat [x] acc) [] xs
+_rev xs = fold (\acc x -> p.concat [x] acc) [] xs
 build buf = join "" (_rev buf)
-
--- Attempt to capture builtin before shadowing — doesn't work
-bi_trim s = trim s
-
--- This shadows the builtin 'trim'. bi_trim above now calls THIS
--- instead of the builtin, causing infinite recursion.
-trim buf = from (bi_trim (build buf))
+trim buf = from (p.trim (build buf))

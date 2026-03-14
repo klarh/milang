@@ -1,3 +1,4 @@
+-- Test: module uses import "prelude" to access fold despite user shadow.
 fold x = x
 
 m = import "lib/double_sum.mi"

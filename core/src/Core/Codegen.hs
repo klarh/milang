@@ -123,44 +123,6 @@ captureIO st hidden expr = do
         emit "  mi_env_set(_env, \"gc_manage\", mi_native(mi_builtin_gc_manage));\n"
         emit "  mi_env_set(_env, \"__sized_int\", mi_native(mi_builtin_sized_int));\n"
         emit "  mi_env_set(_env, \"__sized_uint\", mi_native(mi_builtin_sized_uint));\n"
-        -- __b_ aliases for builtin references renamed by module shadow fix
-        emit "  mi_env_set(_env, \"__b_if\", mi_native(mi_builtin_if));\n"
-        emit "  mi_env_set(_env, \"__b_truthy\", mi_native(mi_builtin_truthy));\n"
-        emit "  mi_env_set(_env, \"__b_len\", mi_native(mi_builtin_len));\n"
-        emit "  mi_env_set(_env, \"__b_strlen\", mi_native(mi_builtin_len));\n"
-        emit "  mi_env_set(_env, \"__b_charAt\", mi_native(mi_builtin_charAt));\n"
-        emit "  mi_env_set(_env, \"__b_slice\", mi_native(mi_builtin_slice));\n"
-        emit "  mi_env_set(_env, \"__b_indexOf\", mi_native(mi_builtin_indexOf));\n"
-        emit "  mi_env_set(_env, \"__b_split\", mi_native(mi_builtin_split));\n"
-        emit "  mi_env_set(_env, \"__b_trim\", mi_native(mi_builtin_trim));\n"
-        emit "  mi_env_set(_env, \"__b_toUpper\", mi_native(mi_builtin_toUpper));\n"
-        emit "  mi_env_set(_env, \"__b_toLower\", mi_native(mi_builtin_toLower));\n"
-        emit "  mi_env_set(_env, \"__b_replace\", mi_native(mi_builtin_replace));\n"
-        emit "  mi_env_set(_env, \"__b_toString\", mi_native(mi_builtin_toString));\n"
-        emit "  mi_env_set(_env, \"__b_toInt\", mi_native(mi_builtin_toInt));\n"
-        emit "  mi_env_set(_env, \"__b_toFloat\", mi_native(mi_builtin_toFloat));\n"
-        emit "  mi_env_set(_env, \"__b_float\", mi_native(mi_builtin_float));\n"
-        emit "  mi_env_set(_env, \"__b_round\", mi_native(mi_builtin_round));\n"
-        emit "  mi_env_set(_env, \"__b_floor\", mi_native(mi_builtin_floor));\n"
-        emit "  mi_env_set(_env, \"__b_ceil\", mi_native(mi_builtin_ceil));\n"
-        emit "  mi_env_set(_env, \"__b_fields\", mi_native(mi_builtin_fields));\n"
-        emit "  mi_env_set(_env, \"__b_fieldNames\", mi_native(mi_builtin_fieldNames));\n"
-        emit "  mi_env_set(_env, \"__b_tag\", mi_native(mi_builtin_tag));\n"
-        emit "  mi_env_set(_env, \"__b_getField\", mi_native(mi_builtin_getField));\n"
-        emit "  mi_env_set(_env, \"__b_setField\", mi_native(mi_builtin_setField));\n"
-        emit "  mi_env_set(_env, \"__b_gc_manage\", mi_native(mi_builtin_gc_manage));\n"
-        -- __p_ aliases: prelude-internal cross-references renamed to avoid
-        -- being captured by module-level shadows
-        emit "  mi_env_set(_env, \"__p_len\", mi_native(mi_builtin_len));\n"
-        emit "  mi_env_set(_env, \"__p_slice\", mi_native(mi_builtin_slice));\n"
-        emit "  mi_env_set(_env, \"__p_indexOf\", mi_native(mi_builtin_indexOf));\n"
-        emit "  mi_env_set(_env, \"__p_split\", mi_native(mi_builtin_split));\n"
-        emit "  mi_env_set(_env, \"__p_trim\", mi_native(mi_builtin_trim));\n"
-        emit "  mi_env_set(_env, \"__p_toUpper\", mi_native(mi_builtin_toUpper));\n"
-        emit "  mi_env_set(_env, \"__p_toLower\", mi_native(mi_builtin_toLower));\n"
-        emit "  mi_env_set(_env, \"__p_replace\", mi_native(mi_builtin_replace));\n"
-        emit "  mi_env_set(_env, \"__p_toString\", mi_native(mi_builtin_toString));\n"
-        emit "  mi_env_set(_env, \"__p_charAt\", mi_native(mi_builtin_charAt));\n"
         emit "\n"
   case expr of
     Namespace bs -> do
@@ -233,6 +195,26 @@ bindingEvalCode st b = do
 
 -- ── Expression → MiExpr* construction ─────────────────────────────
 
+-- | Map builtin names to their C runtime function identifiers.
+-- Used by Builtin AST node codegen to emit direct references.
+builtinCNames :: Map.Map Text String
+builtinCNames = Map.fromList
+  [ ("if", "mi_builtin_if"), ("truthy", "mi_builtin_truthy")
+  , ("len", "mi_builtin_len"), ("strlen", "mi_builtin_len")
+  , ("charAt", "mi_builtin_charAt"), ("slice", "mi_builtin_slice")
+  , ("indexOf", "mi_builtin_indexOf"), ("split", "mi_builtin_split")
+  , ("trim", "mi_builtin_trim"), ("toUpper", "mi_builtin_toUpper")
+  , ("toLower", "mi_builtin_toLower"), ("replace", "mi_builtin_replace")
+  , ("toString", "mi_builtin_toString"), ("_toString", "mi_builtin_toString")
+  , ("toInt", "mi_builtin_toInt"), ("toFloat", "mi_builtin_toFloat")
+  , ("float", "mi_builtin_float"), ("round", "mi_builtin_round")
+  , ("floor", "mi_builtin_floor"), ("ceil", "mi_builtin_ceil")
+  , ("fields", "mi_builtin_fields"), ("fieldNames", "mi_builtin_fieldNames")
+  , ("tag", "mi_builtin_tag"), ("getField", "mi_builtin_getField")
+  , ("setField", "mi_builtin_setField"), ("gc_manage", "mi_builtin_gc_manage")
+  , ("__sized_int", "mi_builtin_sized_int"), ("__sized_uint", "mi_builtin_sized_uint")
+  ]
+
 -- | Wrap a C expression with source location
 withLoc :: Maybe SrcPos -> String -> String
 withLoc Nothing c = c
@@ -264,6 +246,13 @@ exprToC _ (Name n)
   | "__mod_" `T.isPrefixOf` n && "__" `T.isSuffixOf` n =
     pure "mi_expr_string(\"<closure>\")"  -- circular module reference placeholder
   | otherwise = pure $ "mi_expr_name(\"" ++ T.unpack n ++ "\")"
+
+-- | Builtin: emit a direct reference to the C builtin function,
+-- bypassing env lookup so module-level shadows don't intercept.
+exprToC _ (Builtin n) =
+  case Map.lookup n builtinCNames of
+    Just cfn -> pure $ "mi_native(" ++ cfn ++ ")"
+    Nothing  -> pure $ "mi_expr_name(\"" ++ T.unpack n ++ "\")"
 
 exprToC st (BinOp op l r)
   | not (isBuiltinOp op) = do

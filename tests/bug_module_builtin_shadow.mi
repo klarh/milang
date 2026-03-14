@@ -1,16 +1,8 @@
--- BUG: Module-level definitions shadow builtins in imported modules
---
--- When a module defines a function with the same name as a builtin,
--- the builtin becomes inaccessible in the entire module — even in
--- helper functions defined before the shadowing definition.
+-- Test: Module uses import "prelude" to access builtins it shadows.
+-- The module defines its own 'trim' that wraps the builtin via p.trim.
 --
 -- Run: milang run tests/bug_module_builtin_shadow.mi
 -- Expected: prints "hello"
--- Actual: "match: no matching pattern" (infinite recursion between
---         trim -> bi_trim -> trim -> bi_trim -> ...)
---
--- Root cause: module letrec scoping resolves ALL references to 'trim'
--- (including in bi_trim) to the module's definition, not the builtin.
 
 m = import "lib/bug_shadow_module.mi"
 

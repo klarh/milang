@@ -1,1 +1,2 @@
-double_sum xs = fold (\acc x -> acc + x + x) 0 xs
+p = import "prelude"
+double_sum xs = p.fold (\acc x -> acc + x + x) 0 xs

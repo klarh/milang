@@ -223,6 +223,13 @@ nExprToC st (Name n) =
         -- Emit a runtime error for debugging.
         pure $ "(mi_error(NULL, \"native codegen: unbound variable: " ++ T.unpack n ++ "\"), mi_int(0))"
 
+-- Builtin: emit a direct reference to the C builtin function,
+-- bypassing scope lookup so module-level shadows don't intercept.
+nExprToC st (Builtin n) =
+  case Map.lookup n nativeBuiltinCExprs of
+    Just cexpr -> pure cexpr
+    Nothing    -> nExprToC st (Name n)  -- fallback for non-native builtins
+
 nExprToC st (BinOp op l r)
   | isBuiltinOp op = do
     let lt = inferType st l
@@ -1399,43 +1406,40 @@ isMainBinding b = bindName b == "main" &&
 -- | Built-in functions registered in main()
 builtinEntries :: [(String, String)]
 builtinEntries =
-  let base =
-        [ ("if",          "mi_native(mi_builtin_if)")
-        , ("truthy",      "mi_native(mi_builtin_truthy)")
-        , ("strlen",      "mi_native(mi_builtin_len)")
-        , ("len",         "mi_native(mi_builtin_len)")
-        , ("charAt",      "mi_native(mi_builtin_charAt)")
-        , ("slice",       "mi_native(mi_builtin_slice)")
-        , ("indexOf",     "mi_native(mi_builtin_indexOf)")
-        , ("split",       "mi_native(mi_builtin_split)")
-        , ("trim",        "mi_native(mi_builtin_trim)")
-        , ("toUpper",     "mi_native(mi_builtin_toUpper)")
-        , ("toLower",     "mi_native(mi_builtin_toLower)")
-        , ("replace",     "mi_native(mi_builtin_replace)")
-        , ("toString",    "mi_native(mi_builtin_toString)")
-        , ("_toString",   "mi_native(mi_builtin_toString)")
-        , ("toInt",       "mi_native(mi_builtin_toInt)")
-        , ("toFloat",     "mi_native(mi_builtin_toFloat)")
-        , ("float",       "mi_native(mi_builtin_float)")
-        , ("round",       "mi_native(mi_builtin_round)")
-        , ("floor",       "mi_native(mi_builtin_floor)")
-        , ("ceil",        "mi_native(mi_builtin_ceil)")
-        , ("fields",      "mi_native(mi_builtin_fields)")
-        , ("fieldNames",  "mi_native(mi_builtin_fieldNames)")
-        , ("tag",         "mi_native(mi_builtin_tag)")
-        , ("getField",    "mi_native(mi_builtin_getField)")
-        , ("setField",    "mi_native(mi_builtin_setField)")
-        , ("gc_manage",   "mi_native(mi_builtin_gc_manage)")
-        , ("__sized_int", "mi_native(mi_builtin_sized_int)")
-        , ("__sized_uint","mi_native(mi_builtin_sized_uint)")
-        ]
-      -- __b_ and __p_ prefixed aliases: when a module shadows a builtin name,
-      -- the reducer renames references to __b_<name> (user body self-refs)
-      -- or __p_<name> (prelude internal cross-refs) so the codegen maps them
-      -- to the C builtin, not the module's variable.
-      protected = [("__b_" ++ name, code) | (name, code) <- base]
-                ++ [("__p_" ++ name, code) | (name, code) <- base]
-  in base ++ protected
+  [ ("if",          "mi_native(mi_builtin_if)")
+  , ("truthy",      "mi_native(mi_builtin_truthy)")
+  , ("strlen",      "mi_native(mi_builtin_len)")
+  , ("len",         "mi_native(mi_builtin_len)")
+  , ("charAt",      "mi_native(mi_builtin_charAt)")
+  , ("slice",       "mi_native(mi_builtin_slice)")
+  , ("indexOf",     "mi_native(mi_builtin_indexOf)")
+  , ("split",       "mi_native(mi_builtin_split)")
+  , ("trim",        "mi_native(mi_builtin_trim)")
+  , ("toUpper",     "mi_native(mi_builtin_toUpper)")
+  , ("toLower",     "mi_native(mi_builtin_toLower)")
+  , ("replace",     "mi_native(mi_builtin_replace)")
+  , ("toString",    "mi_native(mi_builtin_toString)")
+  , ("_toString",   "mi_native(mi_builtin_toString)")
+  , ("toInt",       "mi_native(mi_builtin_toInt)")
+  , ("toFloat",     "mi_native(mi_builtin_toFloat)")
+  , ("float",       "mi_native(mi_builtin_float)")
+  , ("round",       "mi_native(mi_builtin_round)")
+  , ("floor",       "mi_native(mi_builtin_floor)")
+  , ("ceil",        "mi_native(mi_builtin_ceil)")
+  , ("fields",      "mi_native(mi_builtin_fields)")
+  , ("fieldNames",  "mi_native(mi_builtin_fieldNames)")
+  , ("tag",         "mi_native(mi_builtin_tag)")
+  , ("getField",    "mi_native(mi_builtin_getField)")
+  , ("setField",    "mi_native(mi_builtin_setField)")
+  , ("gc_manage",   "mi_native(mi_builtin_gc_manage)")
+  , ("__sized_int", "mi_native(mi_builtin_sized_int)")
+  , ("__sized_uint","mi_native(mi_builtin_sized_uint)")
+  ]
+
+-- | Direct C expressions for Builtin AST nodes, bypassing scope lookup.
+nativeBuiltinCExprs :: Map.Map Text String
+nativeBuiltinCExprs = Map.fromList
+  [ (T.pack n, v) | (n, v) <- builtinEntries ]
 
 -- | Generate a complete C program using native code generation.
 -- Instead of building expression trees for mi_eval, this emits direct
