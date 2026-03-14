@@ -1,0 +1,5 @@
+m = import "lib/test_self_ref_module.mi"
+
+main world =
+  result = m.build (m.trim (m.from "  hello  "))
+  world.io.println result

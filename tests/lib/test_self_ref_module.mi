@@ -1,0 +1,4 @@
+from str = [str]
+_rev xs = fold (\acc x -> concat [x] acc) [] xs
+build buf = join "" (_rev buf)
+trim buf = from (trim (build buf))

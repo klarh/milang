@@ -270,6 +270,17 @@ reduceD d env (App f x) =
       _ ->
         let f' = reduceD d env f
         in case f' of
+          -- With-wrapped function (e.g. module lambda with recursive sibling
+          -- bindings): unwrap the With by adding its residual bindings to env,
+          -- then re-dispatch so tryBuiltin1 / Lam-app paths can fire.
+          With inner bs ->
+            let letNames = Set.fromList [bindName b | b <- bs]
+                recNames = Set.fromList [bindName b | b <- bs,
+                             bindName b `Set.member` exprFreeVars (bindBody b)]
+                env' = foldl (\e b -> envInsert (bindName b) (bindBody b) e) env bs
+                env'' = env' { envLetBound = Set.union letNames (envLetBound env')
+                             , envRec = Set.union recNames (envRec env') }
+            in reduceD d env'' (App inner x)
           -- Call-by-name for lambda application: don't evaluate arg until needed.
           -- This prevents divergence in recursive branches (e.g., if cond t e).
           -- Exception: syntactic lambdas are always safe to reduce (they can't
