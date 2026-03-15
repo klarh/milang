@@ -632,11 +632,12 @@ reduceApp d env f x
       Just inner' -> Just (App inner' y)
       Nothing     -> Nothing
     normBuiltinApp _ = Nothing
--- Quoted parameter: auto-quote the argument (don't evaluate it)
+-- Quoted parameter: auto-quote the argument (don't evaluate it).
+-- Quoted params don't consume depth since they don't evaluate their
+-- argument — they exist for control flow (if, &&, ||) and are safe.
 reduceApp d env (Lam p body) arg
   | isQuotedParam p =
     let realName = lamParamName p
-        d' = d - 1
         argFV = exprFreeVars arg
         bodyFV = exprFreeVars body
         bodyUsesParam = realName `Set.member` bodyFV
@@ -647,10 +648,10 @@ reduceApp d env (Lam p body) arg
              body' = substExpr realName (Name fresh) body
              quoted = quoteExpr arg
              env' = (envInsert fresh quoted env) { envLetBound = Set.delete fresh (envLetBound env) }
-         in reduceD d' env' body'
+         in reduceD d env' body'
        else let quoted = quoteExpr arg
                 env' = (envInsert realName quoted env) { envLetBound = Set.delete realName (envLetBound env) }
-            in reduceD d' env' body
+            in reduceD d env' body
 reduceApp d env (Lam p body) arg =
   let d' = d - 1
       argFVs = exprFreeVars arg
