@@ -92,6 +92,7 @@ maxDepth = 128
 minRecDepth :: Int
 minRecDepth = 8
 
+-- Debug: global reduction counter
 isResidual :: Expr -> Bool
 isResidual (IntLit _)      = False
 isResidual (FloatLit _)    = False
@@ -202,6 +203,8 @@ reduceWithEnv env e = case e of
     nsBindings _ = []
 
 reduceD :: Int -> Env -> Expr -> Expr
+reduceD d _ e | d <= 0 = e   -- hard depth stop
+
 reduceD _ _ e@(IntLit _)      = e
 reduceD _ _ e@(FloatLit _)    = e
 reduceD _ _ e@(SizedInt {})   = e
@@ -268,14 +271,10 @@ reduceD d env (App f x) =
         in if all isConcrete args' && d >= minRecDepth
            then case envLookup n env of
                   Just fn ->
-                    -- Apply all args at once by inserting into env, then reduce
-                    -- the innermost body once.  This avoids intermediate Lam-body
-                    -- reductions that would double-unfold mutual recursion.
                     let (params, body) = collectLams fn
                         nApply = min (length params) (length args')
                         applyParams = take nApply params
                         applyArgs = take nApply args'
-                        -- Alpha-rename params that would capture free vars in args
                         argFVsUnion = Set.unions (map exprFreeVars applyArgs)
                         capturedSet = Set.intersection argFVsUnion
                                         (Set.fromList applyParams)
@@ -292,14 +291,13 @@ reduceD d env (App f x) =
                         env' = foldl (\e (p, a) -> envInsert p a e) env
                                      (zip applyParams' applyArgs)
                         d' = d - nApply
-                    in if nApply < length args'
-                       -- More args than params: apply leftover via reduceApp
-                       then let base = reduceD d' env' body'
-                            in foldl (reduceApp d' env) base (drop nApply args')
-                       else let base = reduceD d' env' body'
-                                -- Re-wrap with any unapplied params
-                                remaining = drop nApply params
-                            in foldr Lam base remaining
+                        result = if nApply < length args'
+                           then let base = reduceD d' env' body'
+                                in foldl (reduceApp d' env) base (drop nApply args')
+                           else let base = reduceD d' env' body'
+                                    remaining = drop nApply params
+                                in foldr Lam base remaining
+                    in result
                   Nothing -> foldl App (Name n) args'
            else foldl App (Name n) args'
       _ ->
@@ -310,8 +308,12 @@ reduceD d env (App f x) =
           -- then re-dispatch so tryBuiltin1 / Lam-app paths can fire.
           With inner bs ->
             let letNames = Set.fromList [bindName b | b <- bs]
-                recNames = Set.fromList [bindName b | b <- bs,
-                             bindName b `Set.member` exprFreeVars (bindBody b)]
+                -- Detect mutual recursion: mark any binding whose body
+                -- references ANY With-sibling (including itself) as rec.
+                -- Prevents infinite mutual inlining (e.g. find_font / try_font).
+                bsFvs = [(bindName b, exprFreeVars (bindBody b)) | b <- bs]
+                recNames = Set.fromList [n | (n, fvs) <- bsFvs,
+                             not (Set.null (Set.intersection letNames fvs))]
                 env' = foldl (\e b -> envInsert (bindName b) (bindBody b) e) env bs
                 env'' = env' { envLetBound = Set.union letNames (envLetBound env')
                              , envRec = Set.union recNames (envRec env') }
@@ -363,16 +365,15 @@ reduceD d env (Lam p b)
             in Lam p (reduceD d env' b)
 
 reduceD d env (With body bindings) =
-  let -- Mark With-bound names so the Name handler knows not to inline
-      -- non-concrete values (prevents duplicating FFI side effects)
-      letNames = Set.fromList [bindName b | b <- bindings]
+  let letNames = Set.fromList [bindName b | b <- bindings]
       envWithLet = env { envLetBound = Set.union letNames (envLetBound env) }
       env' = evalBindings d envWithLet bindings
       body' = reduceD d env' body
       bs' = map (reduceBind d env') bindings
       keepBinding b = isResidual (bindBody b) || envIsImpure (bindName b) env'
       residualBs = filter keepBinding bs'
-  in if null residualBs then body' else With body' residualBs
+      result = if null residualBs then body' else With body' residualBs
+      in result
 
 reduceD d env (Record tag bindings) =
   Record tag (map (reduceBind d env) bindings)
@@ -604,13 +605,14 @@ evalSCC _ env (CyclicSCC bs) =
 -- ── Reduce a binding's body ──────────────────────────────────────
 
 reduceBind :: Int -> Env -> Binding -> Binding
-reduceBind d env b = case bindDomain b of
-  Value -> b { bindBody = reduceD d env (wrapLambda (bindParams b) (bindBody b)), bindParams = [] }
-  Lazy  -> b { bindBody = reduceD d env (bindBody b) }
-  Type  -> b  -- don't reduce type expressions (`:` means fn arrow, not cons)
-  Trait -> b { bindBody = reduceD d env (bindBody b) }
-  Doc   -> b
-  Parse -> b
+reduceBind d env b =
+  case bindDomain b of
+    Value -> b { bindBody = reduceD d env (wrapLambda (bindParams b) (bindBody b)), bindParams = [] }
+    Lazy  -> b { bindBody = reduceD d env (bindBody b) }
+    Type  -> b
+    Trait -> b { bindBody = reduceD d env (bindBody b) }
+    Doc   -> b
+    Parse -> b
 
 -- ── Application reduction ─────────────────────────────────────────
 
@@ -1005,9 +1007,10 @@ reduceFieldAccess (Namespace bs) field =
           nsNames = Set.fromList (map bindName valueBs)
           directDeps = Set.intersection fvs nsNames
           allDeps = closureNsDeps valueBs directDeps nsNames
-      in if Set.null allDeps
+          depBs = [b | b <- valueBs, bindName b `Set.member` allDeps]
+          in if Set.null allDeps
          then v
-         else With v [b | b <- valueBs, bindName b `Set.member` allDeps]
+         else With v depBs
     []    -> FieldAccess (Namespace bs) field
 reduceFieldAccess e field = FieldAccess e field
 
