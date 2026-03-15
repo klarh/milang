@@ -490,7 +490,9 @@ cffiLeaf st cname retTy allParamTys inputParams outputParams = do
   addTopDef st fnDef
   pure $ "mi_native(" ++ fnName ++ ")"
 
--- | Generate a C trampoline function for a callback parameter
+-- | Generate a C trampoline function for a callback parameter.
+-- Includes arena mark/reset to prevent memory growth when C code
+-- calls the callback in a loop.
 genTrampoline :: String -> CType -> [CType] -> String
 genTrampoline name retTy paramTys =
   let cRetStr = cRetTypeName retTy
@@ -501,11 +503,31 @@ genTrampoline name retTy paramTys =
         let argConv = cRetToMi t ("_a" ++ show i)
         in "mi_apply(" ++ acc ++ ", " ++ argConv ++ ")"
         ) ("*" ++ name ++ "_closure") (zip [0::Int ..] paramTys)
-      bodyStr = if retTy == CVoid
-        then "  " ++ applyChain ++ ";\n"
-        else "  MiVal _result = " ++ applyChain ++ ";\n" ++
-             "  return " ++ miValToC retTy "_result" ++ ";\n"
-  in "static " ++ cRetStr ++ " " ++ name ++ "_trampoline(" ++ paramDecls ++ ") {\n" ++
+      markLine = "  MiArenaMark _cb_mark = mi_arena_mark();\n"
+      resetLine = "  mi_arena_reset(_cb_mark);\n"
+      bodyStr = case retTy of
+        CVoid ->
+          markLine ++
+          "  " ++ applyChain ++ ";\n" ++
+          resetLine
+        CString ->
+          markLine ++
+          "  MiVal _result = " ++ applyChain ++ ";\n" ++
+          "  free(" ++ name ++ "_last_str);\n" ++
+          "  " ++ name ++ "_last_str = strdup(_result.as.str.data);\n" ++
+          resetLine ++
+          "  return " ++ name ++ "_last_str;\n"
+        _ ->
+          markLine ++
+          "  MiVal _result = " ++ applyChain ++ ";\n" ++
+          "  " ++ cRetStr ++ " _ret = " ++ miValToC retTy "_result" ++ ";\n" ++
+          resetLine ++
+          "  return _ret;\n"
+      strGlobal = case retTy of
+        CString -> "static char *" ++ name ++ "_last_str = NULL;\n"
+        _ -> ""
+  in strGlobal ++
+     "static " ++ cRetStr ++ " " ++ name ++ "_trampoline(" ++ paramDecls ++ ") {\n" ++
      bodyStr ++ "}\n\n"
 
 -- | Map CInt bit width to C type name
@@ -910,6 +932,21 @@ emitPreamble h = hPutStr h $ unlines
   , "  char *p = (char*)mi_alloc(n);"
   , "  memcpy(p, s, n);"
   , "  return p;"
+  , "}"
+  , ""
+  , "// ── Arena mark/reset for TCO loops ──"
+  , "typedef struct { MiArenaBlock *block; size_t used; } MiArenaMark;"
+  , ""
+  , "static MiArenaMark mi_arena_mark(void) {"
+  , "  MiArenaMark m; m.block = mi_arena.head; m.used = m.block ? m.block->used : 0; return m;"
+  , "}"
+  , ""
+  , "static void mi_arena_reset(MiArenaMark m) {"
+  , "  // Free blocks allocated after the mark"
+  , "  while (mi_arena.head && mi_arena.head != m.block) {"
+  , "    MiArenaBlock *b = mi_arena.head; mi_arena.head = b->next; free(b);"
+  , "  }"
+  , "  if (m.block) m.block->used = m.used;"
   , "}"
   , ""
   , "// ── Forward declarations ──"
@@ -1397,6 +1434,74 @@ emitPreamble h = hPutStr h $ unlines
   , "  va_list args; va_start(args, fmt);"
   , "  vfprintf(stderr, fmt, args); va_end(args);"
   , "  fprintf(stderr, \"\\n\"); exit(1);"
+  , "}"
+  , ""
+  , "// ── Arena deep copy/free for TCO loop args ──"
+  , "static MiVal mi_val_deep_copy(MiVal v) {"
+  , "  switch (v.type) {"
+  , "  case MI_STRING: {"
+  , "    MiVal r = v;"
+  , "    r.as.str.data = (char*)malloc(v.as.str.len + 1);"
+  , "    memcpy(r.as.str.data, v.as.str.data, v.as.str.len + 1);"
+  , "    return r;"
+  , "  }"
+  , "  case MI_RECORD: {"
+  , "    MiVal r = v;"
+  , "    if (v.as.rec.nfields == 0) return r;"
+  , "    r.as.rec.names = (const char**)malloc(v.as.rec.nfields * sizeof(const char*));"
+  , "    r.as.rec.fields = (MiVal*)malloc(v.as.rec.nfields * sizeof(MiVal));"
+  , "    memcpy((void*)r.as.rec.names, v.as.rec.names, v.as.rec.nfields * sizeof(const char*));"
+  , "    for (int i = 0; i < v.as.rec.nfields; i++) r.as.rec.fields[i] = mi_val_deep_copy(v.as.rec.fields[i]);"
+  , "    return r;"
+  , "  }"
+  , "  case MI_SIZED_INT: {"
+  , "    if (!v.as.sized.is_big) return v;"
+  , "    MiVal r = v;"
+  , "    MiBignum *b = v.as.sized.big;"
+  , "    MiBignum *nb = (MiBignum*)malloc(sizeof(MiBignum));"
+  , "    nb->digits = (uint32_t*)malloc(b->cap * sizeof(uint32_t));"
+  , "    memcpy(nb->digits, b->digits, b->len * sizeof(uint32_t));"
+  , "    nb->len = b->len; nb->cap = b->cap; nb->sign = b->sign;"
+  , "    r.as.sized.big = nb; return r;"
+  , "  }"
+  , "  default: return v;"
+  , "  }"
+  , "}"
+  , ""
+  , "static void mi_val_free_deep(MiVal v) {"
+  , "  switch (v.type) {"
+  , "  case MI_STRING: free(v.as.str.data); break;"
+  , "  case MI_RECORD:"
+  , "    for (int i = 0; i < v.as.rec.nfields; i++) mi_val_free_deep(v.as.rec.fields[i]);"
+  , "    free((void*)v.as.rec.names); free(v.as.rec.fields); break;"
+  , "  case MI_SIZED_INT:"
+  , "    if (v.as.sized.is_big) { free(v.as.sized.big->digits); free(v.as.sized.big); } break;"
+  , "  default: break;"
+  , "  }"
+  , "}"
+  , ""
+  , "static MiVal mi_val_to_arena(MiVal v) {"
+  , "  switch (v.type) {"
+  , "  case MI_STRING: return mi_stringn(v.as.str.data, v.as.str.len);"
+  , "  case MI_RECORD: {"
+  , "    MiVal r = v;"
+  , "    if (v.as.rec.nfields == 0) return r;"
+  , "    r.as.rec.names = mi_alloc(v.as.rec.nfields * sizeof(const char*));"
+  , "    r.as.rec.fields = mi_alloc(v.as.rec.nfields * sizeof(MiVal));"
+  , "    memcpy((void*)r.as.rec.names, v.as.rec.names, v.as.rec.nfields * sizeof(const char*));"
+  , "    for (int i = 0; i < v.as.rec.nfields; i++) r.as.rec.fields[i] = mi_val_to_arena(v.as.rec.fields[i]);"
+  , "    return r;"
+  , "  }"
+  , "  case MI_SIZED_INT: {"
+  , "    if (!v.as.sized.is_big) return v;"
+  , "    MiBignum *b = v.as.sized.big;"
+  , "    MiBignum *nb = mi_bn_alloc(b->cap);"
+  , "    memcpy(nb->digits, b->digits, b->len * sizeof(uint32_t));"
+  , "    nb->len = b->len; nb->sign = b->sign;"
+  , "    MiVal r = v; r.as.sized.big = nb; return r;"
+  , "  }"
+  , "  default: return v;"
+  , "  }"
   , "}"
   , ""
   , "// ── Env pool & GC ──"
@@ -2126,10 +2231,17 @@ emitPreamble h = hPutStr h $ unlines
   , "      MiVal acc = mi_force(mi_eval(expr->as.for_range.init, env), env);"
   , "      int64_t start = mi_force(mi_eval(expr->as.for_range.start, env), env).as.i;"
   , "      int64_t end = mi_force(mi_eval(expr->as.for_range.end, env), env).as.i;"
+  , "      MiArenaMark _fr_mark = mi_arena_mark();"
   , "      for (int64_t _i = start; _i < end; _i++) {"
   , "        mi_env_set(loop_env, expr->as.for_range.iter_var, mi_int(_i));"
   , "        mi_env_set(loop_env, expr->as.for_range.acc_var, acc);"
   , "        acc = mi_force(mi_eval(expr->as.for_range.body, loop_env), loop_env);"
+  , "        if (_i + 1 < end) {"
+  , "          MiVal saved = mi_val_deep_copy(acc);"
+  , "          mi_arena_reset(_fr_mark);"
+  , "          acc = mi_val_to_arena(saved);"
+  , "          mi_val_free_deep(saved);"
+  , "        }"
   , "      }"
   , "      if (mi_gc_env_root_count > 0) mi_gc_env_root_count--;"
   , "      return acc;"
@@ -2142,6 +2254,7 @@ emitPreamble h = hPutStr h $ unlines
   , "        MiVal init_val = mi_force(mi_eval(expr->as.tail_loop.inits[_ti], env), env);"
   , "        mi_env_set(loop_env, expr->as.tail_loop.params[_ti], init_val);"
   , "      }"
+  , "      MiArenaMark _tco_mark = mi_arena_mark();"
   , "      for (;;) {"
   , "        MiVal result = mi_eval(expr->as.tail_loop.body, loop_env);"
   , "        result = mi_force(result, loop_env);"
@@ -2149,10 +2262,18 @@ emitPreamble h = hPutStr h $ unlines
   , "          if (mi_gc_env_root_count > 0) mi_gc_env_root_count--;"
   , "          return result;"
   , "        }"
-  , "        for (int _ti = 0; _ti < result.as.tail_call.nargs; _ti++) {"
-  , "          mi_env_set(loop_env, expr->as.tail_loop.params[_ti], result.as.tail_call.args[_ti]);"
-  , "        }"
+  , "        int _tn = result.as.tail_call.nargs;"
+  , "        MiVal *_saved = (MiVal*)malloc(_tn * sizeof(MiVal));"
+  , "        for (int _ti = 0; _ti < _tn; _ti++)"
+  , "          _saved[_ti] = mi_val_deep_copy(result.as.tail_call.args[_ti]);"
   , "        free(result.as.tail_call.args);"
+  , "        mi_arena_reset(_tco_mark);"
+  , "        for (int _ti = 0; _ti < _tn; _ti++) {"
+  , "          MiVal av = mi_val_to_arena(_saved[_ti]);"
+  , "          mi_val_free_deep(_saved[_ti]);"
+  , "          mi_env_set(loop_env, expr->as.tail_loop.params[_ti], av);"
+  , "        }"
+  , "        free(_saved);"
   , "      }"
   , "    }"
   , ""

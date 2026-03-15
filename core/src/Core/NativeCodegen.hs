@@ -434,8 +434,10 @@ nExprToC st (With body bindings)
             unboxedScope = intScope { ncgUnboxed = Set.union paramSet (ncgUnboxed intScope) }
             initDecls = concat [ "int64_t " ++ pv ++ " = (" ++ ic ++ ").as.i; "
                                | (pv, ic) <- zip paramVars initCs ]
+            arenaMarkVar = label ++ "_am"
         bodyC <- nTailBodyToIntC unboxedScope loopName (length params) paramVars label loopBody
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
+               "MiArenaMark " ++ arenaMarkVar ++ " = mi_arena_mark(); " ++
                label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
                resultVar ++ "; })"
       else if bodyIsFloat
@@ -452,19 +454,23 @@ nExprToC st (With body bindings)
               _      -> "double " ++ pv ++ " = (" ++ ic ++ ").type == MI_INT ? (double)(" ++ ic ++ ").as.i : (" ++ ic ++ ").as.f; "
             initDecls = concat [ initDecl pv ic arg
                                | (pv, ic, arg) <- zip3 paramVars initCs initArgs ]
+            arenaMarkVar = label ++ "_am"
         bodyC <- nTailBodyToFloatC unboxedScope loopName (length params) paramVars label loopBody
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
+               "MiArenaMark " ++ arenaMarkVar ++ " = mi_arena_mark(); " ++
                label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
                resultVar ++ "; })"
       else do
         -- Standard MiVal loop — but propagate any known types for params
         let paramTypes = [(p, inferType st arg) | (p, arg) <- zip params initArgs]
             typedScope = withKnownTypes bodyScope paramTypes
+            arenaMarkVar = label ++ "_am"
         initCs <- mapM (nExprToC st) initArgs
         bodyC <- nTailBodyToC typedScope loopName (length params) paramVars label loopBody
         let initDecls = concat [ "MiVal " ++ pv ++ " = " ++ ic ++ "; "
                                | (pv, ic) <- zip paramVars initCs ]
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
+               "MiArenaMark " ++ arenaMarkVar ++ " = mi_arena_mark(); " ++
                label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
                resultVar ++ "; })"
 
@@ -853,7 +859,7 @@ emitFlatFn st name allParams innerBody = do
   let envSetup = if null capturedNames
         then "  (void)_env_raw;\n"
         else "  " ++ envTypeName ++ " *_env = (" ++ envTypeName ++ " *)_env_raw;\n"
-      labelDecl = if isSelfRec then "  " ++ label ++ ":;\n" else ""
+      labelDecl = if isSelfRec then "  MiArenaMark " ++ label ++ "_am = mi_arena_mark();\n  " ++ label ++ ":;\n" else ""
   addTopDef st $ unlines
     [ "static MiVal " ++ flatFnName ++ "(" ++ paramDecls ++ ", void *_env_raw) {"
     , envSetup ++ labelDecl ++ "  return " ++ bodyC ++ ";"
@@ -1017,15 +1023,17 @@ safeExprToFloat st expr _ = do c <- nExprToC st expr; pure $ "(" ++ c ++ ").as.f
 -- Tail calls update int64_t vars and goto; base cases re-box with mi_int().
 nTailBodyToIntC :: NCGState -> Text -> Int -> [String] -> String -> Expr -> IO String
 nTailBodyToIntC st funcName nparams paramVars label expr
-  -- Tail call: compute new int values and goto
+  -- Tail call: compute new int values, reset arena, goto
   | Just args <- matchCallChain funcName expr
   , length args == nparams = do
     argCs <- mapM (nExprToInt st) args
     cid <- freshId st
     let tmpVars = ["_tc_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
+        markVar = label ++ "_am"
         tmpDecls = concat ["int64_t " ++ tv ++ " = " ++ ac ++ "; " | (tv, ac) <- zip tmpVars argCs]
         assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
-    pure $ "({ " ++ tmpDecls ++ assignments ++ "goto " ++ label ++ "; mi_int(0); })"
+    pure $ "({ " ++ tmpDecls ++ "mi_arena_reset(" ++ markVar ++ "); " ++
+           assignments ++ "goto " ++ label ++ "; mi_int(0); })"
 
 nTailBodyToIntC st funcName nparams paramVars label (Case scrut alts) =
   case matchTruthiness scrut alts of
@@ -1079,9 +1087,11 @@ nTailBodyToFloatC st funcName nparams paramVars label expr
     argCs <- mapM (nExprToFloat st) args
     cid <- freshId st
     let tmpVars = ["_tc_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
+        markVar = label ++ "_am"
         tmpDecls = concat ["double " ++ tv ++ " = " ++ ac ++ "; " | (tv, ac) <- zip tmpVars argCs]
         assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
-    pure $ "({ " ++ tmpDecls ++ assignments ++ "goto " ++ label ++ "; mi_float(0); })"
+    pure $ "({ " ++ tmpDecls ++ "mi_arena_reset(" ++ markVar ++ "); " ++
+           assignments ++ "goto " ++ label ++ "; mi_float(0); })"
 
 nTailBodyToFloatC st funcName nparams paramVars label (Case scrut alts) =
   case matchTruthiness scrut alts of
@@ -1176,15 +1186,22 @@ allTailCalls funcName nparams body = tailCheck body
 -- In non-tail position, falls through to normal nExprToC.
 nTailBodyToC :: NCGState -> Text -> Int -> [String] -> String -> Expr -> IO String
 nTailBodyToC st funcName nparams paramVars label expr
-  -- Tail call: update params and goto
+  -- Tail call: deep-copy args, reset arena, copy to arena, goto
   | Just args <- matchCallChain funcName expr
   , length args == nparams = do
     argCs <- mapM (nExprToC st) args
     cid <- freshId st
     let tmpVars = ["_tc_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
+        saveVars = ["_sv_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
+        markVar = label ++ "_am"
         tmpDecls = concat ["MiVal " ++ tv ++ " = " ++ ac ++ "; " | (tv, ac) <- zip tmpVars argCs]
-        assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
-    pure $ "({ " ++ tmpDecls ++ assignments ++ "goto " ++ label ++ "; mi_int(0); })"
+        saveDecls = concat ["MiVal " ++ sv ++ " = mi_val_deep_copy(" ++ tv ++ "); "
+                           | (sv, tv) <- zip saveVars tmpVars]
+        arenaReset = "mi_arena_reset(" ++ markVar ++ "); "
+        arenaAssigns = concat [pv ++ " = mi_val_to_arena(" ++ sv ++ "); mi_val_free_deep(" ++ sv ++ "); "
+                              | (pv, sv) <- zip paramVars saveVars]
+    pure $ "({ " ++ tmpDecls ++ saveDecls ++ arenaReset ++ arenaAssigns ++
+           "goto " ++ label ++ "; mi_int(0); })"
 
 nTailBodyToC st funcName nparams paramVars label (Case scrut alts) = do
   -- Detect truthiness pattern in tail position too
