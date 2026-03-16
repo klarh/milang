@@ -1,0 +1,6 @@
+m = import "lib/mutual_rec_module.mi"
+
+wrapper x = m.find_it x
+
+main world = r
+  r = world.io.println (toString (wrapper [1, 42, 3]))

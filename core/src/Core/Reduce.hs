@@ -321,9 +321,13 @@ reduceD d env (App f x) =
                 -- Re-wrap: if result still references With-bound names (e.g.
                 -- recursive self-refs after partial application), carry the
                 -- bindings forward so they aren't lost to outer-scope shadows.
+                -- Use transitive closure: if result references A and A's body
+                -- references B (mutual recursion), B must also be carried.
                 resultFvs = exprFreeVars result
+                directNeeded = Set.intersection resultFvs letNames
+                allNeeded = closureNsDeps bs directNeeded letNames
                 neededBs = [b | b <- bs, bindDomain b == Value || bindDomain b == Lazy,
-                            bindName b `Set.member` resultFvs]
+                            bindName b `Set.member` allNeeded]
             in if null neededBs then result else With result neededBs
           -- Call-by-name for lambda application: don't evaluate arg until needed.
           -- This prevents divergence in recursive branches (e.g., if cond t e).

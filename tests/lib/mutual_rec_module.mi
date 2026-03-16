@@ -1,0 +1,5 @@
+find_it items = items ->
+  Nil = 0
+  Cons x rest = check_it x rest
+
+check_it x rest = if (x == 42) x (find_it rest)
