@@ -33,6 +33,7 @@ data Env = Env
   , envTypes  :: !(Map.Map Text Expr) -- type annotations (:: domain)
   , envTraits :: !(Map.Map Text Expr) -- trait annotations (:~ domain)
   , envWarns  :: ![Warning]           -- accumulated warnings/errors
+  , envRecUnrolls :: !(Map.Map Text Int)  -- per-function recursive unroll count
   } deriving (Show)
 
 data Warning
@@ -42,7 +43,7 @@ data Warning
   deriving (Show)
 
 emptyEnv :: Env
-emptyEnv = Env Map.empty Set.empty Set.empty Set.empty Map.empty Map.empty []
+emptyEnv = Env Map.empty Set.empty Set.empty Set.empty Map.empty Map.empty [] Map.empty
 
 -- | Initial env with Builtin entries for all builtin names.
 -- When the prelude is evaluated, its definitions override these entries.
@@ -91,6 +92,41 @@ maxDepth = 128
 
 minRecDepth :: Int
 minRecDepth = 8
+
+-- | Maximum number of times a single recursive function may be unrolled
+-- during one reduction chain. Prevents compile-time blowup when recursive
+-- functions are called with all-constant arguments (e.g. range 0 100000).
+maxRecUnrolls :: Int
+maxRecUnrolls = 8
+
+-- | Maximum total AST size of arguments for recursive unrolling. When
+-- arguments grow (e.g. accumulator pattern), unrolling stops to prevent
+-- generating huge inline expressions.
+maxRecArgSize :: Int
+maxRecArgSize = 64
+
+-- | Approximate AST node count. Used to detect growing arguments in
+-- recursive function specialization.
+exprSize :: Expr -> Int
+exprSize (IntLit _)      = 1
+exprSize (FloatLit _)    = 1
+exprSize (SizedInt {})   = 1
+exprSize (SizedFloat {}) = 1
+exprSize (StringLit _)   = 1
+exprSize (Name _)        = 1
+exprSize (Builtin _)     = 1
+exprSize (Error _)       = 1
+exprSize (BinOp _ l r)   = 1 + exprSize l + exprSize r
+exprSize (App f x)       = 1 + exprSize f + exprSize x
+exprSize (Lam _ b)       = 1 + exprSize b
+exprSize (Record _ bs)   = 1 + sum (map (exprSize . bindBody) bs)
+exprSize (With e bs)     = exprSize e + sum (map (exprSize . bindBody) bs)
+exprSize (Namespace bs)  = 1 + sum (map (exprSize . bindBody) bs)
+exprSize (Case s as)     = 1 + exprSize s + sum (map (exprSize . altBody) as)
+exprSize (FieldAccess e _) = 1 + exprSize e
+exprSize (Thunk e)       = 1 + exprSize e
+exprSize (Splice e)      = 1 + exprSize e
+exprSize _               = 1
 
 -- Debug: global reduction counter
 isResidual :: Expr -> Bool
@@ -268,7 +304,10 @@ reduceD d env (App f x) =
     _ -> case collectApp (App f x) of
       (Name n, args) | envIsRec n env ->
         let args' = map (reduceD d env) args
+            unrolls = Map.findWithDefault 0 n (envRecUnrolls env)
+            argSz = sum (map exprSize args')
         in if all isConcrete args' && d >= minRecDepth
+              && unrolls < maxRecUnrolls && argSz <= maxRecArgSize
            then case envLookup n env of
                   Just fn ->
                     let (params, body) = collectLams fn
@@ -288,8 +327,10 @@ reduceD d env (App f x) =
                                          [allNames, Set.fromList ps])
                                    in (fresh:ps, substExpr p (Name fresh) b)
                               else (p:ps, b)) ([], body) applyParams
-                        env' = foldl (\e (p, a) -> envInsert p a e) env
-                                     (zip applyParams' applyArgs)
+                        env' = (foldl (\e (p, a) -> envInsert p a e) env
+                                      (zip applyParams' applyArgs))
+                                 { envRecUnrolls = Map.insertWith (+) n 1
+                                                     (envRecUnrolls env) }
                         d' = d - nApply
                         result = if nApply < length args'
                            then let base = reduceD d' env' body'

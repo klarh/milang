@@ -1192,15 +1192,9 @@ nTailBodyToC st funcName nparams paramVars label expr
     argCs <- mapM (nExprToC st) args
     cid <- freshId st
     let tmpVars = ["_tc_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
-        saveVars = ["_sv_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
-        markVar = label ++ "_am"
         tmpDecls = concat ["MiVal " ++ tv ++ " = " ++ ac ++ "; " | (tv, ac) <- zip tmpVars argCs]
-        saveDecls = concat ["MiVal " ++ sv ++ " = mi_val_deep_copy(" ++ tv ++ "); "
-                           | (sv, tv) <- zip saveVars tmpVars]
-        arenaReset = "mi_arena_reset(" ++ markVar ++ "); "
-        arenaAssigns = concat [pv ++ " = mi_val_to_arena(" ++ sv ++ "); mi_val_free_deep(" ++ sv ++ "); "
-                              | (pv, sv) <- zip paramVars saveVars]
-    pure $ "({ " ++ tmpDecls ++ saveDecls ++ arenaReset ++ arenaAssigns ++
+        assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
+    pure $ "({ " ++ tmpDecls ++ assignments ++
            "goto " ++ label ++ "; mi_int(0); })"
 
 nTailBodyToC st funcName nparams paramVars label (Case scrut alts) = do

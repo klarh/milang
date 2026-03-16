@@ -1,0 +1,11 @@
+-- Regression test: range and list operations on large lists
+-- Previously segfaulted due to PE over-specialization and recursive deep-copy
+main world =
+  xs = range 0 10000
+  n = len xs
+  total = sum xs
+
+  check1 = if (n == 10000) 0 1
+  check2 = if (total == 49995000) 0 1
+
+  world.process.exit (check1 + check2)
