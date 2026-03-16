@@ -286,11 +286,42 @@ nExprToC st (App f x) = do
               else case Map.lookup name (ncgScope st) of
                 Just scopeExpr -> scopeExpr ++ ".as.native.env"
                 Nothing -> "NULL"
-        pure $ flatFnName ++ "(" ++ intercalate ", " (argCs ++ [envExpr]) ++ ")"
+        if length argCs <= 1
+          then -- Single arg: no evaluation order issue
+            pure $ flatFnName ++ "(" ++ intercalate ", " (argCs ++ [envExpr]) ++ ")"
+          else do
+            -- Multiple args: sequentialize evaluation with GC root registration
+            -- to prevent use-after-free when arg evaluation triggers GC
+            tmpIds <- mapM (\_ -> freshId st) argCs
+            let tmpVars = ["_fa_" ++ show tid | tid <- tmpIds]
+                -- Interleave: evaluate arg into temp, then register as GC root
+                stmts = concat
+                  [ "MiVal " ++ tv ++ " = " ++ ac ++ "; " ++
+                    "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ tv ++ "; "
+                  | (tv, ac) <- zip tmpVars argCs ]
+                -- Restore root count before calling (callee will root its own params)
+                call = "mi_gc_root_count -= " ++ show (length tmpVars) ++ "; " ++
+                       flatFnName ++ "(" ++ intercalate ", " (tmpVars ++ [envExpr]) ++ ")"
+            pure $ "({ " ++ stmts ++ call ++ "; })"
     _ -> do
       fc <- nExprToC st f
       xc <- nExprToC st x
-      pure $ "mi_apply(" ++ fc ++ ", " ++ xc ++ ")"
+      -- Sequentialize mi_apply when either arg might trigger GC,
+      -- to prevent C's unspecified evaluation order from leaving
+      -- arena-allocated intermediate results unrooted during GC
+      if mayTriggerGC f || mayTriggerGC x
+        then do
+          fid <- freshId st
+          xid <- freshId st
+          let fv = "_ap_" ++ show fid
+              xv = "_ap_" ++ show xid
+          pure $ "({ MiVal " ++ fv ++ " = " ++ fc ++ "; " ++
+                 "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ fv ++ "; " ++
+                 "MiVal " ++ xv ++ " = " ++ xc ++ "; " ++
+                 "mi_gc_root_count--; " ++
+                 "mi_apply(" ++ fv ++ ", " ++ xv ++ "); })"
+        else
+          pure $ "mi_apply(" ++ fc ++ ", " ++ xc ++ ")"
 
 nExprToC st (Lam param body) = do
   cid <- freshId st
@@ -326,13 +357,18 @@ nExprToC st (Lam param body) = do
       addTopDef st $ unlines
         [ "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env_raw) {"
         , if null selfFvs then "  (void)_env_raw;" else selfBindings
-        , "  return " ++ bodyC ++ ";"
+        , "  int _sr = mi_gc_root_count;"
+        , "  if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &_arg;"
+        , "  MiVal _res = " ++ bodyC ++ ";"
+        , "  mi_gc_root_count = _sr;"
+        , "  return _res;"
         , "}"
         , ""
         ]
       pure $ "mi_native(" ++ fnName ++ ")"
     else do
-      -- Has captures: emit env struct + function, return mi_native_env(fn, env)
+      -- Has captures: emit env struct + function, return mi_native_env_n(fn, env, N)
+      let nCaptures = length capturedFvs
       addTopDef st $ unlines
         [ "typedef struct {"
         , unlines [ "  MiVal " ++ sanitizeName fv ++ ";" | fv <- capturedFvs ]
@@ -340,7 +376,7 @@ nExprToC st (Lam param body) = do
         , ""
         ]
       let selfBindings = concatMap (\sn ->
-            "  MiVal " ++ cVarName sn ++ " = mi_native_env(" ++ fnName ++ ", _env_raw);\n")
+            "  MiVal " ++ cVarName sn ++ " = mi_native_env_n(" ++ fnName ++ ", _env_raw, " ++ show nCaptures ++ ");\n")
             selfFvs
           innerScope = Map.fromList $
             (param, "_arg") :
@@ -356,34 +392,34 @@ nExprToC st (Lam param body) = do
         [ "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env_raw) {"
         , "  " ++ envTypeName ++ " *_env = (" ++ envTypeName ++ " *)_env_raw;"
         , if null selfFvs then "" else selfBindings
-        , "  return " ++ bodyC ++ ";"
+        , "  int _sr = mi_gc_root_count;"
+        , "  if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &_arg;"
+        , "  MiVal _res = " ++ bodyC ++ ";"
+        , "  mi_gc_root_count = _sr;"
+        , "  return _res;"
         , "}"
         , ""
         ]
-      -- Emit code to allocate and fill env struct
+      -- Emit code to allocate and fill env struct (heap-allocated via mi_nenv_alloc)
       let deferredFvs = filter (\fv -> Set.member fv (ncgForwardDecls st)) capturedFvs
           immediateFvs = filter (\fv -> not (Set.member fv (ncgForwardDecls st))) capturedFvs
       if null deferredFvs
         then do
           -- No deferred captures: emit inline as before
-          let envAlloc = "({ " ++ envTypeName ++ " *_e = mi_alloc(sizeof(" ++ envTypeName ++ ")); " ++
+          let envAlloc = "({ " ++ envTypeName ++ " *_e = mi_nenv_alloc(sizeof(" ++ envTypeName ++ ")); " ++
                 concatMap (\fv -> "_e->" ++ sanitizeName fv ++ " = " ++
                            maybe (cVarName fv) id (Map.lookup fv (ncgScope st)) ++ "; ")
                   capturedFvs ++
-                "mi_native_env(" ++ fnName ++ ", _e); })"
+                "mi_native_env_n(" ++ fnName ++ ", _e, " ++ show nCaptures ++ "); })"
           pure envAlloc
         else do
           -- Some captures are forward-declared: skip them inline, record patches
-          let envAlloc = "({ " ++ envTypeName ++ " *_e = mi_alloc(sizeof(" ++ envTypeName ++ ")); " ++
+          let envAlloc = "({ " ++ envTypeName ++ " *_e = mi_nenv_alloc(sizeof(" ++ envTypeName ++ ")); " ++
                 concatMap (\fv -> "_e->" ++ sanitizeName fv ++ " = " ++
                            maybe (cVarName fv) id (Map.lookup fv (ncgScope st)) ++ "; ")
                   immediateFvs ++
-                "mi_native_env(" ++ fnName ++ ", _e); })"
+                "mi_native_env_n(" ++ fnName ++ ", _e, " ++ show nCaptures ++ "); })"
               -- Backpatch via MiVal's env pointer: ((envType *)cvar.as.native.env)->field = value;
-              -- The cvar for this closure is looked up in ncgScope — it's the
-              -- name that emitBindings assigned to the binding whose body is this Lam.
-              -- We record patches using the captured fv's scope value and the env type,
-              -- which emitBindings will resolve after all closures are assigned.
               patches = map (\fv ->
                 let val = maybe (cVarName fv) id (Map.lookup fv (ncgScope st))
                 in (envTypeName, sanitizeName fv, val))
@@ -401,10 +437,28 @@ nExprToC st (Record tag bindings) = do
       fieldExprs <- forM runtimeBs $ \b -> do
         val <- nExprToC st (bindBody b)
         pure (T.unpack (bindName b), val)
-      let namesArr = "(const char*[]){" ++ intercalate ", " [cStringLit nm | (nm, _) <- fieldExprs] ++ "}"
-          fieldsArr = "(MiVal[]){" ++ intercalate ", " [val | (_, val) <- fieldExprs] ++ "}"
-      pure $ "mi_make_rec(" ++ tagVar ++ ", " ++ show n ++
-             ", " ++ namesArr ++ ", " ++ fieldsArr ++ ")"
+      -- Check if any field expression might trigger GC
+      let anyComplex = any (\b -> mayTriggerGC (bindBody b)) runtimeBs
+      if n > 1 && anyComplex
+        then do
+          -- Sequentialize field evaluation with GC root registration
+          tmpIds <- mapM (\_ -> freshId st) fieldExprs
+          let tmpVars = ["_rf_" ++ show tid | tid <- tmpIds]
+              stmts = concat
+                [ "MiVal " ++ tv ++ " = " ++ val ++ "; " ++
+                  "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ tv ++ "; "
+                | (tv, (_, val)) <- zip tmpVars fieldExprs ]
+              namesArr = "(const char*[]){" ++ intercalate ", " [cStringLit nm | (nm, _) <- fieldExprs] ++ "}"
+              fieldsArr = "(MiVal[]){" ++ intercalate ", " tmpVars ++ "}"
+          pure $ "({ " ++ stmts ++
+                 "mi_gc_root_count -= " ++ show n ++ "; " ++
+                 "mi_make_rec(" ++ tagVar ++ ", " ++ show n ++
+                 ", " ++ namesArr ++ ", " ++ fieldsArr ++ "); })"
+        else do
+          let namesArr = "(const char*[]){" ++ intercalate ", " [cStringLit nm | (nm, _) <- fieldExprs] ++ "}"
+              fieldsArr = "(MiVal[]){" ++ intercalate ", " [val | (_, val) <- fieldExprs] ++ "}"
+          pure $ "mi_make_rec(" ++ tagVar ++ ", " ++ show n ++
+                 ", " ++ namesArr ++ ", " ++ fieldsArr ++ ")"
 
 nExprToC st (FieldAccess e field) = do
   ec <- nExprToC st e
@@ -469,10 +523,15 @@ nExprToC st (With body bindings)
         bodyC <- nTailBodyToC typedScope loopName (length params) paramVars label loopBody
         let initDecls = concat [ "MiVal " ++ pv ++ " = " ++ ic ++ "; "
                                | (pv, ic) <- zip paramVars initCs ]
+            rootPush = concat [ "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ pv ++ "; "
+                              | pv <- paramVars ]
+            rootPop = "mi_nenv_pop_mark(); mi_gc_root_count -= " ++ show (length paramVars) ++ "; "
+            gcCheck = "if (mi_arena_total > mi_arena_gc_next) mi_gc_collect_arena(); "
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
+               rootPush ++ "mi_nenv_push_mark(); " ++
                "MiArenaMark " ++ arenaMarkVar ++ " = mi_arena_mark(); " ++
-               label ++ ": " ++ resultVar ++ " = " ++ bodyC ++ "; " ++
-               resultVar ++ "; })"
+               label ++ ": " ++ gcCheck ++ resultVar ++ " = " ++ bodyC ++ "; " ++
+               rootPop ++ resultVar ++ "; })"
 
 nExprToC st (With body bindings) = do
   let runtimeBs = filter (not . skipBinding) bindings
@@ -483,7 +542,17 @@ nExprToC st (With body bindings) = do
       (bindDecls, newScope, typedSt) <- emitBindings st runtimeBs
       let bodyScope = withScope typedSt newScope
       bodyC <- nExprToC bodyScope body
-      pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
+      -- Save/restore root count so With binding roots don't accumulate in loops
+      let nBindings = length runtimeBs
+      if nBindings > 0
+        then do
+          wid <- freshId st
+          let sv = "_wr_" ++ show wid
+          pure $ "({ int " ++ sv ++ " = mi_gc_root_count; " ++
+                 concat bindDecls ++ "MiVal _wv_" ++ show wid ++ " = " ++ bodyC ++ "; " ++
+                 "mi_gc_root_count = " ++ sv ++ "; _wv_" ++ show wid ++ "; })"
+        else
+          pure $ "({ " ++ concat bindDecls ++ bodyC ++ "; })"
 
 nExprToC st (Case (Name n) alts)
   | not (Map.member n (ncgScope st))
@@ -550,12 +619,13 @@ nExprToC st (Thunk body) = do
         , ""
         ]
       -- Allocate env, populate captures, create MI_CLOSURE thunk
-      pure $ "({ " ++ envTypeName ++ " *_te = mi_alloc(sizeof(" ++ envTypeName ++ ")); " ++
+      let nCaptures = length capturedFvs
+      pure $ "({ " ++ envTypeName ++ " *_te = mi_nenv_alloc(sizeof(" ++ envTypeName ++ ")); " ++
              concatMap (\fv ->
                "_te->" ++ sanitizeName fv ++ " = " ++
                maybe (cVarName fv) id (Map.lookup fv (ncgScope st)) ++ "; ") capturedFvs ++
              "(MiVal){.type = MI_CLOSURE, .as.closure = {" ++
-             "mi_expr_app(mi_expr_val(mi_native_env(" ++ fnName ++ ", _te)), mi_expr_int(0)), " ++
+             "mi_expr_app(mi_expr_val(mi_native_env_n(" ++ fnName ++ ", _te, " ++ show nCaptures ++ ")), mi_expr_int(0)), " ++
              "\"_thunk_\", NULL}}; })"
 
 nExprToC st (ListLit es) = nExprToC st (listLitToCons es)
@@ -789,6 +859,16 @@ unwrapLams body = ([], body)
 
 -- | Match a saturated call: App(App(Name f, a1), a2) → Just (f, [a1, a2]).
 -- Returns Nothing for non-Name bases or empty arg lists.
+-- | Check if an expression might trigger GC when evaluated.
+-- Used to decide whether mi_apply arguments need sequentialization.
+mayTriggerGC :: Expr -> Bool
+mayTriggerGC (App _ _) = True
+mayTriggerGC (Case _ _) = True
+mayTriggerGC (With _ _) = True
+mayTriggerGC (Lam _ _) = True  -- allocates nenv
+mayTriggerGC (ListLit (_:_)) = True
+mayTriggerGC _ = False
+
 matchSaturatedCall :: Expr -> Maybe (Text, [Expr])
 matchSaturatedCall expr = go expr []
   where
@@ -859,13 +939,36 @@ emitFlatFn st name allParams innerBody = do
   let envSetup = if null capturedNames
         then "  (void)_env_raw;\n"
         else "  " ++ envTypeName ++ " *_env = (" ++ envTypeName ++ " *)_env_raw;\n"
-      labelDecl = if isSelfRec then "  MiArenaMark " ++ label ++ "_am = mi_arena_mark();\n  " ++ label ++ ":;\n" else ""
-  addTopDef st $ unlines
-    [ "static MiVal " ++ flatFnName ++ "(" ++ paramDecls ++ ", void *_env_raw) {"
-    , envSetup ++ labelDecl ++ "  return " ++ bodyC ++ ";"
-    , "}"
-    , ""
-    ]
+      labelDecl = if isSelfRec
+        then let rootPush = concat [ "  if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cv ++ ";\n"
+                                   | cv <- paramCVars ]
+                 gcCheck = "  if (mi_arena_total > mi_arena_gc_next) mi_gc_collect_arena();\n"
+             in rootPush ++ "  mi_nenv_push_mark();\n" ++ "  MiArenaMark " ++ label ++ "_am = mi_arena_mark();\n  " ++ label ++ ":;\n" ++ gcCheck
+        else ""
+      rootPop = if isSelfRec
+        then "  mi_nenv_pop_mark();\n  mi_gc_root_count -= " ++ show (length paramCVars) ++ ";\n"
+        else ""
+  if isSelfRec
+    then addTopDef st $ unlines
+      [ "static MiVal " ++ flatFnName ++ "(" ++ paramDecls ++ ", void *_env_raw) {"
+      , envSetup ++ labelDecl ++ "  MiVal _flat_res = " ++ bodyC ++ ";"
+      , rootPop ++ "  return _flat_res;"
+      , "}"
+      , ""
+      ]
+    else do
+      -- Non-self-recursive: register params as GC roots
+      let rootSave = "  int _sr = mi_gc_root_count;\n"
+          rootPushNR = concat [ "  if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cv ++ ";\n"
+                              | cv <- paramCVars ]
+          rootRestore = "  mi_gc_root_count = _sr;\n"
+      addTopDef st $ unlines
+        [ "static MiVal " ++ flatFnName ++ "(" ++ paramDecls ++ ", void *_env_raw) {"
+        , envSetup ++ rootSave ++ rootPushNR ++ "  MiVal _flat_res = " ++ bodyC ++ ";"
+        , rootRestore ++ "  return _flat_res;"
+        , "}"
+        , ""
+        ]
 
 -- ── Unboxed Integer Loop Optimization ──────────────────────────────
 
@@ -1332,12 +1435,15 @@ emitBindings st bindings = do
             else if isNativeWHNF bodyExpr
               then "MiVal " ++ cvar ++ " = " ++ code ++ "; "
               else "MiVal " ++ cvar ++ " = mi_force(" ++ code ++ ", NULL); "
+          -- Register each With binding as a GC root so it survives GC
+          -- triggered by subsequent bindings or body evaluation
+          rootReg = "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cvar ++ "; "
       let inferredType = if bindDomain b == Lazy then NUnknown
                          else inferType curScope' bodyExpr
           nextSt = if inferredType /= NUnknown
                    then withKnownType curSt name inferredType
                    else curSt
-      go nextSt (decl : accDecls) (Map.insert name cvar accScope) selfRec bs
+      go nextSt ((decl ++ rootReg) : accDecls) (Map.insert name cvar accScope) selfRec bs
 
     -- Two-phase: vars already forward-declared, emit assignments only
     goAssign curSt accDecls accScope accPatches _ [] = pure (reverse accDecls, accScope, curSt, reverse accPatches)
@@ -1366,6 +1472,7 @@ emitBindings st bindings = do
             else if isNativeWHNF bodyExpr
               then cvar ++ " = " ++ code ++ "; "
               else cvar ++ " = mi_force(" ++ code ++ ", NULL); "
+          rootReg = "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cvar ++ "; "
       let inferredType = if bindDomain b == Lazy then NUnknown
                          else inferType curScope' bodyExpr
           nextSt = if inferredType /= NUnknown
@@ -1374,7 +1481,7 @@ emitBindings st bindings = do
       -- Remove this binding from forward-decls so later bindings capture it directly
       -- (prevents deferred patches on non-closure bindings that contain inner lambdas)
       let nextSt' = nextSt { ncgForwardDecls = Set.delete name (ncgForwardDecls nextSt) }
-      goAssign nextSt' (assign : accDecls) (Map.insert name cvar accScope) (resolvedPatches ++ accPatches) selfRec bs
+      goAssign nextSt' ((assign ++ rootReg) : accDecls) (Map.insert name cvar accScope) (resolvedPatches ++ accPatches) selfRec bs
 
 -- ── Helpers ────────────────────────────────────────────────────────
 
@@ -1547,6 +1654,18 @@ nativeNamespaceToC st hidden allBindings = do
   mapM_ (\(name, val) -> do
     emit $ "  " ++ cVarName (T.pack name) ++ " = " ++ val ++ ";\n"
     ) liveBuiltinEntries
+  emit "\n"
+
+  -- Register all static globals as GC roots for arena value collection
+  emit "  // Register GC roots\n"
+  mapM_ (\name ->
+    emit $ "  mi_gc_register_global(&" ++ cVarName name ++ ");\n"
+    ) [name | name <- allNames, not (Set.member name (Set.fromList liveBuiltinNames))]
+  mapM_ (\(name, _) ->
+    emit $ "  mi_gc_register_global(&" ++ cVarName (T.pack name) ++ ");\n"
+    ) liveBuiltinEntries
+  when (not hasMainWithArg) $
+    emit "  mi_gc_register_global(&_v_world);\n"
   emit "\n"
 
   if not hasMainWithArg

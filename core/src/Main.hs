@@ -244,11 +244,14 @@ loadAndParse file = do
 -- | Inject prelude bindings before user bindings
 injectPrelude :: Bool -> Expr -> Expr
 injectPrelude True (Namespace bs) =
-  let preludeBind = mkBind "_prelude" specialPrelude
+  -- Use Doc domain for _prelude so expandSpreads can read its body
+  -- but evalSCC won't try to reduce the nested Namespace (which would
+  -- cause infinite PE loops for mutually-recursive prelude functions).
+  let preludeBind = Binding Doc "_prelude" [] specialPrelude Nothing
       spreadBind = Binding Value "..." [] (Name "_prelude") Nothing
   in Namespace ([preludeBind, spreadBind] ++ [buildBinding] ++ bs)
 injectPrelude True e =
-  let preludeBind = mkBind "_prelude" specialPrelude
+  let preludeBind = Binding Doc "_prelude" [] specialPrelude Nothing
       spreadBind = Binding Value "..." [] (Name "_prelude") Nothing
   in Namespace ([preludeBind, spreadBind] ++ [buildBinding] ++ [mkBind "_main" e])
 injectPrelude False e = e
