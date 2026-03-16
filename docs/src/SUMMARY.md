@@ -7,6 +7,7 @@
 - [Installation](./guides/installation.md)
 - [Hello World](./guides/hello-world.md)
 - [How Milang Works](./guides/how-it-works.md)
+- [Common Pitfalls](./guides/common-pitfalls.md)
 
 # Language Reference
 
