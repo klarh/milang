@@ -105,6 +105,34 @@ maxRecUnrolls = 8
 maxRecArgSize :: Int
 maxRecArgSize = 64
 
+-- | Maximum recursive unrollings for functions whose body contains Splice.
+-- Splice is a compile-time operation with no runtime representation, so
+-- splice-using functions must be fully unrolled.  We allow a generous
+-- budget since the recursion is bounded by the (finite) input data.
+maxSpliceUnrolls :: Int
+maxSpliceUnrolls = 64
+
+-- | Check whether an expression tree contains Splice nodes.
+-- Splices inside Quote are excluded — they are resolved by the Quote
+-- reducer, not by function unrolling.
+containsSplice :: Expr -> Bool
+containsSplice (Splice _)       = True
+containsSplice (Quote _)        = False
+containsSplice (App f x)        = containsSplice f || containsSplice x
+containsSplice (Lam _ b)        = containsSplice b
+containsSplice (BinOp _ l r)    = containsSplice l || containsSplice r
+containsSplice (Record _ bs)    = any (containsSplice . bindBody) bs
+containsSplice (Case e alts)    = containsSplice e
+                                   || any (\(Alt _ g b) ->
+                                        containsSplice b
+                                        || maybe False containsSplice g) alts
+containsSplice (With e bs)      = containsSplice e
+                                   || any (containsSplice . bindBody) bs
+containsSplice (FieldAccess e _) = containsSplice e
+containsSplice (Thunk e)        = containsSplice e
+containsSplice (ListLit es)     = any containsSplice es
+containsSplice _                = False
+
 -- | Approximate AST node count. Used to detect growing arguments in
 -- recursive function specialization.
 exprSize :: Expr -> Int
@@ -306,11 +334,20 @@ reduceD d env (App f x) =
         let args' = map (reduceD d env) args
             unrolls = Map.findWithDefault 0 n (envRecUnrolls env)
             argSz = sum (map exprSize args')
-        in if all isConcrete args' && d >= minRecDepth
-              && unrolls < maxRecUnrolls && argSz <= maxRecArgSize
-           then case envLookup n env of
-                  Just fn ->
-                    let (params, body) = collectLams fn
+        in case envLookup n env of
+          Just fn ->
+            -- Splice is a compile-time operation with no runtime
+            -- representation, so functions whose body contains Splice must
+            -- be fully unrolled.  Bypass the argSz guard and allow more
+            -- iterations when splices are present.
+            let hasSplice = containsSplice fn
+                effMaxUnrolls = if hasSplice then maxSpliceUnrolls
+                                             else maxRecUnrolls
+                canUnroll = all isConcrete args' && d >= minRecDepth
+                              && unrolls < effMaxUnrolls
+                              && (hasSplice || argSz <= maxRecArgSize)
+            in if canUnroll
+               then let (params, body) = collectLams fn
                         nApply = min (length params) (length args')
                         applyParams = take nApply params
                         applyArgs = take nApply args'
@@ -339,8 +376,10 @@ reduceD d env (App f x) =
                                     remaining = drop nApply params
                                 in foldr Lam base remaining
                     in result
-                  Nothing -> foldl App (Name n) args'
-           else foldl App (Name n) args'
+               else if hasSplice && unrolls >= effMaxUnrolls
+                    then Error ("splice function " <> n <> " exceeded unroll limit")
+                    else foldl App (Name n) args'
+          Nothing -> foldl App (Name n) args'
       _ ->
         let f' = reduceD d env f
         in case f' of

@@ -250,6 +250,22 @@ nExprToC st (BinOp op l r)
         if op `elem` ["==","/=","<",">","<=",">="]
           then pure $ "mi_int((" ++ lc ++ ") " ++ floatCOp op ++ " (" ++ rc ++ "))"
           else pure $ "mi_float((" ++ lc ++ ") " ++ floatCOp op ++ " (" ++ rc ++ "))"
+      else if mayTriggerGC l || mayTriggerGC r
+      then do
+        -- Sequentialize operands with GC root registration to prevent
+        -- use-after-free when C's unspecified argument evaluation order
+        -- lets one operand's GC collect the other's arena value
+        lc <- nExprToC st l
+        rc <- nExprToC st r
+        lid <- freshId st
+        rid <- freshId st
+        let lv = "_bo_" ++ show lid
+            rv = "_bo_" ++ show rid
+        pure $ "({ MiVal " ++ lv ++ " = " ++ lc ++ "; " ++
+               "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ lv ++ "; " ++
+               "MiVal " ++ rv ++ " = " ++ rc ++ "; " ++
+               "mi_gc_root_count--; " ++
+               nativeBinop op lv rv ++ "; })"
       else do
         lc <- nExprToC st l
         rc <- nExprToC st r
@@ -259,7 +275,22 @@ nExprToC st (BinOp op l r)
     fc <- nExprToC st (Name op)
     lc <- nExprToC st l
     rc <- nExprToC st r
-    pure $ "mi_apply(mi_apply(" ++ fc ++ ", " ++ lc ++ "), " ++ rc ++ ")"
+    if mayTriggerGC l || mayTriggerGC r
+      then do
+        -- Sequentialize: evaluate both operands, root them, then apply.
+        -- The inner mi_apply returns a closure (nenv-allocated) but rc
+        -- could be arena-allocated and needs protection during the call.
+        lid <- freshId st
+        rid <- freshId st
+        let lv = "_bo_" ++ show lid
+            rv = "_bo_" ++ show rid
+        pure $ "({ MiVal " ++ lv ++ " = " ++ lc ++ "; " ++
+               "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ lv ++ "; " ++
+               "MiVal " ++ rv ++ " = " ++ rc ++ "; " ++
+               "MiVal _bor = mi_apply(mi_apply(" ++ fc ++ ", " ++ lv ++ "), " ++ rv ++ "); " ++
+               "mi_gc_root_count--; _bor; })"
+      else
+        pure $ "mi_apply(mi_apply(" ++ fc ++ ", " ++ lc ++ "), " ++ rc ++ ")"
 
 -- Closure inlining: App (Lam param body) arg → let-bind instead of mi_apply
 nExprToC st (App (Lam param body) x) = do
@@ -270,7 +301,19 @@ nExprToC st (App (Lam param body) x) = do
       st' = withScope st (Map.singleton realName cvar)
       st'' = if xType /= NUnknown then withKnownType st' realName xType else st'
   bodyC <- nExprToC st'' body
-  pure $ "({ MiVal " ++ cvar ++ " = " ++ xc ++ "; " ++ bodyC ++ "; })"
+  -- Root the parameter like regular Lam functions do, so GC triggered
+  -- during body evaluation doesn't collect the parameter's arena data
+  if mayTriggerGC body
+    then do
+      sid <- freshId st
+      let sv = "_sr_" ++ show sid
+      pure $ "({ MiVal " ++ cvar ++ " = " ++ xc ++ "; " ++
+             "int " ++ sv ++ " = mi_gc_root_count; " ++
+             "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cvar ++ "; " ++
+             "MiVal _res_" ++ show sid ++ " = " ++ bodyC ++ "; " ++
+             "mi_gc_root_count = " ++ sv ++ "; _res_" ++ show sid ++ "; })"
+    else
+      pure $ "({ MiVal " ++ cvar ++ " = " ++ xc ++ "; " ++ bodyC ++ "; })"
 
 nExprToC st (App f x) = do
   -- Check for saturated call to a flat function
@@ -521,14 +564,15 @@ nExprToC st (With body bindings)
             arenaMarkVar = label ++ "_am"
         initCs <- mapM (nExprToC st) initArgs
         bodyC <- nTailBodyToC typedScope loopName (length params) paramVars label loopBody
-        let initDecls = concat [ "MiVal " ++ pv ++ " = " ++ ic ++ "; "
+        -- Interleave init declarations with GC root registration so that
+        -- evaluating a later init arg can't collect an earlier arg's arena data
+        let initDecls = concat [ "MiVal " ++ pv ++ " = " ++ ic ++ "; " ++
+                                 "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ pv ++ "; "
                                | (pv, ic) <- zip paramVars initCs ]
-            rootPush = concat [ "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ pv ++ "; "
-                              | pv <- paramVars ]
             rootPop = "mi_nenv_pop_mark(); mi_gc_root_count -= " ++ show (length paramVars) ++ "; "
             gcCheck = "if (mi_arena_total > mi_arena_gc_next) mi_gc_collect_arena(); "
         pure $ "({ " ++ initDecls ++ "MiVal " ++ resultVar ++ "; " ++
-               rootPush ++ "mi_nenv_push_mark(); " ++
+               "mi_nenv_push_mark(); " ++
                "MiArenaMark " ++ arenaMarkVar ++ " = mi_arena_mark(); " ++
                label ++ ": " ++ gcCheck ++ resultVar ++ " = " ++ bodyC ++ "; " ++
                rootPop ++ resultVar ++ "; })"
@@ -867,6 +911,8 @@ mayTriggerGC (Case _ _) = True
 mayTriggerGC (With _ _) = True
 mayTriggerGC (Lam _ _) = True  -- allocates nenv
 mayTriggerGC (ListLit (_:_)) = True
+mayTriggerGC (BinOp op l r) = not (isBuiltinOp op) || mayTriggerGC l || mayTriggerGC r
+mayTriggerGC (Record _ bs) = any (mayTriggerGC . bindBody) bs
 mayTriggerGC _ = False
 
 matchSaturatedCall :: Expr -> Maybe (Text, [Expr])
@@ -1295,10 +1341,22 @@ nTailBodyToC st funcName nparams paramVars label expr
     argCs <- mapM (nExprToC st) args
     cid <- freshId st
     let tmpVars = ["_tc_" ++ show cid ++ "_" ++ show i | i <- [0::Int .. nparams - 1]]
-        tmpDecls = concat ["MiVal " ++ tv ++ " = " ++ ac ++ "; " | (tv, ac) <- zip tmpVars argCs]
-        assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
-    pure $ "({ " ++ tmpDecls ++ assignments ++
-           "goto " ++ label ++ "; mi_int(0); })"
+    if nparams > 1 && any mayTriggerGC args
+      then do
+        -- Interleave temp declarations with GC root registration so that
+        -- evaluating a later arg can't collect an earlier arg's arena data
+        let tmpDecls = concat [ "MiVal " ++ tv ++ " = " ++ ac ++ "; " ++
+                                "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ tv ++ "; "
+                              | (tv, ac) <- zip tmpVars argCs ]
+            rootPop = "mi_gc_root_count -= " ++ show nparams ++ "; "
+            assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
+        pure $ "({ " ++ tmpDecls ++ rootPop ++ assignments ++
+               "goto " ++ label ++ "; mi_int(0); })"
+      else do
+        let tmpDecls = concat ["MiVal " ++ tv ++ " = " ++ ac ++ "; " | (tv, ac) <- zip tmpVars argCs]
+            assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
+        pure $ "({ " ++ tmpDecls ++ assignments ++
+               "goto " ++ label ++ "; mi_int(0); })"
 
 nTailBodyToC st funcName nparams paramVars label (Case scrut alts) = do
   -- Detect truthiness pattern in tail position too
