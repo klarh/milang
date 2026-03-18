@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Core.Lexer
-  ( Parser
+  ( Parser, Assoc(..), OpTable
   , sc, scn
   , lexeme, lexemeN
   , symbol, symbolN
@@ -12,12 +12,17 @@ module Core.Lexer
 import Data.Void (Void)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Map.Strict as Map
 import Control.Monad (void)
+import Control.Monad.Trans.Reader (Reader)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 
-type Parser = Parsec Void Text
+data Assoc = LeftAssoc | RightAssoc deriving (Eq, Show)
+type OpTable = Map.Map Text (Int, Assoc)
+
+type Parser = ParsecT Void Text (Reader OpTable)
 
 -- | Line comment
 lineComment :: Parser ()

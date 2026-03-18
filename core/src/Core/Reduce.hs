@@ -1629,7 +1629,7 @@ exprFreeVars (Import _)      = Set.empty
 exprFreeVars (Quote e)       = exprFreeVars e
 exprFreeVars (Splice e)      = exprFreeVars e
 exprFreeVars (CFunction {})  = Set.empty
-exprFreeVars (Builtin n)     = Set.singleton n
+exprFreeVars (Builtin _)     = Set.empty
 exprFreeVars (Error _)       = Set.empty
 
 bindingFreeVars :: Binding -> Set.Set Text

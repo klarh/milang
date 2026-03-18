@@ -5,7 +5,7 @@ module Main where
 import System.Exit (exitFailure, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr, withFile, IOMode(..), stdout, hFlush, hSetBuffering, BufferMode(..))
 import System.Process (readProcessWithExitCode)
-import System.Directory (removeFile, doesFileExist, getCurrentDirectory, findExecutable)
+import System.Directory (removeFile, doesFileExist, getCurrentDirectory, findExecutable, canonicalizePath, makeAbsolute)
 import System.Info (os, arch)
 import System.FilePath (dropExtension, takeDirectory, takeExtension, takeBaseName, (</>), normalise)
 import Control.Monad (unless, when)
@@ -16,7 +16,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import Data.IORef
-import Data.List (nub, isPrefixOf, sort)
+import Data.List (nub, isPrefixOf, isInfixOf, sort)
 import Control.Exception (catch, IOException)
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Options.Applicative
@@ -512,7 +512,19 @@ resolveLocalImport _ctx _dir pathStr _expectedHash _standardImport _funFilter
   | pathStr == "build"   = pure (bindBody buildBinding)
   | pathStr == "ast"     = pure specialAst
 resolveLocalImport ctx dir pathStr _expectedHash standardImport funFilter = do
-  let relPath = dir </> pathStr
+  let rawPath = dir </> pathStr
+  -- Canonicalize to resolve symlinks, ../, etc. for consistent cache keys
+  canonPath <- if takeExtension pathStr == ".h"
+    then pure rawPath  -- .h files handled separately below
+    else catch (canonicalizePath rawPath)
+              (\(_ :: IOException) -> pure (normalise rawPath))
+  -- Warn if import escapes the project directory
+  cwd <- getCurrentDirectory
+  absPath <- catch (makeAbsolute canonPath) (\(_ :: IOException) -> pure canonPath)
+  absCwd <- catch (makeAbsolute cwd) (\(_ :: IOException) -> pure cwd)
+  when (not (absCwd `isPrefixOf` absPath) && ".." `isInfixOf` pathStr) $
+    hPutStrLn stderr ("warning: import " ++ show pathStr ++ " escapes project directory")
+  let relPath = canonPath
   cached <- readIORef (rcCache ctx)
   case Map.lookup relPath cached of
     Just e  -> pure e

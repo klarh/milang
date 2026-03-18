@@ -262,7 +262,7 @@ nExprToC st (BinOp op l r)
         let lv = "_bo_" ++ show lid
             rv = "_bo_" ++ show rid
         pure $ "({ MiVal " ++ lv ++ " = " ++ lc ++ "; " ++
-               "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ lv ++ "; " ++
+               "mi_gc_root_push(&" ++ lv ++ "); " ++
                "MiVal " ++ rv ++ " = " ++ rc ++ "; " ++
                "mi_gc_root_count--; " ++
                nativeBinop op lv rv ++ "; })"
@@ -285,7 +285,7 @@ nExprToC st (BinOp op l r)
         let lv = "_bo_" ++ show lid
             rv = "_bo_" ++ show rid
         pure $ "({ MiVal " ++ lv ++ " = " ++ lc ++ "; " ++
-               "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ lv ++ "; " ++
+               "mi_gc_root_push(&" ++ lv ++ "); " ++
                "MiVal " ++ rv ++ " = " ++ rc ++ "; " ++
                "MiVal _bor = mi_apply(mi_apply(" ++ fc ++ ", " ++ lv ++ "), " ++ rv ++ "); " ++
                "mi_gc_root_count--; _bor; })"
@@ -309,7 +309,7 @@ nExprToC st (App (Lam param body) x) = do
       let sv = "_sr_" ++ show sid
       pure $ "({ MiVal " ++ cvar ++ " = " ++ xc ++ "; " ++
              "int " ++ sv ++ " = mi_gc_root_count; " ++
-             "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cvar ++ "; " ++
+             "mi_gc_root_push(&" ++ cvar ++ "); " ++
              "MiVal _res_" ++ show sid ++ " = " ++ bodyC ++ "; " ++
              "mi_gc_root_count = " ++ sv ++ "; _res_" ++ show sid ++ "; })"
     else
@@ -340,7 +340,7 @@ nExprToC st (App f x) = do
                 -- Interleave: evaluate arg into temp, then register as GC root
                 stmts = concat
                   [ "MiVal " ++ tv ++ " = " ++ ac ++ "; " ++
-                    "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ tv ++ "; "
+                    "mi_gc_root_push(&" ++ tv ++ "); "
                   | (tv, ac) <- zip tmpVars argCs ]
                 -- Restore root count before calling (callee will root its own params)
                 call = "mi_gc_root_count -= " ++ show (length tmpVars) ++ "; " ++
@@ -359,7 +359,7 @@ nExprToC st (App f x) = do
           let fv = "_ap_" ++ show fid
               xv = "_ap_" ++ show xid
           pure $ "({ MiVal " ++ fv ++ " = " ++ fc ++ "; " ++
-                 "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ fv ++ "; " ++
+                 "mi_gc_root_push(&" ++ fv ++ "); " ++
                  "MiVal " ++ xv ++ " = " ++ xc ++ "; " ++
                  "mi_gc_root_count--; " ++
                  "mi_apply(" ++ fv ++ ", " ++ xv ++ "); })"
@@ -401,7 +401,7 @@ nExprToC st (Lam param body) = do
         [ "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env_raw) {"
         , if null selfFvs then "  (void)_env_raw;" else selfBindings
         , "  int _sr = mi_gc_root_count;"
-        , "  if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &_arg;"
+        , "  mi_gc_root_push(&_arg);"
         , "  MiVal _res = " ++ bodyC ++ ";"
         , "  mi_gc_root_count = _sr;"
         , "  return _res;"
@@ -436,7 +436,7 @@ nExprToC st (Lam param body) = do
         , "  " ++ envTypeName ++ " *_env = (" ++ envTypeName ++ " *)_env_raw;"
         , if null selfFvs then "" else selfBindings
         , "  int _sr = mi_gc_root_count;"
-        , "  if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &_arg;"
+        , "  mi_gc_root_push(&_arg);"
         , "  MiVal _res = " ++ bodyC ++ ";"
         , "  mi_gc_root_count = _sr;"
         , "  return _res;"
@@ -489,7 +489,7 @@ nExprToC st (Record tag bindings) = do
           let tmpVars = ["_rf_" ++ show tid | tid <- tmpIds]
               stmts = concat
                 [ "MiVal " ++ tv ++ " = " ++ val ++ "; " ++
-                  "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ tv ++ "; "
+                  "mi_gc_root_push(&" ++ tv ++ "); "
                 | (tv, (_, val)) <- zip tmpVars fieldExprs ]
               namesArr = "(const char*[]){" ++ intercalate ", " [cStringLit nm | (nm, _) <- fieldExprs] ++ "}"
               fieldsArr = "(MiVal[]){" ++ intercalate ", " tmpVars ++ "}"
@@ -567,7 +567,7 @@ nExprToC st (With body bindings)
         -- Interleave init declarations with GC root registration so that
         -- evaluating a later init arg can't collect an earlier arg's arena data
         let initDecls = concat [ "MiVal " ++ pv ++ " = " ++ ic ++ "; " ++
-                                 "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ pv ++ "; "
+                                 "mi_gc_root_push(&" ++ pv ++ "); "
                                | (pv, ic) <- zip paramVars initCs ]
             rootPop = "mi_nenv_pop_mark(); mi_gc_root_count -= " ++ show (length paramVars) ++ "; "
             gcCheck = "if (mi_arena_total > mi_arena_gc_next) mi_gc_collect_arena(); "
@@ -986,7 +986,7 @@ emitFlatFn st name allParams innerBody = do
         then "  (void)_env_raw;\n"
         else "  " ++ envTypeName ++ " *_env = (" ++ envTypeName ++ " *)_env_raw;\n"
       labelDecl = if isSelfRec
-        then let rootPush = concat [ "  if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cv ++ ";\n"
+        then let rootPush = concat [ "  mi_gc_root_push(&" ++ cv ++ ");\n"
                                    | cv <- paramCVars ]
                  gcCheck = "  if (mi_arena_total > mi_arena_gc_next) mi_gc_collect_arena();\n"
              in rootPush ++ "  mi_nenv_push_mark();\n" ++ "  MiArenaMark " ++ label ++ "_am = mi_arena_mark();\n  " ++ label ++ ":;\n" ++ gcCheck
@@ -1005,7 +1005,7 @@ emitFlatFn st name allParams innerBody = do
     else do
       -- Non-self-recursive: register params as GC roots
       let rootSave = "  int _sr = mi_gc_root_count;\n"
-          rootPushNR = concat [ "  if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cv ++ ";\n"
+          rootPushNR = concat [ "  mi_gc_root_push(&" ++ cv ++ ");\n"
                               | cv <- paramCVars ]
           rootRestore = "  mi_gc_root_count = _sr;\n"
       addTopDef st $ unlines
@@ -1346,7 +1346,7 @@ nTailBodyToC st funcName nparams paramVars label expr
         -- Interleave temp declarations with GC root registration so that
         -- evaluating a later arg can't collect an earlier arg's arena data
         let tmpDecls = concat [ "MiVal " ++ tv ++ " = " ++ ac ++ "; " ++
-                                "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ tv ++ "; "
+                                "mi_gc_root_push(&" ++ tv ++ "); "
                               | (tv, ac) <- zip tmpVars argCs ]
             rootPop = "mi_gc_root_count -= " ++ show nparams ++ "; "
             assignments = concat [pv ++ " = " ++ tv ++ "; " | (pv, tv) <- zip paramVars tmpVars]
@@ -1495,7 +1495,7 @@ emitBindings st bindings = do
               else "MiVal " ++ cvar ++ " = mi_force(" ++ code ++ ", NULL); "
           -- Register each With binding as a GC root so it survives GC
           -- triggered by subsequent bindings or body evaluation
-          rootReg = "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cvar ++ "; "
+          rootReg = "mi_gc_root_push(&" ++ cvar ++ "); "
       let inferredType = if bindDomain b == Lazy then NUnknown
                          else inferType curScope' bodyExpr
           nextSt = if inferredType /= NUnknown
@@ -1530,7 +1530,7 @@ emitBindings st bindings = do
             else if isNativeWHNF bodyExpr
               then cvar ++ " = " ++ code ++ "; "
               else cvar ++ " = mi_force(" ++ code ++ ", NULL); "
-          rootReg = "if (mi_gc_root_count < MI_MAX_ROOTS) mi_gc_roots[mi_gc_root_count++] = &" ++ cvar ++ "; "
+          rootReg = "mi_gc_root_push(&" ++ cvar ++ "); "
       let inferredType = if bindDomain b == Lazy then NUnknown
                          else inferType curScope' bodyExpr
           nextSt = if inferredType /= NUnknown

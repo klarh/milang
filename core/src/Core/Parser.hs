@@ -5,53 +5,56 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Char (isUpper, isDigit)
 import Data.Void (Void)
-import Data.Maybe (mapMaybe)
 import qualified Data.Map.Strict as Map
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import System.IO.Unsafe (unsafePerformIO)
+import Control.Monad.Trans.Reader (Reader, ask, runReader)
+import Control.Monad.Trans.Class (lift)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad (void, when)
+import System.IO (hPutStrLn, stderr)
+import System.IO.Unsafe (unsafePerformIO)
 
 import Core.Syntax
-import Core.Lexer (Parser, sc, scn, lexeme, symbol, symbolN)
-
--- ── Operator table ────────────────────────────────────────────────
-
-data Assoc = LeftAssoc | RightAssoc deriving (Eq, Show)
-type OpTable = Map.Map Text (Int, Assoc)
-
-{-# NOINLINE globalOpTable #-}
-globalOpTable :: IORef OpTable
-globalOpTable = unsafePerformIO (newIORef Map.empty)
+import Core.Lexer (Parser, Assoc(..), OpTable, sc, scn, lexeme, symbol, symbolN)
 
 -- ── Entry points ──────────────────────────────────────────────────
 
 parseProgram :: String -> Text -> Either (ParseErrorBundle Text Void) Expr
 parseProgram name src =
-  let opTable = scanParseDecls src
-  in unsafePerformIO (writeIORef globalOpTable opTable) `seq`
-     runParser (scn *> pProgram <* eof) name src
+  let (opTable, warnings) = scanParseDecls src
+  in unsafePerformIO (mapM_ (hPutStrLn stderr) warnings) `seq`
+     runReader (runParserT (scn *> pProgram <* eof) name src) opTable
 
 parseExpr :: String -> Text -> Either (ParseErrorBundle Text Void) Expr
-parseExpr = runParser (sc *> pExpr <* eof)
+parseExpr name src =
+  runReader (runParserT (sc *> pExpr <* eof) name src) Map.empty
 
--- Pre-scan for :! parse declarations
-scanParseDecls :: Text -> OpTable
-scanParseDecls src = Map.fromList $ mapMaybe scanLine (T.lines src)
+-- Pre-scan for :! parse declarations. Returns table + any warnings.
+scanParseDecls :: Text -> (OpTable, [String])
+scanParseDecls src =
+  let numberedLines = zip [1::Int ..] (T.lines src)
+      (results, warns) = foldl go ([], []) numberedLines
+  in (Map.fromList results, warns)
   where
-    scanLine line =
+    go (acc, ws) (lineNum, line) =
       let stripped = T.strip line
       in case T.stripPrefix "(" stripped of
            Just rest -> case T.breakOn ")" rest of
              (op, afterOp) | not (T.null op) && not (T.null afterOp) ->
                let afterClose = T.strip (T.drop 1 afterOp)
                in case T.stripPrefix ":!" afterClose of
-                    Just declBody -> parseOpDecl op (T.strip declBody)
-                    Nothing -> Nothing
-             _ -> Nothing
-           Nothing -> Nothing
+                    Just declBody -> case parseOpDecl op (T.strip declBody) of
+                      Just entry@(opName, _) ->
+                        let dupWarn = case lookup opName acc of
+                              Just _ -> ["warning: duplicate operator declaration for (" <> T.unpack opName <> ") at line " <> show lineNum <> " (overrides previous)"]
+                              Nothing -> []
+                        in (entry : acc, ws ++ dupWarn)
+                      Nothing ->
+                        (acc, ws ++ ["warning: malformed :! declaration for (" <> T.unpack op <> ") at line " <> show lineNum <> " (need prec or assoc field)"])
+                    Nothing -> (acc, ws)
+             _ -> (acc, ws)
+           Nothing -> (acc, ws)
 
     parseOpDecl op body =
       let prec = extractField "prec" body >>= readInt
@@ -322,7 +325,7 @@ pPrec ml minPrec = do
 
 pInfixRest :: Bool -> Int -> Expr -> Parser Expr
 pInfixRest ml minPrec left = do
-  let tbl = unsafePerformIO (readIORef globalOpTable)
+  tbl <- lift ask
   when ml (void scn)
   -- Try backtick infix
   mBacktick <- optional (try $ lookAhead pBacktickOp)
