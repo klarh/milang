@@ -179,7 +179,11 @@ cStringLit s = "\"" ++ concatMap esc s ++ "\""
     esc '\t' = "\\t"
     esc '\r' = "\\r"
     esc '\0' = "\\0"
-    esc c    = [c]
+    esc c | c < ' '  = "\\x" ++ showHex2 (fromEnum c)
+          | otherwise = [c]
+    showHex2 n = [hexDigit (n `div` 16), hexDigit (n `mod` 16)]
+    hexDigit d | d < 10    = toEnum (fromEnum '0' + d)
+               | otherwise = toEnum (fromEnum 'a' + d - 10)
 
 -- ── Native Expression Code Generation ──────────────────────────────
 
@@ -1546,7 +1550,7 @@ emitBindings st bindings = do
 -- | Operators handled by the C runtime's mi_binop
 isBuiltinOp :: Text -> Bool
 isBuiltinOp op = op `elem`
-  [ "+", "-", "*", "/", "%", "**", "<", ">", "<=", ">=", "==", "/="
+  [ "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "/="
   , ":" ]
 
 -- | Skip type/trait/doc/parse annotations and module refs

@@ -15,7 +15,7 @@ import System.FilePath (takeFileName)
 -- | Operators handled by the C runtime's mi_binop
 isBuiltinOp :: Text -> Bool
 isBuiltinOp op = op `elem`
-  [ "+", "-", "*", "/", "%", "**", "<", ">", "<=", ">=", "==", "/="
+  [ "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "/="
   , ":" ]
 
 -- | Codegen state
@@ -251,7 +251,7 @@ exprToC _ (Name n)
 -- bypassing env lookup so module-level shadows don't intercept.
 exprToC _ (Builtin n) =
   case Map.lookup n builtinCNames of
-    Just cfn -> pure $ "mi_native(" ++ cfn ++ ")"
+    Just cfn -> pure $ "mi_expr_val(mi_native(" ++ cfn ++ "))"
     Nothing  -> pure $ "mi_expr_name(\"" ++ T.unpack n ++ "\")"
 
 exprToC st (BinOp op l r)
@@ -395,7 +395,13 @@ cStringLit s = "\"" ++ concatMap esc s ++ "\""
     esc '\\' = "\\\\"
     esc '\n' = "\\n"
     esc '\t' = "\\t"
-    esc c    = [c]
+    esc '\r' = "\\r"
+    esc '\0' = "\\0"
+    esc c | c < ' '  = "\\x" ++ showHex2 (fromEnum c)
+          | otherwise = [c]
+    showHex2 n = [hexDigit (n `div` 16), hexDigit (n `mod` 16)]
+    hexDigit d | d < 10    = toEnum (fromEnum '0' + d)
+               | otherwise = toEnum (fromEnum 'a' + d - 10)
 
 -- ── C FFI codegen (native closures) ──────────────────────────────
 
