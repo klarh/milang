@@ -1,0 +1,10 @@
+# List element and if-branch type consistency
+
+# Heterogeneous list
+bad_list: expected Int, got Str
+
+# If-branch type mismatch
+bad_if: expected Int, got Str
+
+# Pick function: if-branch mismatch (Int vs Str)
+pick: expected Int

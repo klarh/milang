@@ -1,0 +1,13 @@
+# World as Nth argument effect violations
+
+# World as 2nd argument
+bad_second: effect violation: bad_second declared :~ [] but uses [console]
+
+# World as 3rd argument
+bad_third: effect violation: bad_third declared :~ [] but uses [console]
+
+# Curried partial application
+bad_step: effect violation: bad_step declared :~ [] but uses [console]
+
+# HOF forwarding through local binding
+bad_forward: effect violation: bad_forward declared :~ [] but uses [console]

@@ -1,0 +1,18 @@
+/* Type errors: list element consistency and if-branch mismatch */
+
+/* === Heterogeneous list === */
+bad_list = [1, "two", 3]
+
+/* === If-branch type mismatch === */
+bad_if = if true 42 "hello"
+
+/* === If-branch mismatch with variables === */
+pick :: Int : Int : Str
+pick x y = if (x == y) x "nope"
+
+/* === Valid code: homogeneous lists and matching if-branches === */
+ok_list = [1, 2, 3]
+ok_if = if true 42 99
+ok_str_if = if true "a" "b"
+
+main = 0

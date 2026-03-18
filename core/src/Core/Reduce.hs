@@ -2380,9 +2380,19 @@ checkOperands tenv0 pos name expr0 = snd (go tenv0 0 expr0)
                             | TFun argTy _ <- alts]
               in if null results || any (null . snd) results then [] else snd (head results)
             _ -> []
+          -- if-branch consistency: if cond thenBranch elseBranch
+          -- Pattern: App (App (App (Name "if") _cond) thenBr) elseBr
+          ifErrs = case f of
+            App (App (Name "if") _) thenBr ->
+              let thenTy = inferExprE tenv thenBr
+                  elseTy = xty
+              in if thenTy /= TAny && elseTy /= TAny
+                 then snd (checkCompatWith Map.empty pos name thenTy elseTy)
+                 else []
+            _ -> []
           (c2, errs1) = go tenv c1 f
           (c3, errs2) = go tenv c2 x
-      in (c3, argErrs ++ errs1 ++ errs2)
+      in (c3, argErrs ++ ifErrs ++ errs1 ++ errs2)
     go tenv c (Lam p body) = go (Map.delete p tenv) c body
     go tenv c (With body bs)  =
       let (c1, e1) = go tenv c body
@@ -2394,6 +2404,20 @@ checkOperands tenv0 pos name expr0 = snd (go tenv0 0 expr0)
       in (c1, bodyErrs ++ exhaustErrs)
     go tenv c (Record _ bs) =
       foldl (\(ci, ei) b -> let (ci', ei') = go tenv ci (bindBody b) in (ci', ei ++ ei')) (c, []) bs
+    go tenv c (ListLit es) =
+      let (c1, elemErrs) = foldl (\(ci, ei) e -> let (ci', ei') = go tenv ci e in (ci', ei ++ ei')) (c, []) es
+          -- Check list element type consistency: all elements should match first
+          consistencyErrs = case es of
+            (e0:rest) ->
+              let t0 = inferExprE tenv e0
+              in if t0 == TAny then []
+                 else concatMap (\e ->
+                   let ti = inferExprE tenv e
+                   in if ti == TAny then []
+                      else snd (checkCompatWith Map.empty pos name t0 ti)) rest
+            _ -> []
+      in (c1, elemErrs ++ consistencyErrs)
+    go tenv c (FieldAccess e _) = go tenv c e
     go tenv c (Thunk e)       = go tenv c e
     go _ c _               = (c, [])
 
@@ -2632,33 +2656,68 @@ inferTaintedNames bindingMap =
 -- When `f world` or `f taintedVar` appears, inline f's body with the param substituted
 -- and check what world effects that produces.
 inferArgPassEffects :: Set.Set Text -> Map.Map Text Binding -> Expr -> Effects
-inferArgPassEffects tainted bindingMap = go
+inferArgPassEffects tainted topBindingMap = go 0 topBindingMap
   where
     isWorldArg (Name "world") = True
     isWorldArg (Name n)       = Set.member n tainted
     isWorldArg _              = False
 
-    go (App (Name fn) arg)
-      | isWorldArg arg =
-        case Map.lookup fn bindingMap of
-          Just callee ->
-            let params = bindParams callee
-                -- Substitute the first param with "world" to detect effects
-                body' = case params of
-                  (p:_) -> substParam p (Name "world") (bindBody callee)
-                  []    -> bindBody callee
-            in inferWorldEffects tainted body'
-          Nothing -> Set.empty
-    go (App f x) = Set.union (go f) (go x)
-    go (Lam _ body) = go body
-    go (BinOp _ l r) = Set.union (go l) (go r)
-    go (With body bs) = Set.union (go body) (Set.unions (map (go . bindBody) bs))
-    go (Case _ alts) = Set.unions [go b | Alt _ _ b <- alts]
-    go (Record _ bs) = Set.unions (map (go . bindBody) bs)
-    go (Namespace bs) = Set.unions (map (go . bindBody) bs)
-    go (Thunk e) = go e
-    go (ListLit es) = Set.unions (map go es)
-    go _ = Set.empty
+    -- Collect application spine: App (App (App f a0) a1) a2 → (f, [a0, a1, a2])
+    collectSpine :: Expr -> (Expr, [Expr])
+    collectSpine (App f x) = let (fn, args) = collectSpine f in (fn, args ++ [x])
+    collectSpine e = (e, [])
+
+    -- Unwrap lambda params from body: \x -> \y -> e → ([x,y], e)
+    unwrapLam :: Expr -> ([Text], Expr)
+    unwrapLam (Lam p body) = let (ps, b) = unwrapLam body in (p:ps, b)
+    unwrapLam body = ([], body)
+
+    -- Check if any argument in a call is world, and trace effects through callee
+    checkWorldArgs :: Int -> Map.Map Text Binding -> Expr -> Effects
+    checkWorldArgs depth bmap expr =
+      let (fn, args) = collectSpine expr
+          worldPositions = [(i, a) | (i, a) <- zip [0..] args, isWorldArg a]
+      in case (fn, worldPositions) of
+           (Name fnName, _:_) ->
+             case Map.lookup fnName bmap of
+               Just callee ->
+                 -- Combine explicit params with lambda params from body
+                 let (lamParams, innerBody) = unwrapLam (bindBody callee)
+                     allParams = bindParams callee ++ lamParams
+                     -- Substitute ALL args into callee body for full analysis
+                     body' = foldl (\b (i, a) ->
+                       if i < length allParams
+                       then substParam (allParams !! i) a b
+                       else b) innerBody (zip [0..] args)
+                     worldEffs = inferWorldEffects tainted body'
+                     -- Recurse to catch forwarding patterns (depth-limited)
+                     fwdEffs = if depth < 3
+                               then go (depth + 1) bmap body'
+                               else Set.empty
+                 in Set.union worldEffs fwdEffs
+               Nothing -> Set.empty
+           _ -> Set.empty
+
+    go :: Int -> Map.Map Text Binding -> Expr -> Effects
+    go depth bmap expr@(App _ _) =
+      let passEffects = checkWorldArgs depth bmap expr
+          -- Also recurse into sub-expressions
+          (_, args) = collectSpine expr
+          subEffects = Set.unions (map (go depth bmap) args)
+      in Set.union passEffects subEffects
+    go depth bmap (Lam _ body) = go depth bmap body
+    go depth bmap (BinOp _ l r) = Set.union (go depth bmap l) (go depth bmap r)
+    go depth bmap (With body bs) =
+      -- Augment binding map with local With bindings
+      let localMap = foldl (\m b -> Map.insert (bindName b) b m) bmap bs
+      in Set.union (go depth localMap body)
+                   (Set.unions (map (go depth localMap . bindBody) bs))
+    go depth bmap (Case _ alts) = Set.unions [go depth bmap b | Alt _ _ b <- alts]
+    go depth bmap (Record _ bs) = Set.unions (map (go depth bmap . bindBody) bs)
+    go depth bmap (Namespace bs) = Set.unions (map (go depth bmap . bindBody) bs)
+    go depth bmap (Thunk e) = go depth bmap e
+    go depth bmap (ListLit es) = Set.unions (map (go depth bmap) es)
+    go _ _ _ = Set.empty
 
 -- | Simple expression substitution for trait analysis: replace Name occurrences
 substParam :: Text -> Expr -> Expr -> Expr

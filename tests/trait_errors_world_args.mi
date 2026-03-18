@@ -1,0 +1,29 @@
+/* Trait errors: world passed as Nth argument or through HOF forwarding */
+
+/* === World as 2nd argument === */
+use_second x w = w.io.println x
+bad_second :~ []
+bad_second world = use_second "hi" world
+
+/* === World as 3rd argument === */
+use_third a b w = w.io.println a
+bad_third :~ []
+bad_third world = use_third "hi" "there" world
+
+/* === World through curried partial application === */
+step x = \w -> w.io.println x
+bad_step :~ []
+bad_step world = (step "hi") world
+
+/* === World forwarded through generic HOF === */
+apply_fn fn arg = fn arg
+bad_forward :~ []
+bad_forward world =
+  p = \w -> w.io.println "sneaky"
+  apply_fn p world
+
+/* Valid code: proper effect declaration */
+use_second_ok :~ [console]
+use_second_ok world = use_second "hi" world
+
+main = 0
