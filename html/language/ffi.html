@@ -1,0 +1,534 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>C FFI - The Milang Programming Language</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "ayu";
+            window.path_to_searchindex_js = "../searchindex-f797b170.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-00f3f711.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">The Milang Programming Language</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="c-ffi"><a class="header" href="#c-ffi">C FFI</a></h1>
+<p>Milang can call C functions directly by importing a <code>.h</code> header file. The compiler parses the header, extracts function signatures, and maps C types to milang types. At code generation time the header is <code>#include</code>d and calls are emitted inline — no wrapper overhead.</p>
+<h2 id="type-mapping"><a class="header" href="#type-mapping">Type Mapping</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>C type</th><th>Milang type</th><th>C codegen type</th></tr>
+</thead>
+<tbody>
+<tr><td><code>int</code></td><td><code>Int' 32</code></td><td><code>int</code></td></tr>
+<tr><td><code>long</code>, <code>int64_t</code></td><td><code>Int' 64</code></td><td><code>int64_t</code></td></tr>
+<tr><td><code>short</code>, <code>int16_t</code></td><td><code>Int' 16</code></td><td><code>int16_t</code></td></tr>
+<tr><td><code>int8_t</code>, <code>char</code></td><td><code>Int' 8</code></td><td><code>int8_t</code></td></tr>
+<tr><td><code>ssize_t</code>, <code>ptrdiff_t</code></td><td><code>Int' 64</code></td><td><code>int64_t</code></td></tr>
+<tr><td><code>unsigned int</code>, <code>uint32_t</code></td><td><code>UInt' 32</code></td><td><code>unsigned int</code></td></tr>
+<tr><td><code>unsigned long</code>, <code>uint64_t</code>, <code>size_t</code></td><td><code>UInt' 64</code></td><td><code>uint64_t</code></td></tr>
+<tr><td><code>unsigned short</code>, <code>uint16_t</code></td><td><code>UInt' 16</code></td><td><code>uint16_t</code></td></tr>
+<tr><td><code>uint8_t</code>, <code>unsigned char</code></td><td><code>Byte</code></td><td><code>uint8_t</code></td></tr>
+<tr><td><code>double</code></td><td><code>Float</code></td><td><code>double</code></td></tr>
+<tr><td><code>float</code></td><td><code>Float' 32</code></td><td><code>float</code></td></tr>
+<tr><td><code>char*</code></td><td><code>Str</code></td><td><code>char*</code></td></tr>
+<tr><td><code>void*</code>, opaque pointers</td><td>Opaque handle</td><td><code>void*</code></td></tr>
+<tr><td><code>Nothing</code> (milang value)</td><td>NULL pointer</td><td><code>NULL</code></td></tr>
+<tr><td><code>void</code> return</td><td><code>Int</code> (0)</td><td>—</td></tr>
+<tr><td><code>typedef struct { ... } Name</code></td><td>Record</td><td>struct</td></tr>
+<tr><td><code>typedef enum { ... } Name</code></td><td><code>Int</code> constants</td><td><code>int64_t</code></td></tr>
+<tr><td><code>typedef ret (*Name)(params)</code></td><td>Callback</td><td>function pointer</td></tr>
+<tr><td><code>#define NAME value</code></td><td><code>Int</code> constant</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<p>The compiler generates <code>::</code> type annotations for all imported C functions using sized types. For example, a C function <code>int add(int a, int b)</code> gets annotated as <code>add :: Int' 32 : Int' 32 : Int' 32</code>, while <code>double sin(double x)</code> gets <code>sin :: Float : Float</code>. These annotations are visible with <code>milang dump</code>.</p>
+<h2 id="importing-c-headers"><a class="header" href="#importing-c-headers">Importing C Headers</a></h2>
+<p>Import a system header the same way you import a <code>.mi</code> file:</p>
+<pre><code class="language-milang">m = import "math.h"
+
+result = m.sin 1.0
+root = m.sqrt 144.0
+</code></pre>
+<p>The result is a record whose <code>fields</code> are the C functions declared in the header. Use dot notation to call them.</p>
+<h2 id="selective-import-with-import"><a class="header" href="#selective-import-with-import">Selective Import with <code>import'</code></a></h2>
+<p>If you only need a few functions, or need to attach compilation options, use the <code>import'</code> form:</p>
+<pre><code class="language-milang">m = import' "math.h" ({})
+result = m.cos 0.0
+</code></pre>
+<h2 id="associating-c-source-files"><a class="header" href="#associating-c-source-files">Associating C Source Files</a></h2>
+<p>For your own C libraries, tell the compiler which source files to compile alongside the generated code:</p>
+<pre><code class="language-milang">lib = import' "mylib.h" ({src = "mylib.c"})
+answer = lib.add_ints 3 4
+</code></pre>
+<p>The <code>src</code> field takes a single source file path (relative to the importing <code>.mi</code> file).</p>
+<h2 id="advanced-options"><a class="header" href="#advanced-options">Advanced Options</a></h2>
+<p>The options record passed to <code>import'</code> supports several <code>fields</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>src</code></td><td><code>Str</code></td><td>Single C source file to compile</td></tr>
+<tr><td><code>sources</code></td><td><code>List</code></td><td>Multiple source files: <code>["a.c", "b.c"]</code></td></tr>
+<tr><td><code>flags</code></td><td><code>Str</code></td><td>Additional compiler flags (e.g. <code>"-O2 -Wall"</code>)</td></tr>
+<tr><td><code>cc_flags</code></td><td><code>Str</code></td><td>Flags passed only to gcc, not to the preprocessor (e.g. <code>"-DIMPL"</code>)</td></tr>
+<tr><td><code>include</code></td><td><code>Str</code></td><td>Additional include directory</td></tr>
+<tr><td><code>filter</code></td><td><code>List</code></td><td>Selective import: only import the named functions (e.g. <code>["SDL_Init", "SDL_Quit"]</code>)</td></tr>
+<tr><td><code>pkg</code></td><td><code>Str</code></td><td>pkg-config package name — auto-discovers flags and includes</td></tr>
+<tr><td><code>annotate</code></td><td><code>Function</code></td><td>Annotation function for struct/out/opaque declarations (see <a href="#ffi-annotations">FFI Annotations</a>)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Example with multiple options:</p>
+<pre><code class="language-milang">lib = import' "mylib.h" ({
+  sources = ["mylib.c", "helpers.c"]
+  flags = "-O2"
+  include = "vendor/include"
+})
+</code></pre>
+<p>Using pkg-config for a system library:</p>
+<pre><code class="language-milang">json = import' "json-c/json.h" ({pkg = "json-c"})
+</code></pre>
+<h2 id="selective-function-imports"><a class="header" href="#selective-function-imports">Selective Function Imports</a></h2>
+<p>When importing large system headers (e.g., <code>&lt;SDL2/SDL.h&gt;</code>), the compiler generates bindings for every visible function — often thousands from transitive includes. Use <code>filter</code> to import only the functions you need:</p>
+<pre><code class="language-milang">sdl = import' "&lt;SDL2/SDL.h&gt;" ({
+  filter = ["SDL_Init", "SDL_CreateWindow", "SDL_DestroyWindow", "SDL_Quit"]
+  flags = "-lSDL2"
+  standard_import = 1
+})
+
+sdl.SDL_Init sdl.SDL_INIT_VIDEO
+</code></pre>
+<p>Only the named functions, enums, and constants are imported; everything else is filtered out.</p>
+<h2 id="compiler-only-flags-cc_flags"><a class="header" href="#compiler-only-flags-cc_flags">Compiler-Only Flags (<code>cc_flags</code>)</a></h2>
+<p>The <code>cc_flags</code> option passes flags to gcc during compilation but <strong>not</strong> to the preprocessor used for header parsing. This enables STB-style single-header libraries:</p>
+<pre><code class="language-c">// mylib.h
+#ifndef MYLIB_H
+#define MYLIB_H
+int my_func(int x);     /* milang sees this */
+
+#ifdef MYLIB_IMPL
+int my_func(int x) { return x + 1; }  /* hidden from milang's parser */
+#endif
+#endif
+</code></pre>
+<pre><code class="language-milang">lib = import' "mylib.h" ({
+  cc_flags = "-DMYLIB_IMPL"
+})
+</code></pre>
+<p>Without <code>cc_flags</code>, the implementation section stays hidden from milang’s parser (correct), but gcc also doesn’t see it, requiring a separate <code>.c</code> trigger file. With <code>cc_flags</code>, gcc gets <code>-DMYLIB_IMPL</code> so it compiles the implementation, while milang only sees the declarations.</p>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
+<ol>
+<li>The import resolver reads the <code>.h</code> file and extracts function declarations, struct definitions, enum constants, <code>#define</code> integer constants, and function pointer typedefs.</li>
+<li>Each C function becomes an internal <code>CFunction</code> AST node with its milang type signature. Integer types preserve their bit width (e.g., <code>int</code> → 32-bit, <code>int64_t</code> → 64-bit).</li>
+<li>Struct and enum type names are resolved so they can be used as parameter and return types.</li>
+<li>Enum constants and <code>#define</code> integer constants become <code>Int</code> bindings on the module record.</li>
+<li>If an <code>annotate</code> function is provided, it is called with a compiler-provided <code>ffi</code> object and the namespace. The function returns descriptors that generate struct constructors, out-parameter wrappers, or opaque type accessors.</li>
+<li>During C code generation the header is <code>#include</code>d and calls are emitted as direct C function calls. Duplicate <code>#include</code> directives are automatically deduplicated.</li>
+<li>Any associated source files are compiled and linked automatically.</li>
+</ol>
+<h2 id="structs-by-value"><a class="header" href="#structs-by-value">Structs by Value</a></h2>
+<p>C structs defined with <code>typedef struct</code> or <code>struct Name</code> are automatically mapped to milang records. Fields are accessible by name:</p>
+<pre><code class="language-c">// vec.h
+typedef struct { double x; double y; } Vec2;
+Vec2 vec2_add(Vec2 a, Vec2 b);
+double vec2_dot(Vec2 a, Vec2 b);
+</code></pre>
+<pre><code class="language-milang">v = import' "vec.h" ({src = "vec.c"})
+
+a = {x = 1.0; y = 2.0}
+b = {x = 3.0; y = 4.0}
+result = v.vec2_add a b    -- {x = 4.0, y = 6.0}
+dot = v.vec2_dot a b       -- 11.0
+</code></pre>
+<p>Records passed to struct-taking functions are converted to C structs using C99 compound literals. Struct return values are converted to milang records with the same field names.</p>
+<h2 id="enum-constants"><a class="header" href="#enum-constants">Enum Constants</a></h2>
+<p>C enum definitions in headers are exposed as <code>Int</code> constants on the module record:</p>
+<pre><code class="language-c">// color.h
+typedef enum { RED = 0, GREEN = 1, BLUE = 2 } Color;
+int color_value(Color c);
+</code></pre>
+<pre><code class="language-milang">c = import' "color.h" ({src = "color.c"})
+
+c.RED                    -- 0
+c.GREEN                  -- 1
+c.color_value c.BLUE     -- uses enum constant as argument
+</code></pre>
+<p>Both <code>typedef enum { ... } Name;</code> and <code>enum Name { ... };</code> are supported. Auto-incrementing values work as in C.</p>
+<h2 id="define-constants"><a class="header" href="#define-constants"><code>#define</code> Constants</a></h2>
+<p>Integer <code>#define</code> constants in headers are extracted and exposed on the module record:</p>
+<pre><code class="language-c">// limits.h
+#define MAX_SIZE 1024
+#define FLAG_A 0x01
+#define FLAG_B 0x02
+</code></pre>
+<pre><code class="language-milang">lib = import "limits.h"
+lib.MAX_SIZE     -- 1024
+lib.FLAG_A       -- 1
+</code></pre>
+<p>Both decimal and hexadecimal integer constants are supported. Non-integer <code>#define</code>s (macros, strings, expressions) are silently skipped.</p>
+<h2 id="ffi-annotations"><a class="header" href="#ffi-annotations">FFI Annotations</a></h2>
+<p>For C libraries where the compiler needs more information than the header alone provides — struct constructors, out-parameters, or opaque type accessors — use the <code>annotate</code> option. The annotation function receives a compiler-provided <code>ffi</code> object and the imported namespace:</p>
+<pre><code class="language-milang">lib = import' "point.h" ({
+  src = "point.c"
+  annotate = ann
+})
+
+ann ffi ns = values =&gt;
+  ffi.struct "Point" |&gt; ffi.field "x" "int32" |&gt; ffi.field "y" "int32"
+</code></pre>
+<h3 id="struct-annotations"><a class="header" href="#struct-annotations">Struct Annotations</a></h3>
+<p><code>ffi.struct</code> declares a C struct type and its fields. This generates:</p>
+<ol>
+<li>A <strong>constructor function</strong> (<code>make_Name</code>) that creates a milang record from arguments</li>
+<li><strong>Automatic type patching</strong> — C functions using opaque pointers (<code>void*</code>) to this struct type get rewritten to accept/return milang records with proper struct layout</li>
+</ol>
+<pre><code class="language-milang">ann ffi ns = values =&gt;
+  ffi.struct "Point" |&gt; ffi.field "x" "int32" |&gt; ffi.field "y" "int32"
+</code></pre>
+<p>After annotation, <code>lib.make_Point 10 20</code> creates a <code>Point</code> struct value, and functions like <code>lib.point_sum</code> that take <code>Point*</code> parameters accept records directly.</p>
+<p>Available field types: <code>"int8"</code>, <code>"int16"</code>, <code>"int32"</code>, <code>"int64"</code>, <code>"uint8"</code>, <code>"uint16"</code>, <code>"uint32"</code>, <code>"uint64"</code>, <code>"float32"</code>, <code>"float64"</code>, <code>"string"</code>, <code>"ptr"</code>.</p>
+<h3 id="out-parameter-annotations"><a class="header" href="#out-parameter-annotations">Out-Parameter Annotations</a></h3>
+<p>C functions that return values through pointer parameters can be annotated so they return a record of results instead:</p>
+<pre><code class="language-milang">ann ffi ns = values =&gt;
+  ffi.out "point_components" |&gt; ffi.param 1 "int32" |&gt; ffi.param 2 "int32"
+</code></pre>
+<p>This transforms <code>point_components(point, &amp;out1, &amp;out2)</code> into a function that returns <code>{out1 = ..., out2 = ...}</code>. Parameter indices are 0-based positions in the C function signature.</p>
+<p>For out-parameters that are opaque pointers (e.g., union types or structs you don’t want to map field-by-field), use <code>"ptr:TypeName"</code> as the ctype:</p>
+<pre><code class="language-milang">ann ffi ns = values =&gt;
+  ffi.out "poll_event" |&gt; ffi.param 0 "ptr:SDL_Event"
+</code></pre>
+<p>This allocates <code>sizeof(SDL_Event)</code> on the heap, passes the pointer directly (not <code>&amp;</code>), and returns it as an opaque handle. You can then use <code>ffi.opaque</code> with <code>ffi.accessor</code> to read fields from the returned pointer.</p>
+<h3 id="nullable-pointers-nothing--null"><a class="header" href="#nullable-pointers-nothing--null">Nullable Pointers (Nothing → NULL)</a></h3>
+<p>Any C function parameter typed as a pointer (<code>void*</code>, <code>struct*</code>, etc.) accepts <code>Nothing</code> as a milang value, which is passed as <code>NULL</code> to C. This is useful for optional parameters:</p>
+<pre><code class="language-milang">-- SDL_RenderCopy(renderer, texture, srcrect, dstrect)
+-- Pass Nothing for srcrect and dstrect to use the full texture
+lib.SDL_RenderCopy renderer texture Nothing Nothing
+</code></pre>
+<p>Non-<code>Nothing</code> values are passed as normal pointers. This works for all pointer parameters automatically — no annotation is needed.</p>
+<h3 id="opaque-type-annotations"><a class="header" href="#opaque-type-annotations">Opaque Type Annotations</a></h3>
+<p>For opaque struct types (where you can’t or don’t want to map the full struct layout), use <code>ffi.opaque</code> with <code>ffi.accessor</code> to generate field accessor functions:</p>
+<pre><code class="language-milang">ann ffi ns = values =&gt;
+  ffi.opaque "Event"
+    |&gt; ffi.accessor "type" "int32"
+    |&gt; ffi.accessor "detail.code" "int32"
+</code></pre>
+<p>This generates accessor functions on the module: <code>lib.Event_type event</code> and <code>lib.Event_detail_code event</code>. Dot-separated paths (like <code>detail.code</code>) access nested struct fields. The accessor functions are compiled to inline C that casts the opaque pointer and reads the field directly.</p>
+<p>When the opaque type is defined in a separate header from the API header being imported, use <code>ffi.include</code> to specify the type definition header:</p>
+<pre><code class="language-milang">ann ffi ns = values =&gt;
+  ffi.opaque "SDL_Event"
+    |&gt; ffi.include "&lt;SDL2/SDL_events.h&gt;"
+    |&gt; ffi.accessor "type" "uint32"
+</code></pre>
+<p>System includes (angle brackets) and quoted includes are both supported. The include is added to the generated C code so the type is visible for the accessor cast.</p>
+<h3 id="combining-annotations"><a class="header" href="#combining-annotations">Combining Annotations</a></h3>
+<p>Multiple annotations can be declared in a single <code>values =&gt;</code> block:</p>
+<pre><code class="language-milang">ann ffi ns = values =&gt;
+  ffi.struct "Point" |&gt; ffi.field "x" "int32" |&gt; ffi.field "y" "int32"
+  ffi.out "decompose" |&gt; ffi.param 1 "int32" |&gt; ffi.param 2 "int32"
+  ffi.opaque "Handle" |&gt; ffi.accessor "id" "int64"
+</code></pre>
+<h2 id="callbacks-function-pointers"><a class="header" href="#callbacks-function-pointers">Callbacks (Function Pointers)</a></h2>
+<p>Milang functions can be passed to C functions that expect function pointers. Define the callback type with <code>typedef</code>:</p>
+<pre><code class="language-c">// callback.h
+typedef long (*IntFn)(long);
+long apply_fn(IntFn f, long x);
+long apply_twice(IntFn f, long x);
+</code></pre>
+<pre><code class="language-milang">cb = import' "callback.h" ({src = "callback.c"})
+
+cb.apply_fn (\x -&gt; x * 2) 21        -- 42
+cb.apply_twice (\x -&gt; x + 1) 0      -- 2
+
+-- Named functions work too
+square x = x * x
+cb.apply_fn square 7                 -- 49
+</code></pre>
+<p>The compiler generates a trampoline that converts between C calling conventions and milang’s closure-based evaluation. Multi-parameter callbacks are supported:</p>
+<pre><code class="language-c">typedef long (*BinFn)(long, long);
+long fold_range(BinFn f, long init, long n);
+</code></pre>
+<pre><code class="language-milang">add_fn acc i = acc + i
+cb.fold_range add_fn 0 10    -- sum of 0..9 = 45
+</code></pre>
+<p>Callbacks are pinned as GC roots, so they remain valid even if the C library stores and calls them later (e.g., event handlers in GUI frameworks).</p>
+<h2 id="security-considerations"><a class="header" href="#security-considerations">Security Considerations</a></h2>
+<p>C code bypasses milang’s capability model — a C function can perform arbitrary IO, allocate memory, or call system APIs regardless of what capabilities were passed to the milang caller. Use the following flags to restrict FFI access:</p>
+<ul>
+<li><strong><code>--no-ffi</code></strong> — disallow all C header imports. Any <code>import "*.h"</code> will fail.</li>
+<li><strong><code>--no-remote-ffi</code></strong> — allow local <code>.mi</code> files to use C FFI, but prevent URL-imported modules from importing C headers. This stops remote code from escaping the capability sandbox through native calls.</li>
+</ul>
+<p>These flags are especially important when running untrusted or third-party milang code.</p>
+<h2 id="memory-management-for-ffi-pointers"><a class="header" href="#memory-management-for-ffi-pointers">Memory Management for FFI Pointers</a></h2>
+<p>By default, pointers returned from C functions are <strong>unmanaged</strong> — they become <code>MI_POINTER</code> values that are never freed. For short-lived programs this is fine, but long-running programs will leak memory.</p>
+<h3 id="automatic-cleanup-with-gc_manage"><a class="header" href="#automatic-cleanup-with-gc_manage">Automatic cleanup with <code>gc_manage</code></a></h3>
+<p>Use the <code>gc_manage</code> builtin to associate a pointer with a finalizer function. The garbage collector will automatically call the finalizer when the value becomes unreachable:</p>
+<pre><code class="language-milang">ffi = import' "mylib.h" ({src = "mylib.c"})
+
+-- Wrap the pointer with its free function
+obj = gc_manage (ffi.myobj_create 42) ffi.myobj_free
+
+-- Use normally — FFI functions accept managed pointers transparently
+val = ffi.myobj_read obj
+
+-- No manual free needed! The GC handles cleanup.
+</code></pre>
+<p><code>gc_manage</code> takes two arguments:</p>
+<ol>
+<li>A pointer value (from an FFI allocation function)</li>
+<li>A native function (the FFI free/destructor function)</li>
+</ol>
+<p>It returns an <code>MI_MANAGED</code> value that behaves identically to a regular pointer in FFI calls — all existing FFI functions work without modification.</p>
+<h3 id="when-to-use-gc_manage"><a class="header" href="#when-to-use-gc_manage">When to use <code>gc_manage</code></a></h3>
+<ul>
+<li><strong>Use it</strong> for objects that your code allocates and should own: arrays, buffers, file handles, database connections.</li>
+<li><strong>Don’t use it</strong> for pointers returned by C functions that manage their own lifetime (e.g., <code>stdin</code>, shared library handles).</li>
+</ul>
+<h3 id="c-level-registration"><a class="header" href="#c-level-registration">C-level registration</a></h3>
+<p>FFI implementors who prefer to register finalizers in C can use <code>mi_managed()</code> directly:</p>
+<pre><code class="language-c">// In your FFI .c file — declare the runtime function
+extern MiVal mi_managed(void *ptr, void (*finalizer)(void*));
+
+MyObj* myobj_create(long val) {
+    MyObj *obj = malloc(sizeof(MyObj));
+    obj-&gt;value = val;
+    // Register with GC — milang code gets an MI_MANAGED value automatically
+    return obj;  // still returns raw pointer; use gc_manage from milang instead
+}
+</code></pre>
+<blockquote>
+<p><strong>Note:</strong> When using C-level <code>mi_managed()</code>, the FFI wrapper function should return <code>MiVal</code> directly rather than a raw pointer. In most cases, using <code>gc_manage</code> from milang code is simpler.</p>
+</blockquote>
+<h3 id="how-the-gc-works"><a class="header" href="#how-the-gc-works">How the GC works</a></h3>
+<p>Milang uses a mark-sweep garbage collector for runtime-allocated environments (<code>MiEnv</code>) and managed pointers:</p>
+<ul>
+<li><strong>Init-time allocations</strong> (prelude setup, AST construction) use a bump-allocated arena and are never freed.</li>
+<li><strong>Eval-time allocations</strong> (created during program execution) use a malloc-based pool with a free list.</li>
+<li>The GC runs automatically every 100K environment allocations.</li>
+<li>During the <strong>mark</strong> phase, the GC traces all reachable values from the current environment root, including closures, managed pointers, and pinned callback closures.</li>
+<li>During the <strong>sweep</strong> phase, unreachable environments are returned to the pool, and unreachable managed pointers have their finalizers called.</li>
+</ul>
+<p>For tail-recursive programs, memory stays bounded — the GC reclaims environments from completed iterations.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../language/io.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../language/stdlib.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../language/io.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../language/stdlib.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
