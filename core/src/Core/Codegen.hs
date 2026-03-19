@@ -644,23 +644,25 @@ cffiCurried st cname retTy allParamTys inputParams outputParams = do
             nextEnvName = nextName ++ "_env"
         if k == 0
           then do
-            let fnDef = "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
+            let nextNFields = show 1
+                fnDef = "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
                         "  (void)_env;\n" ++
-                        "  struct " ++ nextEnvName ++ " *_ne = mi_alloc(sizeof(struct " ++ nextEnvName ++ "));\n" ++
+                        "  struct " ++ nextEnvName ++ " *_ne = mi_nenv_alloc(sizeof(struct " ++ nextEnvName ++ "));\n" ++
                         "  _ne->_a0 = _arg;\n" ++
-                        "  return mi_native_env(" ++ nextName ++ ", _ne);\n}\n\n"
+                        "  return mi_native_env_n(" ++ nextName ++ ", _ne, " ++ nextNFields ++ ");\n}\n\n"
             addTopDef st fnDef
           else do
             let envFields = concatMap (\i -> "  MiVal _a" ++ show i ++ ";\n") [0..k-1]
                 envStruct = "struct " ++ envName ++ " {\n" ++ envFields ++ "};\n\n"
                 envCast = "  struct " ++ envName ++ " *_e = (struct " ++ envName ++ " *)_env;\n"
-                allocNext = "  struct " ++ nextEnvName ++ " *_ne = mi_alloc(sizeof(struct " ++ nextEnvName ++ "));\n" ++
+                nextNFields = show (k + 1)
+                allocNext = "  struct " ++ nextEnvName ++ " *_ne = mi_nenv_alloc(sizeof(struct " ++ nextEnvName ++ "));\n" ++
                             concatMap (\i -> "  _ne->_a" ++ show i ++ " = _e->_a" ++ show i ++ ";\n") [0..k-1] ++
                             "  _ne->_a" ++ show k ++ " = _arg;\n"
                 fnDef = envStruct ++
                         "static MiVal " ++ fnName ++ "(MiVal _arg, void *_env) {\n" ++
                         envCast ++ allocNext ++
-                        "  return mi_native_env(" ++ nextName ++ ", _ne);\n}\n\n"
+                        "  return mi_native_env_n(" ++ nextName ++ ", _ne, " ++ nextNFields ++ ");\n}\n\n"
             addTopDef st fnDef
         ) (reverse [0..nInputs-2])
       pure $ "mi_native(" ++ wrapperNames !! 0 ++ ")"

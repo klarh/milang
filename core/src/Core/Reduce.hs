@@ -354,7 +354,7 @@ reduceD d env (App f x) =
                         argFVsUnion = Set.unions (map exprFreeVars applyArgs)
                         capturedSet = Set.intersection argFVsUnion
                                         (Set.fromList applyParams)
-                        allNames = Set.unions [ argFVsUnion, exprFreeVars body
+                        allNames = Set.unions [ argFVsUnion, exprAllVars body
                                              , Map.keysSet (envMap env) ]
                         (applyParams', body') = if Set.null capturedSet
                           then (applyParams, body)
@@ -426,7 +426,7 @@ reduceD d env (Lam p b)
   -- The body may contain $param (splice) which references the real name.
   | isQuotedParam p =
     let pn = lamParamName p
-        allNames = Set.unions [ exprFreeVars b, Map.keysSet (envMap env)
+        allNames = Set.unions [ exprAllVars b, Map.keysSet (envMap env)
                               , Set.unions (map exprFreeVars (Map.elems (envMap env))) ]
         fresh = freshName pn allNames
         b' = substExpr pn (Name fresh) b
@@ -440,7 +440,7 @@ reduceD d env (Lam p b)
           Nothing -> False) (Set.toList bodyFVs)
         needsRename = p `Map.member` envMap env || envCapturesP
     in if needsRename
-       then let allNames = Set.union (Map.keysSet (envMap env)) (exprFreeVars b)
+       then let allNames = Set.union (Map.keysSet (envMap env)) (exprAllVars b)
                 fresh = freshName p allNames
                 b' = substExpr p (Name fresh) b
                 env' = envDelete fresh env
@@ -496,9 +496,9 @@ reduceD d env (Case scrut alts) =
              n `Set.member` exprFreeVars b
              || maybe False ((n `Set.member`) . exprFreeVars) g) alts ->
            let allNames = Set.unions
-                 [ Map.keysSet (envMap env), exprFreeVars scrut'
+                 [ Map.keysSet (envMap env), exprAllVars scrut'
                  , Set.unions (concatMap (\(Alt _ g b) ->
-                     exprFreeVars b : maybe [] ((:[]) . exprFreeVars) g) alts) ]
+                     exprAllVars b : maybe [] ((:[]) . exprAllVars) g) alts) ]
                fresh = freshName n allNames
                needsWrap = not (n `Set.member` envLetBound env)
                envShadow = envInsert n (Name fresh) (envDelete fresh env)
@@ -534,8 +534,8 @@ reduceD d env (Case scrut alts) =
                then let env' = Set.foldl' (\e v -> envDelete v e) env pvs
                     in Alt p (fmap (reduceD d env') g) (reduceD d env' b)
                else let allNames = Set.unions [ pvs, envValFVs, Map.keysSet (envMap env)
-                                              , exprFreeVars b
-                                              , maybe Set.empty exprFreeVars g ]
+                                              , exprAllVars b
+                                              , maybe Set.empty exprAllVars g ]
                         (p', sub) = Set.foldl' (\(pat, s) v ->
                           let fresh = freshName v (Set.unions [allNames, Set.fromList (map fst s)])
                           in (substPat v fresh pat, (v, Name fresh) : s)
@@ -727,7 +727,7 @@ reduceApp d env (Lam p body) arg
         bodyUsesParam = realName `Set.member` bodyFV
     in if realName `Set.member` argFV
        then -- Alpha-rename to avoid capture
-         let allNames = Set.unions [argFV, exprFreeVars body, Map.keysSet (envMap env)]
+         let allNames = Set.unions [argFV, exprAllVars body, Map.keysSet (envMap env)]
              fresh = freshName realName allNames
              body' = substExpr realName (Name fresh) body
              quoted = quoteExpr arg
@@ -747,10 +747,17 @@ reduceApp d env (Lam p body) arg =
       envCapturesP = any (\fv -> case envLookup fv env of
         Just v  -> p `Set.member` exprFreeVars v
         Nothing -> False) (Set.toList bodyFVs)
-      needsRename = p `Set.member` argFVs || envCapturesP
+      -- Check if p appears free in any env value.  Adding p to the env
+      -- would silently re-bind those occurrences (dynamic scope leak).
+      -- Example: env has  a_0 → Name "a"  from an earlier alpha-rename.
+      -- If we now insert  a → acc  without renaming, lookups of a_0 chain
+      -- through Name "a" and land on acc instead of the outer free variable.
+      envValsCaptureP = any (\v -> p `Set.member` exprFreeVars v)
+                            (Map.elems (envMap env))
+      needsRename = p `Set.member` argFVs || envCapturesP || envValsCaptureP
   in if needsRename
      -- Param name collides — alpha-rename to avoid capture
-     then let allNames = Set.unions [argFVs, exprFreeVars body, Map.keysSet (envMap env)]
+     then let allNames = Set.unions [argFVs, exprAllVars body, Map.keysSet (envMap env)]
               fresh = freshName p allNames
               body' = substExpr p (Name fresh) body
           in if needsLetBind
@@ -1165,8 +1172,8 @@ reduceCase d env scrut (Alt pat mGuard body : rest) =
             if Set.null captured then (binds, body, mGuard)
             else let allNames = Set.unions [ boundNames, envValFVs
                                            , Map.keysSet (envMap env)
-                                           , exprFreeVars body
-                                           , maybe Set.empty exprFreeVars mGuard ]
+                                           , exprAllVars body
+                                           , maybe Set.empty exprAllVars mGuard ]
                      renames = Set.foldl' (\s v ->
                        let fresh = freshName v (Set.unions [allNames, Set.fromList (map snd s)])
                        in (v, fresh) : s) [] captured
@@ -1632,6 +1639,40 @@ exprFreeVars (CFunction {})  = Set.empty
 exprFreeVars (Builtin _)     = Set.empty
 exprFreeVars (Error _)       = Set.empty
 
+-- | All variable names in an expression, both free and bound (lambda params,
+-- With binding names, case pattern vars).  Used to compute a safe 'allNames'
+-- set for 'freshName' so that alpha-renaming never picks a name that collides
+-- with a binder inside the body.
+exprAllVars :: Expr -> Set.Set Text
+exprAllVars = go
+  where
+    go (Name n)          = Set.singleton n
+    go (IntLit _)        = Set.empty
+    go (FloatLit _)      = Set.empty
+    go (SizedInt {})     = Set.empty
+    go (SizedFloat {})   = Set.empty
+    go (StringLit _)     = Set.empty
+    go (BinOp _ l r)     = Set.union (go l) (go r)
+    go (App f x)         = Set.union (go f) (go x)
+    go (Lam p b)         = Set.insert (lamParamName p) (Set.insert p (go b))
+    go (Record _ bs)     = Set.unions [Set.insert (bindName b) (go (bindBody b)) | b <- bs]
+    go (FieldAccess e _) = go e
+    go (Namespace bs)    = Set.unions [Set.insert (bindName b) (go (bindBody b)) | b <- bs]
+    go (Case s alts)     = Set.union (go s)
+                             (Set.unions [Set.union (patVars p) (Set.union (go body)
+                                           (maybe Set.empty go g))
+                                         | Alt p g body <- alts])
+    go (Thunk e)         = go e
+    go (ListLit es)      = Set.unions (map go es)
+    go (With e bs)       = Set.union (go e)
+                             (Set.unions [Set.insert (bindName b) (go (bindBody b)) | b <- bs])
+    go (Import _)        = Set.empty
+    go (Quote e)         = go e
+    go (Splice e)        = go e
+    go (CFunction {})    = Set.empty
+    go (Builtin _)       = Set.empty
+    go (Error _)         = Set.empty
+
 bindingFreeVars :: Binding -> Set.Set Text
 bindingFreeVars b =
   let bodyFVs = exprFreeVars (bindBody b)
@@ -1696,7 +1737,13 @@ substExpr var replacement = go
     go (Case s alts)   = Case (go s) (map goAlt alts)
     go (Thunk e)       = Thunk (go e)
     go (ListLit es)    = ListLit (map go es)
-    go (With e bs)     = With (go e) (map goBind bs)
+    go (With e bs)
+      -- var is shadowed by a With binding — don't substitute in body.
+      -- Binding values may still reference the outer var (e.g. non-recursive
+      -- bindings), so substitute there.
+      | var `Set.member` letNames = With e (map goBind bs)
+      | otherwise                = With (go e) (map goBind bs)
+      where letNames = Set.fromList (map bindName bs)
     go e@(Import _)    = e
     go (Quote e)       = Quote (go e)
     go (Splice e)      = Splice (go e)
